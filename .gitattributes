@@ -17,3 +17,8 @@
 *.jks binary
 *.mbtiles binary
 *.gz binary
+
+# Los ficheros ejecutados por /bin/sh en el contenedor de Martin.
+martin/entrypoint.sh text eol=lf
+martin/Dockerfile text eol=lf
+.dockerignore text eol=lf

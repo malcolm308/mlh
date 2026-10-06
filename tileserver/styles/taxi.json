@@ -7,11 +7,11 @@
   "sources": {
     "cuba": {
       "type": "vector",
-      "url": "http://127.0.0.1:8010/cuba",
+      "url": "/cuba",
       "attribution": "<a href=\"https://www.openstreetmap.org/copyright\">&copy; OpenStreetMap</a>"
     }
   },
-  "glyphs": "http://127.0.0.1:8010/fonts/{fontstack}/{range}.pbf",
+  "glyphs": "/fonts/{fontstack}/{range}.pbf",
   "layers": [
     {
       "id": "fondo",

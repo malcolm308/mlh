@@ -21,8 +21,9 @@ db/mongo_limpio/
 db/recuperado/
 
 # Binarios locales de herramientas de tiles (180 MB). En produccion se usa la
-# imagen Docker de Martin, no estos ejecutables. Si se versionan los estilos,
-# la configuracion de Martin estara en MartinDocker/ con copia en build/.
+# imagen Docker de Martin, no estos ejecutables. Los estilos y las fuentes si se
+# versionan (tileserver/) porque la imagen Docker los copia; la configuracion de
+# Martin en produccion esta en martin/ (Dockerfile + entrypoint.sh).
 tools/*.jar
 tools/*.zip
 tileserver/*.exe

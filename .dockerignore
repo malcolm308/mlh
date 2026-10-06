@@ -1,0 +1,16 @@
+.git
+frontend
+traccar
+data
+tiles
+tests
+tools
+db
+build
+*.jks
+*.keystore
+keystore.properties
+*.apk
+*.mbtiles
+*.log
+tileserver/*.exe
