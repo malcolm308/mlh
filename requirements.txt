@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pymongo
+pydantic
+# Subida de las 10 fotos del registro del chofer (multipart/form-data)
+python-multipart
+# El panel de administracion decodifica JPEG/WebP/HEIC para mostrar los documentos
+Pillow
+pillow-heif
+httpx

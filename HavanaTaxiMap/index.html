@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Taxi Habana - Mapa</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="map"></div>
+
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <h1>🚕 Taxi Habana</h1>
+        </div>
+
+        <div class="search-container">
+            <div class="search-box">
+                <span class="icon pickup-icon">🟢</span>
+                <input type="text" id="pickup-search" placeholder="Origen (Calle 23, Vedado)" autocomplete="off">
+                <div id="pickup-results" class="search-results"></div>
+            </div>
+            <div class="search-box">
+                <span class="icon dest-icon">🔴</span>
+                <input type="text" id="dest-search" placeholder="Destino (Malecón, Habana)" autocomplete="off">
+                <div id="dest-results" class="search-results"></div>
+            </div>
+        </div>
+
+        <div id="route-info" class="route-info hidden">
+            <div class="info-row">
+                <span class="label">Distancia:</span>
+                <span id="distance" class="value">--</span>
+            </div>
+            <div class="info-row">
+                <span class="label">Tiempo estimado:</span>
+                <span id="duration" class="value">--</span>
+            </div>
+            <div class="info-row fare-row">
+                <span class="label">Tarifa estimada:</span>
+                <span id="fare" class="value fare">--</span>
+            </div>
+        </div>
+
+        <div id="instructions" class="instructions">
+            <p>1. Busca o marca el punto de <strong>origen</strong></p>
+            <p>2. Busca o marca el punto de <strong>destino</strong></p>
+            <p>3. La ruta se calculará automáticamente</p>
+        </div>
+
+        <button id="clear-btn" class="clear-btn hidden">Limpiar todo</button>
+        <button id="my-location-btn" class="location-btn">📍 Mi ubicación</button>
+    </div>
+
+    <div id="attribution-bar">
+        © <a href="https://www.openstreetmap.org/copyright" target="_blank">Colaboradores de OpenStreetMap</a> | Datos de mapa de OSM bajo licencia ODbL
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

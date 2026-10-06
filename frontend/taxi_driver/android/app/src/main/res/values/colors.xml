@@ -1,0 +1,6 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fondo del icono de la app. El rayo de rayo.png es amarillo y sobre
+         blanco no se veria. -->
+    <color name="ic_launcher_background">#111111</color>
+</resources>

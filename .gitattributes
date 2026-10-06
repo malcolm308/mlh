@@ -1,0 +1,19 @@
+# Normalizar los finales de linea en el repositorio.
+#
+# En Windows el autocrlf global convierte a CRLF al hacer commit, y un .sh o un
+# Dockerfile con CRLF falla en Linux con errores tipo "bad interpreter" o
+# "/bin/sh^M: not found". Como el backend se va a desplegar en Render (Linux),
+# en el repositorio se guardan siempre LF y es Windows quien los convierte al
+# descargarlos para trabajar en local.
+* text=auto eol=lf
+
+# Los ficheros binarios no se tocan.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.otf binary
+*.ttf binary
+*.jks binary
+*.mbtiles binary
+*.gz binary

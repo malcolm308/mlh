@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa de La Habana - Taxi Rapid</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; }
+        #map { width: 100vw; height: 100vh; }
+        #info {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.75); color: white; padding: 10px 20px;
+            border-radius: 8px; font-size: 13px; z-index: 1000;
+            text-align: center; backdrop-filter: blur(4px);
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="info">
+        🗺️ Mapa de La Habana — <span id="coords">23.1352, -82.3589</span> — Zoom: <span id="zoom">13</span> — Tiles locales
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map', {
+            center: [23.1352, -82.3589],
+            zoom: 13,
+            zoomControl: true,
+            preferCanvas: true,
+            wheelPxPerZoomLevel: 100
+        });
+
+        L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            maxZoom: 18,
+            minZoom: 10,
+            tileSize: 256
+        }).addTo(map);
+
+        map.on('mousemove', function (e) {
+            document.getElementById('coords').textContent =
+                e.latlng.lat.toFixed(4) + ', ' + e.latlng.lng.toFixed(4);
+            document.getElementById('zoom').textContent = map.getZoom();
+        });
+
+        L.circleMarker([23.1352, -82.3589], {
+            radius: 12, color: '#ef5350', fillColor: '#ef5350', fillOpacity: 0.8
+        }).addTo(map).bindTooltip('La Habana', { permanent: true, direction: 'top' });
+    </script>
+</body>
+</html>

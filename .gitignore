@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+*.token
+
+# Datos grandes
+data/sources/
+data/tmp/
+tiles/
+*.mbtiles
+*.osm.pbf
+
+# Datos locales de MongoDB (620 MB de WiredTiger). El codigo de db/Chofer,
+# db/Cliente y db/Administracion SI se sube: solo se ignoran los datos.
+db/mongodb/
+db/mongo_limpio/
+db/recuperado/
+
+# Binarios locales de herramientas de tiles (180 MB). En produccion se usa la
+# imagen Docker de Martin, no estos ejecutables. Si se versionan los estilos,
+# la configuracion de Martin estara en MartinDocker/ con copia en build/.
+tools/*.jar
+tools/*.zip
+tileserver/*.exe
+
+# Datos subidos por los usuarios desde la app. Son documentos de identidad y
+# fotos de rostro de personas reales, y el repositorio va a GitHub: nunca se
+# versionan. Los ficheros siguen en el disco para el desarrollo local.
+uploads/
+
+# Logs de ejecuciones locales
+*.log
+data/*.log
+logs_api.*
+
+# Restos de comandos mal formados y temporales sueltos en la raiz
+*.tmp
+/main.py.txt
+/--
+
+# traccar/ es una clonacion de otro repositorio con su propio .git. Se usa tal
+# cual en local (servidor de Traccar), pero no se versiona aqui: si se metiera,
+# Git lo trataria como un submodulo sin .gitmodules y al clonar el repo la
+# carpeta saldria vacia.
+traccar/
+
+# Scripts de depuracion desechables de tools/ (los que empiezan por guion
+# bajo). Se conservan los que sirven para crear datos de prueba, como
+# crear_chofer_prueba.py.
+tools/_*.py
+
+# Manifiestos que deja la descarga del Android SDK en la raiz del repo
+_sdk_manifests/
+
+# Capturas de pantalla sueltas en la raiz
+/Screenshot_*.jpg
+
+# Flutter
+frontend/*/build/
+frontend/*/.dart_tool/
+frontend/*/.flutter-plugins
+frontend/*/.flutter-plugins-dependencies
+
+# Android
+frontend/*/android/.gradle/
+frontend/*/android/app/debug/
+frontend/*/android/app/release/
+*.jks
+*.keystore
+keystore.properties
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Sistema
+.DS_Store
+Thumbs.db

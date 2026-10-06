@@ -1,0 +1,211 @@
+{
+  "version": 8,
+  "name": "Taxi Rapid La Habana",
+  "metadata": {
+    "mapbox:autocomposite": false
+  },
+  "sources": {
+    "cuba": {
+      "type": "vector",
+      "url": "http://127.0.0.1:8010/cuba",
+      "attribution": "<a href=\"https://www.openstreetmap.org/copyright\">&copy; OpenStreetMap</a>"
+    }
+  },
+  "glyphs": "http://127.0.0.1:8010/fonts/{fontstack}/{range}.pbf",
+  "layers": [
+    {
+      "id": "fondo",
+      "type": "background",
+      "paint": {
+        "background-color": "#f2efe9"
+      }
+    },
+    {
+      "id": "tierra",
+      "type": "fill",
+      "source": "cuba",
+      "source-layer": "landcover",
+      "paint": {
+        "fill-color": "#dce8d2",
+        "fill-opacity": 1
+      }
+    },
+    {
+      "id": "uso-suelo",
+      "type": "fill",
+      "source": "cuba",
+      "source-layer": "landuse",
+      "paint": {
+        "fill-color": "#e8e4dc",
+        "fill-opacity": 0.6
+      }
+    },
+    {
+      "id": "agua",
+      "type": "fill",
+      "source": "cuba",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#a5bfdd"
+      }
+    },
+    {
+      "id": "nombre-agua",
+      "type": "symbol",
+      "source": "cuba",
+      "source-layer": "water_name",
+      "layout": {
+        "text-field": ["coalesce", ["get", "name:es"], ["get", "name"]],
+        "text-font": ["Noto Sans Italic"],
+        "text-size": 12
+      },
+      "paint": {
+        "text-color": "#5b7fa6",
+        "text-halo-color": "#a5bfdd",
+        "text-halo-width": 1.2
+      }
+    },
+    {
+      "id": "edificios-sombra",
+      "type": "fill",
+      "source": "cuba",
+      "source-layer": "building",
+      "minzoom": 15,
+      "paint": {
+        "fill-color": "#000000",
+        "fill-opacity": 0.12,
+        "fill-translate": [1, 1]
+      }
+    },
+    {
+      "id": "edificios",
+      "type": "fill",
+      "source": "cuba",
+      "source-layer": "building",
+      "minzoom": 14,
+      "paint": {
+        "fill-color": "#e3dfd7",
+        "fill-outline-color": "#d5d0c6"
+      }
+    },
+    {
+      "id": "carreteras-carroceria",
+      "type": "line",
+      "source": "cuba",
+      "source-layer": "transportation",
+      "minzoom": 11,
+      "filter": [
+        "any",
+        ["==", ["get", "brunnel"], "bridge"],
+        ["==", ["get", "brunnel"], "tunnel"]
+      ],
+      "layout": {
+        "line-cap": "butt",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": "#cfd3d6",
+        "line-width": ["interpolate", ["exponential", 1.6], ["zoom"], 11, 2, 16, 20]
+      }
+    },
+    {
+      "id": "carreteras",
+      "type": "line",
+      "source": "cuba",
+      "source-layer": "transportation",
+      "minzoom": 8,
+      "layout": {
+        "line-cap": "round",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": [
+          "match",
+          ["get", "class"],
+          "motorway", "#f9a825",
+          "trunk", "#fbc02d",
+          "primary", "#ffffff",
+          "secondary", "#ffffff",
+          "tertiary", "#ffffff",
+          "#ffffff"
+        ],
+        "line-width": [
+          "interpolate",
+          ["exponential", 1.6],
+          ["zoom"],
+          8,
+          ["match", ["get", "class"], "motorway", 1.6, "trunk", 1.3, 0.8],
+          12,
+          ["match", ["get", "class"], "motorway", 4.5, "trunk", 3.6, "primary", 3.2, 2.2],
+          14,
+          ["match", ["get", "class"], "motorway", 6, "trunk", 5, "primary", 4.6, "secondary", 4, 3],
+          16,
+          ["match", ["get", "class"], "motorway", 13, "trunk", 11, "primary", 9.5, "secondary", 7.5, 5.5]
+        ]
+      }
+    },
+    {
+      "id": "nombres-carretera",
+      "type": "symbol",
+      "source": "cuba",
+      "source-layer": "transportation_name",
+      "minzoom": 12,
+      "layout": {
+        "symbol-placement": "line",
+        "text-field": ["coalesce", ["get", "name:es"], ["get", "name"]],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 12, 9, 16, 13],
+        "text-max-width": 8
+      },
+      "paint": {
+        "text-color": "#5c5956",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.6
+      }
+    },
+    {
+      "id": "parques",
+      "type": "fill",
+      "source": "cuba",
+      "source-layer": "landuse",
+      "filter": [
+        "in",
+        ["get", "class"],
+        [
+          "literal",
+          [
+            "park",
+            "garden",
+            "recreation_ground",
+            "village_green",
+            "nature_reserve",
+            "grass",
+            "cemetery",
+            "school",
+            "hospital",
+            "university"
+          ]
+        ]
+      ],
+      "paint": {
+        "fill-color": "#cbe3bd"
+      }
+    },
+    {
+      "id": "lugares",
+      "type": "symbol",
+      "source": "cuba",
+      "source-layer": "place",
+      "layout": {
+        "text-field": ["coalesce", ["get", "name:es"], ["get", "name"]],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 8, 11, 14, 15]
+      },
+      "paint": {
+        "text-color": "#4a4a4a",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.4
+      }
+    }
+  ]
+}
