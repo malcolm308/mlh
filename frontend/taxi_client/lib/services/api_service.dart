@@ -1,71 +1,43 @@
 import 'dart:convert';
 
-import 'package:http/http.dart' as http;
-
-import '../config.dart';
+import '../api_config.dart';
 import '../models/models.dart';
+import 'api_client.dart';
 
-class ApiException implements Exception {
-  final String message;
-  ApiException(this.message);
-  @override
-  String toString() => message;
-}
+export 'api_client.dart' show ApiException;
 
-/// Cliente HTTP para el backend FastAPI de TaxiRapid.
+/// Cliente HTTP de alto nivel para el backend FastAPI de TaxiRapid.
+///
+/// Todo el transporte lo hace [ApiClient]: timeout de 15 s, reintentos de
+/// fallos de red con backoff, headers y descodificación JSON.
 class ApiService {
   final String base;
-  String? token;
 
-  ApiService({String? base}) : base = base ?? AppConfig.apiBase;
+  /// Token JWT para `Authorization: Bearer`. Vive en [ApiClient] y aquí solo
+  /// se expone con el mismo nombre que tenía antes del refactor.
+  String? get token => ApiClient.token;
+  set token(String? value) => ApiClient.token = value;
 
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        if (token != null && token!.isNotEmpty)
-          'Authorization': 'Bearer $token',
-      };
-
-  String _error(http.Response r) {
-    try {
-      final j = jsonDecode(r.body);
-      if (j is Map && j['detail'] != null) return j['detail'].toString();
-      if (j is Map && j['message'] != null) return j['message'].toString();
-    } catch (_) {}
-    return 'Error ${r.statusCode}';
-  }
+  ApiService({String? base}) : base = base ?? ApiConfig.baseUrl;
 
   Future<dynamic> _send(
     String method,
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    final uri = Uri.parse('$base$path');
-    final encoded = body == null ? null : jsonEncode(body);
-    final http.Response r;
-    try {
-      switch (method) {
-        case 'GET':
-          r = await http.get(uri, headers: _headers);
-        case 'POST':
-          r = await http.post(uri, headers: _headers, body: encoded);
-        case 'PUT':
-          r = await http.put(uri, headers: _headers, body: encoded);
-        case 'PATCH':
-          r = await http.patch(uri, headers: _headers, body: encoded);
-        default:
-          throw ApiException('Método no soportado: $method');
-      }
-    } on ApiException {
-      rethrow;
-    } catch (e) {
-      throw ApiException('No se pudo conectar al backend en $base: $e');
+    final url = '$base$path';
+    switch (method) {
+      case 'GET':
+        return ApiClient.get(url);
+      case 'POST':
+        return ApiClient.post(url, body: body);
+      case 'PUT':
+        return ApiClient.put(url, body: body);
+      case 'PATCH':
+        return ApiClient.patch(url, body: body);
+      default:
+        throw ApiException('Método no soportado: $method');
     }
-
-    if (r.statusCode >= 200 && r.statusCode < 300) {
-      if (r.body.trim().isEmpty) return const {};
-      return jsonDecode(utf8.decode(r.bodyBytes));
-    }
-    throw ApiException('${_error(r)} (HTTP ${r.statusCode})');
   }
 
   Future<Map<String, dynamic>> _map(String method, String path,
@@ -188,7 +160,7 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> cancelTrip(String tripId) async {
-    return _map('POST', '/trips/$tripId/cancel');
+    return ApiClient.post(ApiConfig.cancelTrip(tripId)) as Map<String, dynamic>;
   }
 
   Future<List<ClientTrip>> getTripsByClient(String clientId,

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 import '../models/models.dart';
 import '../services/address_service.dart';
 import '../services/api_service.dart';
@@ -36,7 +36,7 @@ enum _PinMode { pickup, dropoff }
 class _ClientHomeScreenState extends State<ClientHomeScreen> {
   final ClientMapController _mapController = ClientMapController();
 
-  LatLng _myLoc = AppConfig.defaultClientLocation;
+  LatLng _myLoc = ApiConfig.defaultClientLocation;
   LatLng? _pickup;
   LatLng? _dropoff;
   _PinMode _pinMode = _PinMode.pickup;
@@ -117,7 +117,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   }
 
   void _applyGpsPosition(LatLng p, {required bool moveMap}) {
-    final wasDefault = _samePoint(_myLoc, AppConfig.defaultClientLocation);
+    final wasDefault = _samePoint(_myLoc, ApiConfig.defaultClientLocation);
     setState(() {
       _gpsState = LocationPermissionState.granted;
       _myLoc = p;
@@ -381,9 +381,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           ClientMapView(
             controller: _mapController,
             initialCenter: _myLoc,
-            initialZoom: AppConfig.defaultZoom,
-            minZoom: AppConfig.minZoom.toDouble(),
-            maxZoom: AppConfig.maxZoom.toDouble(),
+            initialZoom: ApiConfig.defaultZoom,
+            minZoom: ApiConfig.minZoom.toDouble(),
+            maxZoom: ApiConfig.maxZoom.toDouble(),
             route: _route,
             straightLine: bothSet ? [_pickup!, _dropoff!] : const [],
             routeColor: const Color(0xFF007AFF),
@@ -908,7 +908,7 @@ onTap: () => setState(() {
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
-                  items: AppConfig.vehicleTypes
+                  items: ApiConfig.vehicleTypes
                       .map((v) => DropdownMenuItem(value: v, child: Text(v)))
                       .toList(),
                   onChanged: (v) {
@@ -1010,7 +1010,7 @@ onTap: () => setState(() {
             ListTile(
               leading: const Icon(Icons.info_outline, color: Color(0xFF333333)),
               title: const Text('Servidor'),
-              subtitle: Text(AppConfig.apiBase,
+              subtitle: Text(ApiConfig.baseUrl,
                   style: const TextStyle(color: Color(0xFF888888))),
               onTap: () => Navigator.of(context).pop(),
             ),

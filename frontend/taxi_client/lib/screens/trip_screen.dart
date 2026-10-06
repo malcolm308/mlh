@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../widgets/client_map_view.dart';
@@ -134,9 +134,9 @@ class _TripScreenState extends State<TripScreen> {
     if (objetivo == null) return;
 
     final distancia = Distance().as(LengthUnit.Meter, vehiculo, objetivo);
-    final zoom = distancia <= AppConfig.distanciaZoomCerca
-        ? AppConfig.zoomVehiculoCerca
-        : AppConfig.zoomPorDistancia(distancia);
+    final zoom = distancia <= ApiConfig.distanciaZoomCerca
+        ? ApiConfig.zoomVehiculoCerca
+        : ApiConfig.zoomPorDistancia(distancia);
 
     // Solo se mueve si el nivel cambia de verdad: llamar a `move` en cada
     // refresh (cada 3 s) aun con el mismo zoom produce un salto visible.
@@ -186,7 +186,7 @@ class _TripScreenState extends State<TripScreen> {
     _mapController.fitPoints(
       puntos,
       padding: const EdgeInsets.fromLTRB(40, 80, 40, 140),
-      maxZoom: AppConfig.defaultZoom,
+      maxZoom: ApiConfig.defaultZoom,
     );
     _zoomAuto = _mapController.zoom;
   }
@@ -282,10 +282,10 @@ class _TripScreenState extends State<TripScreen> {
                       ClientMapView(
                         controller: _mapController,
                         initialCenter:
-                            t.requestLocation ?? AppConfig.defaultClientLocation,
-                        initialZoom: AppConfig.defaultZoom,
-                        minZoom: AppConfig.minZoom.toDouble(),
-                        maxZoom: AppConfig.maxZoom.toDouble(),
+                            t.requestLocation ?? ApiConfig.defaultClientLocation,
+                        initialZoom: ApiConfig.defaultZoom,
+                        minZoom: ApiConfig.minZoom.toDouble(),
+                        maxZoom: ApiConfig.maxZoom.toDouble(),
                         route: _route,
                         straightLine: t.requestLocation != null &&
                                 t.dropoffLocation != null

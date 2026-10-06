@@ -1,10 +1,8 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config.dart';
+import '../api_config.dart';
+import 'api_client.dart';
 
 /// Estados de un viaje que el backend considera vivos.
 ///
@@ -244,26 +242,16 @@ class CancellationService extends ChangeNotifier {
     String ruta,
     Map<String, dynamic> cuerpo,
   ) async {
-    final uri = Uri.parse('${AppConfig.apiBase}$ruta');
-    final r = await http.post(
-      uri,
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode(cuerpo),
-    );
-    final cuerpoResp = r.body.trim().isEmpty
-        ? <String, dynamic>{}
-        : jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
-    // Un 4xx tambien trae cuerpo util (`code`), asi que se devuelve igual y lo
-    // interpreta quien llama, en vez de tirar la exception aqui.
-    cuerpoResp['http_status'] = r.statusCode;
-    return cuerpoResp;
+    return ApiClient.postConEstatus('${ApiConfig.baseUrl}$ruta', body: cuerpo);
   }
 
   static Future<Map<String, dynamic>?> _getPorDefecto(String ruta) async {
-    final uri = Uri.parse('${AppConfig.apiBase}$ruta');
-    final r = await http.get(uri);
-    if (r.statusCode < 200 || r.statusCode >= 300) return null;
-    if (r.body.trim().isEmpty) return null;
-    return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+    try {
+      final j = await ApiClient.get('${ApiConfig.baseUrl}$ruta');
+      if (j == null || j is! Map<String, dynamic>) return null;
+      return j;
+    } on ApiException {
+      return null;
+    }
   }
 }

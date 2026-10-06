@@ -1,72 +1,43 @@
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:http/http.dart' as http;
-
-import '../config.dart';
+import '../api_config.dart';
 import '../models/models.dart';
+import 'api_client.dart';
 
-class ApiException implements Exception {
-  final String message;
-  ApiException(this.message);
-  @override
-  String toString() => message;
-}
+export 'api_client.dart' show ApiException;
 
-/// Cliente HTTP para el backend FastAPI de TaxiRapid.
+/// Cliente HTTP de alto nivel para el backend FastAPI de TaxiRapid.
+///
+/// Todo el transporte lo hace [ApiClient]: timeout de 15 s, reintentos de
+/// fallos de red con backoff, headers y descodificación JSON.
 class ApiService {
   final String base;
-  String? token;
 
-  ApiService({String? base}) : base = base ?? AppConfig.apiBase;
+  /// Token JWT para `Authorization: Bearer`. Vive en [ApiClient] y aquí solo
+  /// se expone con el mismo nombre que tenía antes del refactor.
+  String? get token => ApiClient.token;
+  set token(String? value) => ApiClient.token = value;
 
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        if (token != null && token!.isNotEmpty)
-          'Authorization': 'Bearer $token',
-      };
-
-  String _error(http.Response r) {
-    try {
-      final j = jsonDecode(r.body);
-      if (j is Map && j['detail'] != null) return j['detail'].toString();
-      if (j is Map && j['message'] != null) return j['message'].toString();
-    } catch (_) {}
-    return 'Error ${r.statusCode}';
-  }
+  ApiService({String? base}) : base = base ?? ApiConfig.baseUrl;
 
   Future<dynamic> _send(
     String method,
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    final uri = Uri.parse('$base$path');
-    final encoded = body == null ? null : jsonEncode(body);
-    final http.Response r;
-    try {
-      switch (method) {
-        case 'GET':
-          r = await http.get(uri, headers: _headers);
-        case 'POST':
-          r = await http.post(uri, headers: _headers, body: encoded);
-        case 'PUT':
-          r = await http.put(uri, headers: _headers, body: encoded);
-        case 'PATCH':
-          r = await http.patch(uri, headers: _headers, body: encoded);
-        default:
-          throw ApiException('Método no soportado: $method');
-      }
-    } on ApiException {
-      rethrow;
-    } catch (e) {
-      throw ApiException('No se pudo conectar al backend en $base: $e');
+    final url = '$base$path';
+    switch (method) {
+      case 'GET':
+        return ApiClient.get(url);
+      case 'POST':
+        return ApiClient.post(url, body: body);
+      case 'PUT':
+        return ApiClient.put(url, body: body);
+      case 'PATCH':
+        return ApiClient.patch(url, body: body);
+      default:
+        throw ApiException('Método no soportado: $method');
     }
-
-    if (r.statusCode >= 200 && r.statusCode < 300) {
-      if (r.body.trim().isEmpty) return const {};
-      return jsonDecode(utf8.decode(r.bodyBytes));
-    }
-    throw ApiException('${_error(r)} (HTTP ${r.statusCode})');
   }
 
   Future<Map<String, dynamic>> _map(String method, String path,
@@ -175,38 +146,26 @@ class ApiService {
     required int maxPassengers,
     required Map<String, String> fotos,
   }) async {
-    final req = http.MultipartRequest('POST', Uri.parse('$base/documentos/registro'))
-      ..fields['Nombre'] = nombre
-      ..fields['Apellidos'] = apellidos
-      ..fields['email'] = email
-      ..fields['numero_de_telefono'] = telefono
-      ..fields['password'] = password
-      ..fields['marca'] = marca
-      ..fields['model'] = model
-      ..fields['year'] = '$year'
-      ..fields['chapa'] = chapa
-      ..fields['color'] = color
-      ..fields['servicio'] = servicio
-      ..fields['max_passengers'] = '$maxPassengers';
-
-    fotos.forEach((campo, ruta) {
-      req.files.add(http.MultipartFile.fromBytes(
-        'doc_$campo',
-        File(ruta).readAsBytesSync(),
-        filename: File(ruta).uri.pathSegments.last,
-      ));
-    });
-
+    final fields = <String, String>{
+      'Nombre': nombre,
+      'Apellidos': apellidos,
+      'email': email,
+      'numero_de_telefono': telefono,
+      'password': password,
+      'marca': marca,
+      'model': model,
+      'year': '$year',
+      'chapa': chapa,
+      'color': color,
+      'servicio': servicio,
+      'max_passengers': '$maxPassengers',
+    };
     try {
-      final streamed = await req.send();
-      final r = await http.Response.fromStream(streamed);
-      if (r.statusCode >= 200 && r.statusCode < 300) {
-        final cuerpo = utf8.decode(r.bodyBytes);
-        return cuerpo.trim().isEmpty
-            ? <String, dynamic>{}
-            : jsonDecode(cuerpo) as Map<String, dynamic>;
-      }
-      throw ApiException('${_error(r)} (HTTP ${r.statusCode})');
+      return (await ApiClient.multipart(
+        '$base/documentos/registro',
+        fields,
+        files: fotos,
+      )) as Map<String, dynamic>;
     } on ApiException {
       rethrow;
     } catch (e) {
@@ -222,7 +181,7 @@ class ApiService {
   // ------------------- ESTADO Y POSICIÓN -------------------
 
   Future<void> setDriverStatus(String driverId, String status) async {
-    await _map('POST', '/drivers/$driverId/status',
+    await ApiClient.post(ApiConfig.driverStatus(driverId),
         body: {'status': status});
   }
 

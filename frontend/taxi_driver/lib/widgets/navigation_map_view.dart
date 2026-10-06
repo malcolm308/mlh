@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 
 /// Mapa del conductor sobre MapLibre, con inclinacion y rotacion NATIVAS.
 ///
@@ -529,7 +529,7 @@ void _aplicarVehiculo() {
     return MapLibreMap(
       // Estilo servido por Martin desde el MBTiles local. En el telefono
       // `127.0.0.1` es el propio movil, de ahi el `adb reverse tcp:8010`.
-      styleString: AppConfig.mapStyleUrl,
+      styleString: ApiConfig.mapStyleUrl,
       initialCameraPosition: CameraPosition(
         target: centro,
         zoom: widget.zoom,
@@ -557,8 +557,8 @@ onStyleLoadedCallback: _onStyleLoaded,
       //    pedir otras nuevas. Aguantan pixeladas, y ademas el mapa se ve mas
       //    borroso sin que nada avise de ello.
       minMaxZoomPreference: MinMaxZoomPreference(
-        AppConfig.minZoom.toDouble(),
-        AppConfig.maxZoom.toDouble(),
+        ApiConfig.minZoom.toDouble(),
+        ApiConfig.maxZoom.toDouble(),
       ),
       // El marcador lo dibuja la capa propia, no el punto azul nativo: asi se
       // controla su aspecto y no depende de los permisos de localizacion.

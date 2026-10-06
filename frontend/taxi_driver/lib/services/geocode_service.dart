@@ -1,9 +1,7 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
-import '../config.dart';
+import '../api_config.dart';
+import 'api_client.dart';
 
 /// Geocodificación inversa (coordenadas → calle) con Nominatim (OpenStreetMap).
 ///
@@ -63,7 +61,7 @@ class GeocodeService {
   /// responde o no encuentra una calle.
   static Future<String?> reverse(LatLng p) async {
     // Solo calles que existen en el mapa de la app.
-    if (!AppConfig.inMapArea(p)) return null;
+    if (!ApiConfig.inMapArea(p)) return null;
     final key =
         '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
     final cached = _cache[key];
@@ -79,14 +77,11 @@ class GeocodeService {
 
     String? addr;
     try {
-      final res = await _guarded(() => http.get(
-            uri,
+      final json = await _guarded(() => ApiClient.get(
+            uri.toString(),
             headers: {'User-Agent': _userAgent},
           ));
-      if (res.statusCode == 200) {
-        final json = jsonDecode(res.body) as Map<String, dynamic>;
-        addr = _shortAddress(json['address'] as Map<String, dynamic>?);
-      }
+      addr = _shortAddress(json['address'] as Map<String, dynamic>?);
     } catch (_) {
       addr = null;
     }

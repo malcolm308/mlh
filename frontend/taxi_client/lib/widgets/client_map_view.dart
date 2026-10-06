@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as mlib;
 
-import '../config.dart';
+import '../api_config.dart';
 
 /// Un punto que se dibuja encima del mapa.
 ///
@@ -45,7 +45,7 @@ class MapPin {
 /// `center`) para que las pantallas cambien lo minimo.
 class ClientMapController {
   mlib.MapLibreMapController? _ctl;
-  double _zoom = AppConfig.defaultZoom;
+  double _zoom = ApiConfig.defaultZoom;
   LatLng? _center;
 
   /// Ventana durante la cual se ignoran los gestos, para que el `onCameraMove`
@@ -88,7 +88,7 @@ class ClientMapController {
   void fitPoints(
     List<LatLng> puntos, {
     EdgeInsets padding = const EdgeInsets.fromLTRB(40, 80, 40, 140),
-    double maxZoom = AppConfig.defaultZoom,
+    double maxZoom = ApiConfig.defaultZoom,
   }) {
     final ctl = _ctl;
     if (ctl == null || puntos.length < 2) return;
@@ -474,7 +474,7 @@ final zoom = widget.controller.zoom;
   @override
   Widget build(BuildContext context) {
     return mlib.MapLibreMap(
-      styleString: AppConfig.mapStyleUrl,
+      styleString: ApiConfig.mapStyleUrl,
       initialCameraPosition: mlib.CameraPosition(
         target: ClientMapController._ml(widget.initialCenter),
         zoom: widget.initialZoom,

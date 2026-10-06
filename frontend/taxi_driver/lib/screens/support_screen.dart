@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 
 /// Pantalla de soporte/ayuda (opción del menú hamburguesa).
 class SupportScreen extends StatelessWidget {
@@ -52,7 +52,7 @@ class SupportScreen extends StatelessWidget {
           const SizedBox(height: 12),
           Center(
             child: Text(
-              'Servidor de datos: ${AppConfig.apiBase}',
+              'Servidor de datos: ${ApiConfig.baseUrl}',
               style: const TextStyle(
                   color: Color(0xFF888888), fontSize: 12),
             ),

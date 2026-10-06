@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
-import 'package:taxi_driver/config.dart';
+import 'package:taxi_driver/api_config.dart';
 import 'package:taxi_driver/services/navigation_mode_service.dart';
 
 /// Posicion del conductor que NO es el punto fijo por defecto.
 ///
-/// Importa: [AppConfig.defaultDriverLocation] esta en el centro de La Habana,
+/// Importa: [ApiConfig.defaultDriverLocation] esta en el centro de La Habana,
 /// asi que una asercion que compare con el tambien pasaria aunque el servicio
 /// ignorase la posicion sembrada.
 const _posReal = LatLng(23.1412, -82.3564);
@@ -58,7 +58,7 @@ void main() {
       final nav = await _servicio(tester);
 
       expect(nav.posicion.latitude,
-          closeTo(AppConfig.defaultDriverLocation.latitude, 1e-9));
+          closeTo(ApiConfig.defaultDriverLocation.latitude, 1e-9));
 
       nav.dispose();
     });
@@ -105,7 +105,7 @@ void main() {
       // Guarda contra una regresion silenciosa: si alguien cambiara el default
       // por la posicion del conductor, este test lo diria.
       expect(_posReal.latitude,
-          isNot(closeTo(AppConfig.defaultDriverLocation.latitude, 0.001)));
+          isNot(closeTo(ApiConfig.defaultDriverLocation.latitude, 0.001)));
     });
   });
 

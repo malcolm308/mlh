@@ -1,9 +1,7 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
-import '../config.dart';
+import '../api_config.dart';
+import 'api_client.dart';
 import 'geocode_service.dart';
 
 /// Direccion de calle con las dos calles que la cruzan.
@@ -50,7 +48,7 @@ class AddressService {
 
   /// Direccion del punto, esperando lo que se pueda.
   static Future<Direccion> de(LatLng p) async {
-    if (!AppConfig.inMapArea(p)) {
+    if (!ApiConfig.inMapArea(p)) {
       return const Direccion(texto: '', origen: 'fuera');
     }
     final guardada = _cache[_clave(p)];
@@ -64,17 +62,14 @@ class AddressService {
 
   /// Pide la direccion al backend, que ya sabe las calles que cruzan.
   static Future<Direccion?> _delBackend(LatLng p) async {
-    final uri = Uri.parse(
-      '${AppConfig.apiBase}/geo/direccion'
-      '?lat=${p.latitude}&lon=${p.longitude}',
-    );
+    final url =
+        '${ApiConfig.baseUrl}/geo/direccion'
+        '?lat=${p.latitude}&lon=${p.longitude}';
     try {
-      // 15 s y no 8: mientras el backend esta importando calles puede tener que
-      // preguntar a Overpass, y ese camino tarda. Con el import completo esto
-      // no pasa y responde en un par de segundos.
-      final res = await http.get(uri).timeout(const Duration(seconds: 15));
-      if (res.statusCode != 200) return null;
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      // ApiClient usa 15 s de timeout: mientras el backend esta importando
+      // calles puede tener que preguntar a Overpass, y ese camino tarda. Con
+      // el import completo esto no pasa y responde en un par de segundos.
+      final j = await ApiClient.get(url);
       final texto = (j['texto'] ?? '').toString();
       if (texto.isEmpty) return null;
       return Direccion(

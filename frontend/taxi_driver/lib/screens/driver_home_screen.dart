@@ -5,7 +5,7 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/cancellation_service.dart';
@@ -117,7 +117,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   bool _avisandoRecalculo = false;
 
 
-  LatLng _driverPos = AppConfig.defaultDriverLocation;
+  LatLng _driverPos = ApiConfig.defaultDriverLocation;
   bool _online = false;
   bool _busy = false;
   bool _loading = false;
@@ -187,7 +187,7 @@ int _routeReq = 0;
   /// primer tramo de OSRM es por donde se sale de verdad.
   ///
   /// En cuanto el vehiculo se mueve, manda el sensor, que es mas fino. El corte
-  /// esta en [AppConfig.desvioVelocidadCarreteraMps] porque por debajo el GPS
+  /// esta en [ApiConfig.desvioVelocidadCarreteraMps] porque por debajo el GPS
   /// no da rumbo fiable y el filtro lo habria retardado.
   double? _rumboParaFlecha() {
     final vel = _nav.velocidadMps;
@@ -769,7 +769,7 @@ int _routeReq = 0;
   ///  * Aplica la inclinacion, que es lo que se le pide al boton.
   ///
   /// El tilt se aplica con `NavCamera.centrar`, no con el del servicio, porque
-  /// el servicio solo inclina si [AppConfig.velocidadMinimaTilt] se supera y
+  /// el servicio solo inclina si [ApiConfig.velocidadMinimaTilt] se supera y
   /// uno va a pulsar esto parado en casi todos los casos. Sin esto, el boton
   /// devolvia la vista a 2D.
   void _centrarEnMi() async {
@@ -813,7 +813,7 @@ int _routeReq = 0;
   ///
   /// El mismo valor con el que entra el mapa al activarse la navegacion, para
   /// que el boton no cambie el aspecto de la vista.
-  double get _tiltAlRecentrar => AppConfig.tiltEntradaNavegacion;
+  double get _tiltAlRecentrar => ApiConfig.tiltEntradaNavegacion;
 
 
   /// Calcula con OSRM la ruta por carretera conductor->recogida y
@@ -1445,7 +1445,7 @@ void _startTripPoller() {
               tilt: _nav.tiltActual,
               bearing: _nav.rotacionActual ?? 0.0,
               center: _nav.centroActual ?? _driverPos,
-              zoom: _nav.zoomActual ?? AppConfig.defaultZoom,
+              zoom: _nav.zoomActual ?? ApiConfig.defaultZoom,
               posicionVehiculo: _nav.debeSeguir ? _nav.posicion : _driverPos,
               rumboVehiculo: _rumboParaFlecha(),
               ruta: _rutaVisible,

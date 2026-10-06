@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
-import '../config.dart';
+import '../api_config.dart';
+import 'api_client.dart';
 
 /// Lugar devuelto por una búsqueda de direcciones (geocodificación directa).
 class GeoPlace {
@@ -48,21 +47,21 @@ class GeocodeService {
   }
 
   static Future<Map<String, dynamic>?> _getJson(String url) async {
-    final res = await http.get(
-      Uri.parse(url),
-      headers: {'User-Agent': _userAgent},
-    );
-    if (res.statusCode != 200) return null;
-    return jsonDecode(res.body) as Map<String, dynamic>;
+    try {
+      final j = await ApiClient.get(url, headers: {'User-Agent': _userAgent});
+      return j is Map<String, dynamic> ? j : null;
+    } on ApiException {
+      return null;
+    }
   }
 
   static Future<List<dynamic>?> _getListJson(String url) async {
-    final res = await http.get(
-      Uri.parse(url),
-      headers: {'User-Agent': _userAgent},
-    );
-    if (res.statusCode != 200) return null;
-    return jsonDecode(res.body) as List<dynamic>;
+    try {
+      final j = await ApiClient.get(url, headers: {'User-Agent': _userAgent});
+      return j is List ? j : null;
+    } on ApiException {
+      return null;
+    }
   }
 
   /// Traduce un dict `address` de Nominatim a una dirección calle corta.
@@ -108,7 +107,7 @@ class GeocodeService {
       'limit': '${limit * 3}',
       'email': 'taxirapid.dev@example.com',
       // Acota los resultados al área del mapa de la app.
-      'viewbox': viewBox ?? AppConfig.mapViewBox,
+      'viewbox': viewBox ?? ApiConfig.mapViewBox,
       'bounded': '1',
       if (near != null) 'lat': '${near.latitude}',
       if (near != null) 'lon': '${near.longitude}',
@@ -148,7 +147,7 @@ class GeocodeService {
   /// (ej. "Calle 23, Vedado"). Devuelve `null` si el punto cae fuera del
   /// área del mapa o si no se puede resolver a una calle.
   static Future<String?> reverse(LatLng p) async {
-    if (!AppConfig.inMapArea(p)) return null;
+    if (!ApiConfig.inMapArea(p)) return null;
     final url = Uri.https('nominatim.openstreetmap.org', '/reverse', {
       'lat': '${p.latitude}',
       'lon': '${p.longitude}',

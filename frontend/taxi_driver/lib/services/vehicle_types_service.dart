@@ -1,9 +1,7 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 
-import '../config.dart';
+import '../api_config.dart';
+import 'api_client.dart';
 
 /// Un tipo de vehiculo con lo que el administrador ha configurado.
 ///
@@ -162,13 +160,8 @@ class VehicleTypesService extends ChangeNotifier {
   }
 
   static Future<List<Map<String, dynamic>>> _getPorDefecto(String ruta) async {
-    final r = await http.get(Uri.parse('${AppConfig.apiBase}$ruta'));
-    if (r.statusCode < 200 || r.statusCode >= 300) {
-      throw Exception('HTTP ${r.statusCode}');
-    }
-    if (r.body.trim().isEmpty) return const [];
-    final decoded = jsonDecode(utf8.decode(r.bodyBytes));
-    if (decoded is! List) return const [];
-    return decoded.cast<Map<String, dynamic>>();
+    final j = await ApiClient.get('${ApiConfig.baseUrl}$ruta');
+    if (j is! List) return const [];
+    return j.cast<Map<String, dynamic>>();
   }
 }

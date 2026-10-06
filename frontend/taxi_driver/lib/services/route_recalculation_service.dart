@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
-import '../config.dart';
+import '../api_config.dart';
+import 'api_client.dart';
 import 'osrm_service.dart';
 
 /// Estado del recalculo de ruta.
@@ -42,8 +41,8 @@ enum ZonaRuta { ciudad, carretera }
 /// positivos en una y falsos negativos en la otra.
 extension UmbralZonaRuta on ZonaRuta {
   double get metros => switch (this) {
-        ZonaRuta.ciudad => AppConfig.desvioUmbralCiudadMetros,
-        ZonaRuta.carretera => AppConfig.desvioUmbralCarreteraMetros,
+        ZonaRuta.ciudad => ApiConfig.desvioUmbralCiudadMetros,
+        ZonaRuta.carretera => ApiConfig.desvioUmbralCarreteraMetros,
       };
 }
 
@@ -207,7 +206,7 @@ class RouteRecalculationService extends ChangeNotifier {
 
     if (distancia > _zona.metros) {
       _fueraConsecutivas++;
-      if (_fueraConsecutivas >= AppConfig.desvioMuestrasConsecutivas) {
+      if (_fueraConsecutivas >= ApiConfig.desvioMuestrasConsecutivas) {
         _fueraConsecutivas = 0;
         _pedirRecalculo();
       }
@@ -221,7 +220,7 @@ class RouteRecalculationService extends ChangeNotifier {
   // ---------------- Deteccion ----------------
 
   void _actualizarZona(double velocidadMps) {
-    _zona = velocidadMps >= AppConfig.desvioVelocidadCarreteraMps
+    _zona = velocidadMps >= ApiConfig.desvioVelocidadCarreteraMps
         ? ZonaRuta.carretera
         : ZonaRuta.ciudad;
   }
@@ -232,14 +231,14 @@ class RouteRecalculationService extends ChangeNotifier {
   /// 10 s: arrancar y frenar en un semaforo no debe paucar nada. Sale al
   /// superar 3 km/h, con margen para que el GPS no fluctuate en el umbral.
   void _detectarParado(double velocidadMps) {
-    if (velocidadMps < AppConfig.pausaVelocidadBajaMps) {
+    if (velocidadMps < ApiConfig.pausaVelocidadBajaMps) {
       _muestrasParado++;
-      if (_muestrasParado >= AppConfig.pausaMuestrasParado &&
+      if (_muestrasParado >= ApiConfig.pausaMuestrasParado &&
           !_pausadoPorParado) {
         _pausadoPorParado = true;
         notifyListeners();
       }
-    } else if (velocidadMps > AppConfig.pausaVelocidadAltaMps) {
+    } else if (velocidadMps > ApiConfig.pausaVelocidadAltaMps) {
       _muestrasParado = 0;
       if (_pausadoPorParado) {
         _pausadoPorParado = false;
@@ -257,7 +256,7 @@ class RouteRecalculationService extends ChangeNotifier {
     final ultimo = _ultimoRecalculoMs;
     if (ultimo == null) return false;
     final transcurrido = _reloj.elapsedMilliseconds - ultimo;
-    return transcurrido < AppConfig.desvioPausaMsTrasRecalculo.inMilliseconds;
+    return transcurrido < ApiConfig.desvioPausaMsTrasRecalculo.inMilliseconds;
   }
 
   // ---------------- Peticion ----------------
@@ -300,7 +299,7 @@ class RouteRecalculationService extends ChangeNotifier {
       // cada tres segundos si el destino no es alcanzable.
       _temporizadorEnfriamiento?.cancel();
       _temporizadorEnfriamiento = Timer(
-        AppConfig.desvioEnfriamientoMs,
+        ApiConfig.desvioEnfriamientoMs,
         () {
           _temporizadorEnfriamiento = null;
           if (!_descartado) _setEstado(RouteRecalcState.idle);
@@ -319,7 +318,7 @@ class RouteRecalculationService extends ChangeNotifier {
   /// es mejor que un spinner infinito.
   void _fallarYReintentar() {
     _intentos++;
-    if (_intentos >= AppConfig.desvioIntentosMaximos) {
+    if (_intentos >= ApiConfig.desvioIntentosMaximos) {
       _descartado = true;
       _setEstado(RouteRecalcState.agotado);
       return;
@@ -327,7 +326,7 @@ class RouteRecalculationService extends ChangeNotifier {
 
     _setEstado(RouteRecalcState.error);
 
-    final espera = AppConfig.desvioBackoffInicial * (1 << (_intentos - 1));
+    final espera = ApiConfig.desvioBackoffInicial * (1 << (_intentos - 1));
     _temporizadorReintento?.cancel();
     _temporizadorReintento = Timer(espera, () {
       _temporizadorReintento = null;
@@ -475,17 +474,7 @@ class RouteRecalculationService extends ChangeNotifier {
     String endpoint,
     Map<String, dynamic> body,
   ) async {
-    final uri = Uri.parse('${AppConfig.apiBase}$endpoint');
-    final respuesta = await http.post(
-      uri,
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode(body),
-    );
-    if (respuesta.statusCode < 200 || respuesta.statusCode >= 300) {
-      throw Exception('Backend devolvio ${respuesta.statusCode}');
-    }
-    if (respuesta.body.trim().isEmpty) return const {};
-    return jsonDecode(utf8.decode(respuesta.bodyBytes))
-        as Map<String, dynamic>;
+    final j = await ApiClient.post('${ApiConfig.baseUrl}$endpoint', body: body);
+    return (j as Map<String, dynamic>?) ?? const {};
   }
 }

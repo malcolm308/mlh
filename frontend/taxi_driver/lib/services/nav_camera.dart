@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 
 /// Camara del mapa en eventos discretos: cambio de fase, encuadre de trayecto y
 /// boton de recentrar.
@@ -23,7 +23,7 @@ class NavCamera {
   NavCamera._();
 
   static String? _faseAplicada;
-  static double _zoom = AppConfig.defaultZoom;
+  static double _zoom = ApiConfig.defaultZoom;
   static double _rotacion = 0.0;
 
   static double get zoom => _zoom;
@@ -34,7 +34,7 @@ class NavCamera {
   /// Olvida la fase aplicada y vuelve al zoom general.
   static void reset() {
     _faseAplicada = null;
-    _zoom = AppConfig.defaultZoom;
+    _zoom = ApiConfig.defaultZoom;
   }
 
   /// Acerca el mapa segun la fase del viaje.
@@ -50,8 +50,8 @@ class NavCamera {
     if (status == _faseAplicada) return false;
     _faseAplicada = status;
 
-    final z = AppConfig.zoomParaFase(status: status)
-        .clamp(AppConfig.minZoom.toDouble(), AppConfig.maxZoom.toDouble());
+    final z = ApiConfig.zoomParaFase(status: status)
+        .clamp(ApiConfig.minZoom.toDouble(), ApiConfig.maxZoom.toDouble());
     _zoom = z;
 
     // Sin viaje activo el mapa se orienta al norte: la rotacion de conduccion
@@ -90,7 +90,7 @@ class NavCamera {
     double tilt = 0.0,
   }) {
     final z = _zoom
-        .clamp(AppConfig.minZoom.toDouble(), AppConfig.maxZoom.toDouble());
+        .clamp(ApiConfig.minZoom.toDouble(), ApiConfig.maxZoom.toDouble());
     final rotacion = seguir ? _rotacion : 0.0;
     _rotacion = rotacion;
 

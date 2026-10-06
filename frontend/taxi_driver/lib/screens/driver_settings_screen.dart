@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 import '../services/api_service.dart';
 
 /// Configuración general del conductor (opción del menú hamburguesa).
@@ -62,15 +62,15 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.storage, color: Color(0xFF333333)),
                 title: Text('Backend'),
-                subtitle: Text(AppConfig.apiBase,
+                subtitle: Text(ApiConfig.baseUrl,
                     style: TextStyle(color: Color(0xFF888888))),
               ),
-              const ListTile(
+              ListTile(
                 contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.map_outlined, color: Color(0xFF333333)),
-                title: Text('Mapa (tiles)'),
-                subtitle: Text(AppConfig.mapStyleUrl,
-                    style: TextStyle(color: Color(0xFF888888))),
+                leading: const Icon(Icons.map_outlined, color: Color(0xFF333333)),
+                title: const Text('Mapa (tiles)'),
+                subtitle: Text(ApiConfig.mapStyleUrl,
+                    style: const TextStyle(color: Color(0xFF888888))),
               ),
               ListTile(
                 contentPadding: EdgeInsets.zero,

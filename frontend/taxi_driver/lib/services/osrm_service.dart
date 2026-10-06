@@ -1,7 +1,7 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
+
+import '../api_config.dart';
+import 'api_client.dart';
 
 /// Ruta calculada por OSRM entre dos puntos.
 class OsrmRoute {
@@ -25,20 +25,15 @@ class OsrmRoute {
 class OsrmService {
   OsrmService._();
 
-  static const String _baseUrl =
-      'https://router.project-osrm.org/route/v1/driving';
-
   /// Calcula la ruta por carretera entre [from] y [to].
   ///
   /// Devuelve `null` si el servidor no responde o no encuentra ruta.
   static Future<OsrmRoute?> route(LatLng from, LatLng to) async {
-    final url = '$_baseUrl/${from.longitude},${from.latitude};'
+    final url = '${ApiConfig.routing()}/${from.longitude},${from.latitude};'
         '${to.longitude},${to.latitude}'
         '?overview=full&geometries=geojson&steps=false&alternatives=false';
     try {
-      final res = await http.get(Uri.parse(url));
-      if (res.statusCode != 200) return null;
-      final json = jsonDecode(res.body) as Map<String, dynamic>;
+      final json = await ApiClient.get(url);
       final routes = json['routes'] as List<dynamic>?;
       if (routes == null || routes.isEmpty) return null;
       final route = routes.first as Map<String, dynamic>;

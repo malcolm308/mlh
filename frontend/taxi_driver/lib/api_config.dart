@@ -3,33 +3,47 @@ import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
 /// Configuración central de la app de chofer.
 ///
-/// Por defecto apunta al backend local en el puerto 8000 y al servidor de
-/// tiles local en el puerto 8010. Se puede sobreescribir por línea de
-/// comandos usando --dart-define, por ejemplo para un emulador Android:
-///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
-/// o contra el despliegue de producción:
-///   flutter build apk --release --dart-define=API_BASE_URL=https://api.onrender.com
-class AppConfig {
-  AppConfig._();
+/// Por defecto apunta a los servicios desplegados en Render (backend FastAPI
+/// y servidor de tiles Martin). Se puede sobreescribir por línea de comandos
+/// con --dart-define, por ejemplo para desarrollo local:
+///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=MARTIN_URL=http://localhost:8010
+class ApiConfig {
+  ApiConfig._();
 
-  static const String apiBase = String.fromEnvironment(
+  /// URL base del backend FastAPI desplegado en Render.
+  static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:8000',
+    defaultValue: 'https://rapitaxi-api-fws6.onrender.com',
   );
 
-  /// URL del estilo de MapLibre, servido por Martin desde el MBTiles local.
-  ///
-  /// Antes esta constante era una plantilla de teselas raster PNG
-  /// (`/tiles/{z}/{x}/{y}.png`) que consumia `flutter_map`. Con vector tiles ya
-  /// no hay URL de tesela que construir: el cliente pide un estilo completo y el
-  /// motor negocia los PBF por su cuenta a partir del `source` que declara.
-  ///
-  /// El servidor es Martin:
-  ///   powershell -ExecutionPolicy Bypass -File scripts_local_dev\start_tiles.ps1
-  static const String mapStyleUrl = String.fromEnvironment(
-    'MAP_STYLE_URL',
-    defaultValue: 'http://localhost:8010/style/taxi',
+  /// URL base del servidor de tiles Martin (del que se sirve el estilo).
+  static const String martinUrl = String.fromEnvironment(
+    'MARTIN_URL',
+    defaultValue: 'https://mlh-tdyg.onrender.com',
   );
+
+  /// URL del estilo de MapLibre, servido por Martin desde el MBTiles.
+  /// Se sirve de [martinUrl] y no admite override aparte.
+  static String get mapStyleUrl => '$martinUrl/styles/taxi';
+
+  // ---------------- Endpoints del backend ----------------
+
+  /// Servicio público de ruteo OSRM (mismo que usa el mapa web de referencia).
+  static String routing() => 'https://router.project-osrm.org/route/v1/driving';
+
+  /// Recalculo de ruta por el backend (proxy contra OSRM, `routers/routing.py`,
+  /// que monta el prefix `/api/routing`).
+  static String recalculate() => '$baseUrl/api/routing/recalculate';
+
+  /// Cancelación de un viaje por el pasajero.
+  static String cancelTrip(String tripId) => '$baseUrl/trips/$tripId/cancel';
+
+  /// Cambio de estado (online/offline) de un chofer.
+  static String driverStatus(String driverId) =>
+      '$baseUrl/drivers/$driverId/status';
+
+  /// Health check del backend.
+  static String health() => '$baseUrl/health';
 
   /// Posición inicial/por defecto del chofer (Centro de La Habana).
   static const LatLng defaultDriverLocation = LatLng(23.1136, -82.3666);

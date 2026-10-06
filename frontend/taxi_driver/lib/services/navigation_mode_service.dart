@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/scheduler.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
-import '../config.dart';
+import '../api_config.dart';
 import '../models/geo_fix.dart';
 import 'heading_filter.dart';
 import 'location_service.dart';
@@ -101,7 +101,7 @@ class NavigationModeService {
 
   /// Posicion actual, extrapolada entre fixes. Es la que se dibuja y la que
   /// sigue la camara.
-  LatLng _pos = AppConfig.defaultDriverLocation;
+  LatLng _pos = ApiConfig.defaultDriverLocation;
   LatLng get posicion => _pos;
 
   /// Posicion real del ultimo fix, sin extrapolar. Al backend se le manda esta,
@@ -157,10 +157,10 @@ class NavigationModeService {
 
   /// Tilt que se persigue ahora mismo, ya degradado por rendimiento.
   ///
-  /// Se mueve con una rampa de [AppConfig.rampaTiltGradosPorSegundo] y nunca
+  /// Se mueve con una rampa de [ApiConfig.rampaTiltGradosPorSegundo] y nunca
   /// de golpe: el objetivo sale de la velocidad, pero el camino se recorre
   /// despacio para que no se vea como un tirón al salir de un semaforo.
-double _tiltActual = AppConfig.tiltDegradado;
+double _tiltActual = ApiConfig.tiltDegradado;
 
   /// Tilt y zoom que impone el recentrar, o `null` cuando manda la velocidad.
   ///
@@ -230,7 +230,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
 
     // Siembra la posicion con la que ya se sabe, en vez de esperar al primer
     // fix de 1 Hz. Sin esto, [_pos] sigue valiendo el punto fijo por defecto de
-    // `AppConfig.defaultDriverLocation` (el centro de La Habana) y el mapa, y
+    // `ApiConfig.defaultDriverLocation` (el centro de La Habana) y el mapa, y
     // con el el marcador del vehiculo, aparecen ahi en vez de donde esta el
     // coche. Se nota al aceptar un viaje parado: la flecha salta y parece que
     // desaparece.
@@ -245,7 +245,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
     // Unico sitio donde se toca el tilt: entrar o salir del modo. Adentro la
     // rampa por frame se encarga sola.
     //
-    // Se entra ya inclinado ([AppConfig.tiltEntradaNavegacion]) en vez de
+    // Se entra ya inclinado ([ApiConfig.tiltEntradaNavegacion]) en vez de
     // arrancar en 0 y subirlo con el primer fix. Recoger un viaje parado no
     // es momento de ver el mapa aplanarse y luego inclinarse: el conductor
     // esta quieto, mirando la calle, y el angulo le hace falta ya. Al arrancar
@@ -253,7 +253,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
     if (estabaApagado) {
       _tiltActual = _tiltDegradado
           ? _tiltActual
-          : AppConfig.tiltEntradaNavegacion;
+          : ApiConfig.tiltEntradaNavegacion;
       _notificarCambioTilt();
     }
   }
@@ -305,8 +305,8 @@ void activar(String? status, {LatLng? posicionConocida}) {
 
 /// El usuario ha pulsado "Recentrar": vuelve al modo seguimiento.
   ///
-  /// Recupera ademas el detalle de calle ([AppConfig.zoomRecentrar]) y el angulo
-  /// de ciudad ([AppConfig.tiltRecentrar]). El zoom lo elige recentrar y no la
+  /// Recupera ademas el detalle de calle ([ApiConfig.zoomRecentrar]) y el angulo
+  /// de ciudad ([ApiConfig.tiltRecentrar]). El zoom lo elige recentrar y no la
   /// fase porque el chofer que pulsa esto quiere ver la calle que tiene delante,
   /// no un encuadre de conjunto. El tilt se fuerza porque recentrar no cambia la
   /// velocidad, y por tanto el tilt adaptativo daria 0 justo en el momento en que
@@ -321,8 +321,8 @@ void activar(String? status, {LatLng? posicionConocida}) {
     _quietoDesdeMs = null;
     _enMarchaDesdeMs = null;
     _buffer.clear();
-    _tiltForzado = AppConfig.tiltRecentrar;
-    _zoomForzado = AppConfig.zoomRecentrar;
+    _tiltForzado = ApiConfig.tiltRecentrar;
+    _zoomForzado = ApiConfig.zoomRecentrar;
     _iniciarTicker();
     _recalcularObjetivo();
     _notificarCambioTilt();
@@ -345,7 +345,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
   /// que llamar a `MapController.rotate(0)` y despues a [exitMode], porque bajar
   /// el tilt no resetea la rotacion por si sola.
   void exitMode() {
-    _tiltActual = AppConfig.tiltDegradado;
+    _tiltActual = ApiConfig.tiltDegradado;
     apagar();
   }
 
@@ -374,20 +374,20 @@ void activar(String? status, {LatLng? posicionConocida}) {
   /// Tilt que corresponde a la velocidad actual, en grados.
   ///
   /// Es el valor ADAPTATIVO: 0 quieto, ~42 en ciudad, hasta 58 en carretera.
-  /// Ver [AppConfig.tiltObjetivoParaVelocidad].
+  /// Ver [ApiConfig.tiltObjetivoParaVelocidad].
 double get tiltObjetivo {
-    if (_modo != ModoNavegacion.siguiendo) return AppConfig.tiltDegradado;
-    if (_tiltDegradado) return AppConfig.tiltDegradado;
+    if (_modo != ModoNavegacion.siguiendo) return ApiConfig.tiltDegradado;
+    if (_tiltDegradado) return ApiConfig.tiltDegradado;
     // El recentrar impone su angulo mientras el GPS siga sin velocidad.
     final forzado = _tiltForzado;
-    if (forzado != null && _velocidadMps < AppConfig.velocidadMinimaTilt) {
+    if (forzado != null && _velocidadMps < ApiConfig.velocidadMinimaTilt) {
       return forzado;
     }
     // Por debajo del umbral se conserva el angulo que ya tenia en vez de
-    // aplanarse: ver [AppConfig.tiltObjetivoParaVelocidad]. Se pasa el tilt
+    // aplanarse: ver [ApiConfig.tiltObjetivoParaVelocidad]. Se pasa el tilt
     // actual, no el objetivo, para que la rampa de 30 grados/s siga
     // mandando y el congelado no de un salto.
-    return AppConfig.tiltObjetivoParaVelocidad(
+    return ApiConfig.tiltObjetivoParaVelocidad(
       _velocidadMps,
       anterior: _tiltActual,
     );
@@ -396,7 +396,7 @@ double get tiltObjetivo {
   /// Tilt vigente, ya rampingado, en grados.
   ///
   /// Es lo que aplica la perspectiva. NUNCA se asigna de golpe: [_rampearTilt]
-  /// lo acerca al objetivo como mucho [AppConfig.rampaTiltGradosPorSegundo]
+  /// lo acerca al objetivo como mucho [ApiConfig.rampaTiltGradosPorSegundo]
   /// grados por segundo, de modo que acelerar o frenar no produce un tirón.
   double get tiltActual => _tiltActual;
 
@@ -502,15 +502,15 @@ double get tiltObjetivo {
     final v = fix.speedMps ?? 0.0;
     final ahora = _ahoraMs;
 
-    if (v >= AppConfig.velocidadMinimaHeading) {
+    if (v >= ApiConfig.velocidadMinimaHeading) {
       _quietoDesdeMs = null;
       _enMarchaDesdeMs ??= ahora;
       // Si el usuario habia cogido el mapa y el coche lleva mas de 3 s en
       // marcha, se vuelve al follow solo: estaba mirando el barrio, no
       // conduciendo.
       if (_modo == ModoNavegacion.explorando &&
-          v >= AppConfig.velocidadReactivarFollow &&
-          _desde(_enMarchaDesdeMs) >= AppConfig.antiguedadReactivar.inMilliseconds) {
+          v >= ApiConfig.velocidadReactivarFollow &&
+          _desde(_enMarchaDesdeMs) >= ApiConfig.antiguedadReactivar.inMilliseconds) {
         _modo = ModoNavegacion.siguiendo;
         _centroObjetivo = null;
         _iniciarTicker();
@@ -537,7 +537,7 @@ final v = _buffer.velocidadFiltrada();
     // El recentrar solo impone tilt y zoom mientras el vehiculo siga parado.
     // En cuanto arranca, manda la velocidad y la vista vuelve a ser adaptativa;
     // si no, el forzado se congelaria en 18 y 55 grados para siempre.
-    if (v >= AppConfig.velocidadMinimaTilt &&
+    if (v >= ApiConfig.velocidadMinimaTilt &&
         (_tiltForzado != null || _zoomForzado != null)) {
       _tiltForzado = null;
       _zoomForzado = null;
@@ -549,16 +549,16 @@ final v = _buffer.velocidadFiltrada();
     _rumbo = r;
 
 // Zoom de la fase, mas un nivel si va rapido.
-    var z = AppConfig.zoomParaFase(status: _fase);
-    if (v >= AppConfig.velocidadParaZoomRapido) {
-      z = math.min(AppConfig.zoomRutaCercana, z + 1);
+    var z = ApiConfig.zoomParaFase(status: _fase);
+    if (v >= ApiConfig.velocidadParaZoomRapido) {
+      z = math.min(ApiConfig.zoomRutaCercana, z + 1);
     }
     // El recentrar impone su zoom mientras el GPS siga sin velocidad.
     final zoomForzado = _zoomForzado;
-    if (zoomForzado != null && v < AppConfig.velocidadMinimaTilt) {
+    if (zoomForzado != null && v < ApiConfig.velocidadMinimaTilt) {
       z = zoomForzado;
     }
-    _zoomObjetivo = z.clamp(AppConfig.minZoom.toDouble(), AppConfig.maxZoom.toDouble());
+    _zoomObjetivo = z.clamp(ApiConfig.minZoom.toDouble(), ApiConfig.maxZoom.toDouble());
 
     // La rotacion se mantiene al parar en vez de volver al norte arriba.
     //
@@ -567,11 +567,11 @@ final v = _buffer.velocidadFiltrada();
     // es el peor de los dos mundos: se ve el giro y encima el mapa queda
     // torcido. Google Maps mantiene tilt y rumbo juntos, y es lo coherente.
     //
-    // El umbral de [AppConfig.velocidadMinimaHeading] (0.7 m/s) sigue
+    // El umbral de [ApiConfig.velocidadMinimaHeading] (0.7 m/s) sigue
     // mandando: por debajo de unos 2.5 km/h el sensor de rumbo es ruido, y ahi
     // si se congela la ultima orientacion estable, que es lo que ya hacia el
     // filtro de heading.
-    if (v < AppConfig.velocidadMinimaHeading) {
+    if (v < ApiConfig.velocidadMinimaHeading) {
       _rotacionObjetivo = _rumboGps != null
           ? normalizarGrados(_rumboGps!)
           : _rotacionActual ?? 0.0;
@@ -586,7 +586,7 @@ final v = _buffer.velocidadFiltrada();
   ///
   /// El objetivo depende de la velocidad y por eso cambia de forma continua,
   /// pero el valor aplicado va con rampa de
-  /// [AppConfig.rampaTiltGradosPorSegundo]. Sin esta rampa, entrar y salir de un
+  /// [ApiConfig.rampaTiltGradosPorSegundo]. Sin esta rampa, entrar y salir de un
   /// semaforo a 40 km/h cambiaria el angulo de golpe y se veria como un jerk.
   ///
   /// El reloj es monotono y se avanza por frame, no por fix del GPS: asi la
@@ -599,7 +599,7 @@ final v = _buffer.velocidadFiltrada();
       return;
     }
     final dt = (elapsed.inMicroseconds / 1e6).clamp(0.0, 0.1);
-    final maximo = AppConfig.rampaTiltGradosPorSegundo * dt;
+    final maximo = ApiConfig.rampaTiltGradosPorSegundo * dt;
     _tiltActual += delta.clamp(-maximo, maximo);
   }
 
@@ -676,7 +676,7 @@ final v = _buffer.velocidadFiltrada();
       final ra = _rotacionActual;
       if (ra != null && rotacionObjetivo != null) {
         final d = deltaCorto(ra, rotacionObjetivo);
-        if (d.abs() >= AppConfig.deadbandRotacion) {
+        if (d.abs() >= ApiConfig.deadbandRotacion) {
           _rotacionActual = normalizarGrados(ra + d * k);
         }
       } else {
@@ -723,10 +723,10 @@ final v = _buffer.velocidadFiltrada();
 
   /// Acumula las duraciones de frame y decide si degrada la perspectiva.
   ///
-  /// Criterio: por debajo de [AppConfig.fpsMinimoTilt] durante mas de
-  /// [AppConfig.antiguedadDegradacion] se apaga el tilt, y se recupera al
-  /// superar [AppConfig.fpsRecuperacionTilt] durante
-  /// [AppConfig.antiguedadRecuperacion]. Los dos margenes son deliberados: sin
+  /// Criterio: por debajo de [ApiConfig.fpsMinimoTilt] durante mas de
+  /// [ApiConfig.antiguedadDegradacion] se apaga el tilt, y se recupera al
+  /// superar [ApiConfig.fpsRecuperacionTilt] durante
+  /// [ApiConfig.antiguedadRecuperacion]. Los dos margenes son deliberados: sin
   /// ellos la perspectiva entraria y saldria en cada cambio de carga.
   void _callbackTimings(List<FrameTiming> timings) {
     if (timings.isEmpty) return;
@@ -747,12 +747,12 @@ final v = _buffer.velocidadFiltrada();
   ///
   /// Vive aparte para que [informarFps] pueda reutilizarla en las pruebas.
   void _evaluarFps() {
-    if (_fps < AppConfig.fpsMinimoTilt) {
+    if (_fps < ApiConfig.fpsMinimoTilt) {
       _altoFpsDesdeMs = null;
       _bajoFpsDesdeMs ??= _ahoraMs;
       if (!_tiltDegradado &&
           _desde(_bajoFpsDesdeMs) >=
-              AppConfig.antiguedadDegradacion.inMilliseconds) {
+              ApiConfig.antiguedadDegradacion.inMilliseconds) {
         _tiltDegradado = true;
         _avisarDegradacion(true);
         notificar();
@@ -761,11 +761,11 @@ final v = _buffer.velocidadFiltrada();
     }
 
     _bajoFpsDesdeMs = null;
-    if (_fps > AppConfig.fpsRecuperacionTilt) {
+    if (_fps > ApiConfig.fpsRecuperacionTilt) {
       _altoFpsDesdeMs ??= _ahoraMs;
       if (_tiltDegradado &&
           _desde(_altoFpsDesdeMs) >=
-              AppConfig.antiguedadRecuperacion.inMilliseconds) {
+              ApiConfig.antiguedadRecuperacion.inMilliseconds) {
         _tiltDegradado = false;
         _avisarDegradacion(false);
         notificar();

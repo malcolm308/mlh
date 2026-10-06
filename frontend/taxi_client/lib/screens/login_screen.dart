@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config.dart';
+import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import 'client_home_screen.dart';
@@ -211,7 +211,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         const SizedBox(height: 14),
                         Text(
-                          'Backend: ${AppConfig.apiBase}',
+                          'Backend: ${ApiConfig.baseUrl}',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
