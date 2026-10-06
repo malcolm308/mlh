@@ -200,6 +200,8 @@ def init_db():
     """
     # Extension necesaria para gen_random_uuid() en PG < 13
     create_pgcrypto = "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+    # trips usa GEOGRAPHY(Point,4326): requiere la extension PostGIS
+    create_postgis = "CREATE EXTENSION IF NOT EXISTS postgis;"
 
     create_trips_table = """
         CREATE TABLE IF NOT EXISTS trips (
@@ -327,6 +329,7 @@ def init_db():
     # Lista de sentencias a ejecutar (en orden, respetando dependencias)
     sql_statements = [
         create_pgcrypto,
+        create_postgis,
         create_trips_table,
         migrate_trips_addresses,
         create_transactions_table,
