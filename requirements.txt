@@ -16,3 +16,4 @@ python-jose==3.5.0
 requests==2.33.1
 websockets==16.0
 tzdata==2025.3
+email-validator==2.2.0
