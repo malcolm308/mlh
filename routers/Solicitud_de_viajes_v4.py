@@ -29,9 +29,8 @@ logger = logging.getLogger(__name__)
 CUBA_TZ = ZoneInfo("America/Havana")
 
 # ===================== Garnet (Redis) =====================
-GARNET_HOST = "localhost"
-GARNET_PORT = 6379
-garnet = redis.Redis(host=GARNET_HOST, port=GARNET_PORT, decode_responses=True)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+garnet = redis.from_url(REDIS_URL, decode_responses=True)
 
 # ===================== Traccar (trazado de rutas) =====================
 TRACCAR_HTTP = os.getenv("TRACCAR_HTTP", "http://localhost:8082")
@@ -104,7 +103,7 @@ def _get_traccar_route(driver_id: str, start_dt, end_dt) -> list[dict]:
     ]
 
 # ===================== MongoDB =====================
-mongo_client = MongoClient("mongodb://localhost:27017")
+mongo_client = MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
 chofer_db = mongo_client["Chofer"]
 cliente_db = mongo_client["Cliente"]
 chofer_coleccion = chofer_db["users"]
@@ -168,13 +167,17 @@ DB_CONFIG = {
 }
 
 pool: Optional[ThreadedConnectionPool] = None
+POSTGRES_URL = os.getenv("POSTGRES_URL", "")
 
 
 def init_pool():
     """Inicializa el pool de conexiones (llamar al arrancar la app)."""
     global pool
     if pool is None:
-        pool = ThreadedConnectionPool(minconn=1, maxconn=20, **DB_CONFIG)
+        if POSTGRES_URL:
+            pool = ThreadedConnectionPool(minconn=1, maxconn=20, dsn=POSTGRES_URL)
+        else:
+            pool = ThreadedConnectionPool(minconn=1, maxconn=20, **DB_CONFIG)
 
 
 @contextmanager

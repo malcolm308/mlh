@@ -4,6 +4,7 @@ muestran en el mapa de las apps.
 
 Se guardan en MongoDB, en la base de Administracion, coleccion `pois`.
 """
+import os
 import sys
 
 sys.path.insert(0, "E:\\Taxi_Rapid")
@@ -19,7 +20,7 @@ router = APIRouter()
 
 # La base real se llama "Administracion" (utf-8). Se escribe con escapes para
 # no depender de la codificacion del archivo fuente.
-_admin = MongoClient("mongodb://localhost:27017")["Administraci\u00f3n"]
+_admin = MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017"))["Administraci\u00f3n"]
 _pois = _admin["pois"]
 
 CATEGORIAS = {

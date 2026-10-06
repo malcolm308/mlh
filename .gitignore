@@ -82,3 +82,4 @@ keystore.properties
 # Sistema
 .DS_Store
 Thumbs.db
+.env.local

@@ -1,9 +1,10 @@
+import os
 import redis
 from typing import List, Tuple, Optional
 import json
 
 # Conexion a Garnet (localhost:6379 por defecto)
-garnet_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+garnet_client = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
 
 # --- 1. UBICACIONES DE CONDUCTORES ----------------------
 

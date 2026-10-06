@@ -11,6 +11,7 @@ numero y el barrio. Si Nominatim tampoco responde, se devuelve la calle con
 sus cruces, que es lo importante para orientarse.
 """
 import math
+import os
 import re
 import sys
 import threading
@@ -30,7 +31,7 @@ router = APIRouter()
 MAP_SOUTH, MAP_NORTH = 22.89768, 23.30190
 MAP_WEST, MAP_EAST = -82.60071, -82.19971
 
-_geo = MongoClient("mongodb://localhost:27017")["Geo"]
+_geo = MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017"))["Geo"]
 _calles = _geo["calles"]
 _progreso = _geo["progreso_calles"]
 

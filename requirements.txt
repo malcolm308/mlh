@@ -1,10 +1,18 @@
-fastapi
-uvicorn
-pymongo
-pydantic
+fastapi==0.125.0
+uvicorn==0.46.0
+pymongo==4.17.0
+pydantic==2.13.4
 # Subida de las 10 fotos del registro del chofer (multipart/form-data)
-python-multipart
+python-multipart==0.0.32
 # El panel de administracion decodifica JPEG/WebP/HEIC para mostrar los documentos
-Pillow
-pillow-heif
-httpx
+Pillow==11.1.0
+pillow-heif==1.8.0
+httpx==0.28.1
+apscheduler==3.11.3
+psycopg2-binary==2.9.12
+redis==7.4.0
+bcrypt==5.0.0
+python-jose==3.5.0
+requests==2.33.1
+websockets==16.0
+tzdata==2025.3
