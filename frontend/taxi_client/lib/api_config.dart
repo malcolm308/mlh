@@ -44,6 +44,22 @@ class ApiConfig {
   /// Health check del backend.
   static String health() => '$baseUrl/health';
 
+  /// Todas las tarifas configuradas (GET /api/tariffs del backend).
+  static Uri tariffs() => Uri.parse('$baseUrl/api/tariffs');
+
+  /// Tarifa de un tipo de vehiculo concreto (GET /api/tariffs/{vehicle_type}).
+  static Uri tariffByType(String vehicleType) =>
+      Uri.parse('$baseUrl/api/tariffs/${Uri.encodeComponent(vehicleType)}');
+
+  /// Reglas de precio por horario (GET /api/pricing-rules).
+  static Uri pricingRules() => Uri.parse('$baseUrl/api/pricing-rules');
+
+  /// Reglas horarias de un tipo de vehiculo concreto
+  /// (GET /api/pricing-rules/{vehicle_type}).
+  static Uri pricingRulesByType(String vehicleType) =>
+      Uri.parse(
+          '$baseUrl/api/pricing-rules/${Uri.encodeComponent(vehicleType)}');
+
   /// Posición inicial/por defecto del cliente (Centro de La Habana).
   static const LatLng defaultClientLocation = LatLng(23.1136, -82.3666);
 
@@ -92,17 +108,4 @@ class ApiConfig {
       p.latitude <= mapNorth &&
       p.longitude >= mapWest &&
       p.longitude <= mapEast;
-
-  /// Tarifa estimada por carretera: base + por kilómetro (igual que el
-  /// mapa web de referencia).
-  static const double fareBase = 2.00;
-  static const double farePerKm = 1.50;
-
-  /// Tipos de vehículo disponibles (deben existir en la tabla tariffs).
-  static const List<String> vehicleTypes = [
-    'basico',
-    'moto',
-    'triciclo',
-    'confort',
-  ];
 }

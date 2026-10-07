@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../api_config.dart';
 import '../models/models.dart';
+import '../models/tariff.dart';
 import 'api_client.dart';
 
 export 'api_client.dart' show ApiException;
@@ -99,6 +100,34 @@ class ApiService {
     });
   }
 
+  // ------------------- TARIFAS -------------------
+
+  /// Todas las tarifas disponibles (GET /api/tariffs).
+  Future<List<Tariff>> getTariffs() async {
+    final j = await _map('GET', ApiConfig.tariffs().path);
+    final list = (j['tariffs'] as List<dynamic>?) ?? const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(Tariff.fromJson)
+        .toList();
+  }
+
+  /// La tarifa de un tipo de vehiculo concreto (GET /api/tariffs/{tipo}).
+  Future<Tariff> getTariff(String vehicleType) async {
+    final j = await _map('GET', ApiConfig.tariffByType(vehicleType).path);
+    return Tariff.fromJson(j);
+  }
+
+  /// Todas las reglas de precio por horario (GET /api/pricing-rules).
+  Future<List<PricingRule>> getPricingRules() async {
+    final j = await _map('GET', ApiConfig.pricingRules().path);
+    final list = (j['rules'] as List<dynamic>?) ?? const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(PricingRule.fromJson)
+        .toList();
+  }
+
   // ------------------- VIAJES -------------------
 
   Future<Map<String, dynamic>> createTrip({
@@ -107,7 +136,7 @@ class ApiService {
     required double requestLng,
     required double dropoffLat,
     required double dropoffLng,
-    String vehicleType = 'basico',
+    required String vehicleType,
     int numPasajes = 1,
     bool equipaje = false,
     bool mascota = false,
@@ -134,7 +163,7 @@ class ApiService {
     required double requestLng,
     required double dropoffLat,
     required double dropoffLng,
-    String vehicleType = 'basico',
+    required String vehicleType,
   }) async {
     return _map('POST', '/trips/estimate', body: {
       'request_lat': requestLat,
