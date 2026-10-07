@@ -68,6 +68,12 @@ class MainActivity : FlutterActivity() {
     private var listener: LocationListener? = null
     private var currentTimeout: Runnable? = null
 
+    /**
+     * Sondeo ligero que detecta el arranque del vehiculo mientras el GPS de
+     * navegacion esta en pausa por parado. Ver [detectarMovimiento].
+     */
+    private var detectorMovimiento: LocationListener? = null
+
     // ---------------- Modo navegacion ----------------
 
     private var navActivo = false
@@ -92,16 +98,21 @@ class MainActivity : FlutterActivity() {
         override fun run() {
             if (!navActivo) return
             val ahora = SystemClock.elapsedRealtime()
-            val quietoDesde = ahora - ultimoEnMarchaMs
 
-            if (quietoDesde >= PAUSA_PARADO_MS) {
-                if (listener != null) {
-                    runCatching { locationManager?.removeUpdates(listener!!) }
-                    listener = null
-                }
-            } else if (listener == null) {
-                // Ha vuelto a moverse: reanudar de inmediato.
-                reanudarNavegacion()
+            if (listener == null) {
+                // El GPS de navegacion esta en pausa por parado. Sin listener no
+                // llegan fixes, asi que `ultimoEnMarchaMs` (y con el la rama de
+                // reanudacion de mas abajo) se quedaba congelado en el pasado y
+                // el GPS nunca volvia a arrancar: la ubicacion quedaba estatica
+                // para siempre. Aqui se deja un sondeo minimo que detecta el
+                // arranque.
+                detectarMovimiento()
+            } else if (ahora - ultimoEnMarchaMs >= PAUSA_PARADO_MS) {
+                // Mas de 10 s sin moverse: pausar el GPS a 1 Hz. El detector
+                // barato (1,5 s / 5 m) consume casi nada mientras este parado.
+                runCatching { locationManager?.removeUpdates(listener!!) }
+                listener = null
+                detectarMovimiento()
             }
             mainHandler.postDelayed(this, 2000L)
         }
@@ -328,6 +339,41 @@ class MainActivity : FlutterActivity() {
         result.success(true)
     }
 
+    /**
+     * Registra un sondeo muy ligero para detectar que el coche arranca.
+     *
+     * Con el GPS de navegacion en pausa no llega ningun fix, asi que este
+     * listener (1,5 s / 5 m) es el unico que puede darse cuenta de que el
+     * vehiculo se ha puesto en marcha: mientras siga parado casi no emite, y
+     * al primer desplazamiento real reengancha el GPS a 1 Hz.
+     */
+    private fun detectarMovimiento() {
+        if (detectorMovimiento != null) return
+        val lm = locationManager ?: return
+        val provider = pickProvider() ?: return
+        val l = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                // Ya hay desplazamiento real: resetea el reloj de la pausa y
+                // reengancha el GPS de navegacion de inmediato.
+                ultimoEnMarchaMs = SystemClock.elapsedRealtime()
+                reanudarNavegacion()
+            }
+            override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+            override fun onProviderEnabled(p: String) {}
+            override fun onProviderDisabled(p: String) {}
+        }
+        runCatching {
+            lm.requestLocationUpdates(provider, 1500L, 5f, l, mainLooper)
+        }.onSuccess { detectorMovimiento = l }
+    }
+
+    private fun detenerDetector() {
+        detectorMovimiento?.let { d ->
+            runCatching { locationManager?.removeUpdates(d) }
+        }
+        detectorMovimiento = null
+    }
+
     /** Registra (o reactiva) las actualizaciones de posicion a 1 Hz. */
     private fun reanudarNavegacion() {
         if (!navActivo) return
@@ -547,6 +593,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun stopUpdates() {
+        detenerDetector()
         listener?.let { l ->
             runCatching { locationManager?.removeUpdates(l) }
         }
