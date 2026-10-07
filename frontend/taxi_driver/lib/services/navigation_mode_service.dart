@@ -548,17 +548,23 @@ final v = _buffer.velocidadFiltrada();
     final r = _buffer.rumboFiltrado() ?? _rumboGps;
     _rumbo = r;
 
-// Zoom de la fase, mas un nivel si va rapido.
+// Zoom de la fase. Al ir a 30 km/h o mas se ALEJA un nivel (zoom out),
+    // filosofia tipo Google Maps/Waze: con velocidad el conductor necesita
+    // horizonte, no el detalle de calle. Parado o lento se mantiene la fase.
     var z = ApiConfig.zoomParaFase(status: _fase);
     if (v >= ApiConfig.velocidadParaZoomRapido) {
-      z = math.min(ApiConfig.zoomRutaCercana, z + 1);
+      z -= 1;
     }
     // El recentrar impone su zoom mientras el GPS siga sin velocidad.
     final zoomForzado = _zoomForzado;
     if (zoomForzado != null && v < ApiConfig.velocidadMinimaTilt) {
       z = zoomForzado;
     }
-    _zoomObjetivo = z.clamp(ApiConfig.minZoom.toDouble(), ApiConfig.maxZoom.toDouble());
+    // Suelo 14 (no bajar de ahi al acelerar) y techo 17 (maximo de la tabla).
+    _zoomObjetivo = z.clamp(
+      ApiConfig.zoomSueloNavegacion,
+      ApiConfig.zoomTechoNavegacion,
+    );
 
     // La rotacion se mantiene al parar en vez de volver al norte arriba.
     //

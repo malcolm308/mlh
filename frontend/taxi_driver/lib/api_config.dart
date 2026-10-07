@@ -57,38 +57,47 @@ class ApiConfig {
   /// existen igual y sirven de relleno mientras se aleja.
   static const int minZoom = 10;
 
-  /// Zoom maximo real del MBTiles: 16.
+  /// Zoom maximo del mapa y de la navegacion: 17.
   ///
-  /// El tope de 18 que habia antes no existe en los datos. Con ese valor
-  /// MapLibre estiraba las teselas de z16 y el mapa salia pixelado al acercar.
-  /// Por encima de 16 no se baja el detalle porque la app trabaja sobre un
-  /// servidor local: pedir z17 y z18 seria descargar megabytes por USB para
-  /// acabar viendo lo mismo.
-  static const int maxZoom = 16;
+  /// Las teselas del servidor de tiles llegan a z16: en z17 (solo la fase de
+  /// traslado parada/lenta) MapLibre estira las de z16 ~15 %, un overzoom
+  /// aceptable en urbano. Antes el tope era 16 y no dejaba llegar a la tabla
+  /// de zooms de navegacion; con 18 las teselas salian muy pixeladas.
+  static const int maxZoom = 17;
 
   /// Zooms del "modo navegación": cada fase del viaje acerca el mapa lo justo
   /// para que el chofer vea la calle por la que va sin perder el contexto.
   ///
   /// - [idle] sin viaje: vista general para ver las ofertas de la zona.
   /// - [recogida] yendo al pasajero: hay que buscar la puerta, se acerca.
-  /// - [esperando] ya en el punto: máximo detalle, la calle está debajo.
-  /// - [traslado] con pasajero a bordo: se mantiene detalle de calle.
-  static const double zoomIdle = 14;
+  /// - [esperando] ya en el punto: la calle esta justo debajo.
+  /// - [traslado] con pasajero a bordo: maximo detalle de calle.
+  static const double zoomIdle = 15;
   static const double zoomRecogida = 16;
-  static const double zoomEsperando = 17;
+  static const double zoomEsperando = 16;
   static const double zoomTraslado = 17;
 
-  /// Zoom de calle maxima al circular rápido. Antes defineda pero sin usar: el
-  /// modo navegacion la toma cuando el vehiculo va a mas de 30 km/h, donde ver
-  /// mas lejos ayuda a anticipationar el giro.
-  static const double zoomRutaCercana = 18;
+  /// Suelo de zoom del modo navegacion: 14.
+  ///
+  /// Al pasar de 30 km/h el mapa se ALEJA un nivel (filosofia tipo Google
+  /// Maps/Waze: con velocidad hace falta horizonte, no detalle de calle). Este
+  /// es el limite de esa salida: ningun zoom de navegacion baja de 14.
+  static const double zoomSueloNavegacion = 14;
+
+  /// Techo de zoom del modo navegacion: 17.
+  ///
+  /// Lo fija la fase de traslado parada/lenta ([zoomTraslado]). Por encima las
+  /// teselas de z16 (maximo real del servidor de tiles) se estirarian
+  /// demasiado. Coincide con [maxZoom], el tope de la camara del mapa.
+  static const double zoomTechoNavegacion = 17.0;
 
   /// Zoom al que recentra el boton de GPS.
   ///
-  /// 18, el maximo del mapa. Es lo que se ve realmente alrededor del vehiculo,
-  /// que es justo para lo que sirve recentrar: situarse ahi. Sin esto el boton
-  /// reutiliza el zoom cacheado de la fase, que es 14 sin viaje y 16 yendo a
-  /// recoger, y el vehiculo queda pequeno en un mapa demasiado abierto.
+  /// 18, por encima del techo del modo navegacion (17): recentrar debe acercar
+  /// mas que la tabla de fases. Es lo que se ve realmente alrededor del
+  /// vehiculo, justo para lo que sirve recentrar: situarse ahi. Sin esto el
+  /// boton reutiliza el zoom de la fase (15 sin viaje, 16 yendo a recoger) y
+  /// el vehiculo queda pequeno en un mapa demasiado abierto.
   static const double zoomRecentrar = 18.0;
 
   /// Tilt que se aplica al recentrar, en grados.
@@ -102,7 +111,8 @@ class ApiConfig {
   /// conduccion, y una perspective en un mapa sin ruta parece un fallo.
   static const double tiltRecentrar = 55.0;
 
-  /// Velocidad (m/s) a partir de la cual se sube un nivel de zoom.
+  /// Velocidad (m/s) a partir de la cual el modo navegacion se ALEJA un nivel
+  /// de zoom.
   ///
   /// 8.3 m/s son 30 km/h. Por debajo se mantiene el zoom de la fase.
   static const double velocidadParaZoomRapido = 8.3;
