@@ -20,6 +20,12 @@ db/mongodb/
 db/mongo_limpio/
 db/recuperado/
 
+# Dumps de mongodump en la raiz (pueden pesar cientos de MB y contener datos
+# privados; se revisan aparte, no se suben a GitHub)
+mongodb/
+*.mongodb/
+dump/
+
 # Binarios locales de herramientas de tiles (180 MB). En produccion se usa la
 # imagen Docker de Martin, no estos ejecutables. Los estilos y las fuentes si se
 # versionan (tileserver/) porque la imagen Docker los copia; la configuracion de
