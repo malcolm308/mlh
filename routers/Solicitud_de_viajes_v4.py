@@ -357,13 +357,36 @@ def init_db():
             cur.close()
 
 # ===================== Tarifas ===================
+def _resolve_vehicle_type(value: Optional[str]) -> Optional[str]:
+    """Devuelve el tipo de vehiculo tal como esta guardado en `tariffs`.
+
+    El frontend envia 'basico' (normalizado, sin acentos) pero las tarifas
+    ahora se guardan como 'básico' con tilde. Esta funcion devuelve el valor
+    canonico de la base para que los matchs SQL (exactos) encuentren la fila.
+    """
+    wanted = _normalize_vehicle_type(value)
+    if not wanted:
+        return None
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT vehicle_type FROM tariffs")
+        for row in cur.fetchall():
+            if _normalize_vehicle_type(row["vehicle_type"]) == wanted:
+                cur.close()
+                return row["vehicle_type"]
+        cur.close()
+    return None
+
 def get_tariff(vehicle_type: str) -> Optional[dict]:
     """Obtiene la tarifa vigente para un tipo de vehiculo."""
+    canonico = _resolve_vehicle_type(vehicle_type)
+    if not canonico:
+        return None
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             "SELECT * FROM tariffs WHERE vehicle_type = %s",
-            (vehicle_type,)
+            (canonico,)
         )
         row = cur.fetchone()
         cur.close()
@@ -408,8 +431,12 @@ def update_tariff(
         if not updates:
             return False
 
+        canonic = _resolve_vehicle_type(vehicle_type)
+        if not canonic:
+            return False
+
         updates.append("updated_at = NOW()")
-        params.append(vehicle_type)
+        params.append(canonic)
 
         cur.execute(
             f"UPDATE tariffs SET {', '.join(updates)} WHERE vehicle_type = %s",
@@ -422,6 +449,9 @@ def update_tariff(
 
 def get_applicable_time_rule(vehicle_type: str, current_time: datetime) -> Optional[dict]:
     """Retorna la regla horaria que aplica segun la hora actual, o None si no hay ninguna."""
+    canonico = _resolve_vehicle_type(vehicle_type)
+    if not canonico:
+        return None
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         # Manejar cruce de medianoche (start_time > end_time)
@@ -435,7 +465,7 @@ def get_applicable_time_rule(vehicle_type: str, current_time: datetime) -> Optio
               )
             ORDER BY start_time
             LIMIT 1
-        """, (vehicle_type, current_time, current_time, current_time))
+        """, (canonico, current_time, current_time, current_time))
         row = cur.fetchone()
         cur.close()
         return dict(row) if row else None

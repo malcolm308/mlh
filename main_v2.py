@@ -12,6 +12,7 @@ from routers import geo
 from routers import routing
 from routers import vehiculos
 from routers import chofer_cancelaciones
+from routers import tariffs
 from services.traccar_listener import listen_traccar
 
 # Funciones que necesitamos del modulo de viajes
@@ -63,6 +64,7 @@ app.include_router(geo.router)
 app.include_router(routing.router)
 app.include_router(vehiculos.router)
 app.include_router(chofer_cancelaciones.router)
+app.include_router(tariffs.router, prefix="/api", tags=["tariffs"])
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la
 # app arranca igualmente: lo reintentan el startup y el job de APScheduler.
