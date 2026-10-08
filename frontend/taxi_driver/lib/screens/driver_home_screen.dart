@@ -177,9 +177,6 @@ int _routeReq = 0;
   /// Si no cambia, no se vuelve a mover la camara.
   String? _trayectoEncuadre;
 
-  /// Hoteles, bares, hostales y centros recreativos que se pintan en el mapa.
-  List<Poi> _pois = [];
-
   /// Rumbo con el que se dibuja la flecha de ubicacion.
   ///
   /// Al arrancar un viaje manda el primer tramo de la ruta, no el sensor: con
@@ -257,7 +254,6 @@ int _routeReq = 0;
 
     _loadTodayEarnings();
     _initGps();
-    _loadPois();
     _initNotificaciones();
 
     // El servicio de navegacion arranca antes que el mapa: cuando llegue el
@@ -1464,9 +1460,6 @@ void _startTripPoller() {
               posicionVehiculo: _nav.debeSeguir ? _nav.posicion : _driverPos,
               rumboVehiculo: _rumboParaFlecha(),
               ruta: _rutaVisible,
-              pois: _pois
-                  .map((p) => LatLng(p.lat, p.lng))
-                  .toList(growable: false),
               onControlador: (c) => _controlador = c,
             ),
           ),
@@ -1589,18 +1582,6 @@ void _startTripPoller() {
         behavior: SnackBarBehavior.floating,
       ));
   }
-
-  // ---------------- PUNTOS DE INTERÉS ----------------
-
-  Future<void> _loadPois() async {
-    try {
-      final pois = await widget.api.getPois();
-      if (!mounted) return;
-      setState(() => _pois = pois);
-    } catch (_) {}
-  }
-
-
 
   Widget _buildOfferOverlay() {
     return Positioned.fill(

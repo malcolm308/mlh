@@ -76,16 +76,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   /// punto de recogida hasta que pulse "mi ubicacion".
   bool _pickupTouched = false;
 
-  /// Hoteles, bares, hostales y centros recreativos que se pintan en el mapa.
-  List<Poi> _pois = [];
-
   @override
   void initState() {
     super.initState();
     _pickup = _myLoc;
     _resolveDefaultAddress();
     _initGps();
-    _loadPois();
     _loadTarifas();
   }
 
@@ -405,7 +401,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
             routeWidth: 4,
             straightColor: Colors.black45,
             pins: [
-              ..._poiPins(),
               // El halo y el punto azul van en un solo pin: antes eran dos
               // marcadores superpuestos y aqui basta con el radio del halo.
               MapPin(
@@ -502,16 +497,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     );
   }
 
-  // ---------------- PUNTOS DE INTERÉS ----------------
-
-  Future<void> _loadPois() async {
-    try {
-      final pois = await widget.api.getPois();
-      if (!mounted) return;
-      setState(() => _pois = pois);
-    } catch (_) {}
-  }
-
   /// Clave de SharedPreferences donde se guarda la última lista de tarifas.
   static const String _tarifasCacheKey = 'cache_tarifas';
 
@@ -578,113 +563,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   /// Tipos de vehículo disponibles, tal y como los publica el backend.
   List<String> get _vehicleTypes =>
       _tarifas.map((t) => t.vehicleType).toList();
-
-  IconData _poiIcon(String cat) {
-    switch (cat) {
-      case 'hotel':
-        return Icons.hotel;
-      case 'hostal':
-        return Icons.home_work;
-      case 'bar':
-        return Icons.local_bar;
-      case 'centro_recreativo':
-        return Icons.celebration;
-      default:
-        return Icons.place;
-    }
-  }
-
-  Color _poiColor(String cat) {
-    switch (cat) {
-      case 'hotel':
-        return const Color(0xFF8D6E63);
-      case 'hostal':
-        return const Color(0xFF26A69A);
-      case 'bar':
-        return const Color(0xFF7E57C2);
-      case 'centro_recreativo':
-        return const Color(0xFFEF6C00);
-      default:
-        return const Color(0xFF546E7A);
-    }
-  }
-
-  String _poiLabel(String cat) {
-    switch (cat) {
-      case 'hotel':
-        return 'Hotel';
-      case 'hostal':
-        return 'Hostal';
-      case 'bar':
-        return 'Bar';
-      case 'centro_recreativo':
-        return 'Centro recreativo';
-      default:
-        return 'Lugar';
-    }
-  }
-
-  /// Pins de los POIs.
-  ///
-  /// Antes eran widgets `Marker` de flutter_map, con icono y etiqueta de texto
-  /// debajo. MapLibre 0.27.1 no trae widgets de anotacion, asi que ahora son
-  /// circulos del color de la categoria y el toque se resuelve por proximidad
-  /// dentro de `ClientMapView`. El icono y la etiqueta con el nombre se han
-  /// perdido: recuperar el texto con un `SymbolLayer` cuando se pueda verificar
-  /// que el estilo de Martin sirve glifos, y el icono con un `addImage`.
-  List<MapPin> _poiPins() {
-    return [
-      for (final p in _pois)
-        MapPin(
-          LatLng(p.lat, p.lng),
-          color: _poiColor(p.categoria),
-          radius: 12,
-          onTap: () => _showPoiDetail(p),
-        ),
-    ];
-  }
-
-  void _showPoiDetail(Poi p) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(_poiIcon(p.categoria), color: _poiColor(p.categoria)),
-            const SizedBox(width: 8),
-            Expanded(child: Text(p.nombre)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              _poiLabel(p.categoria),
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: _poiColor(p.categoria),
-              ),
-            ),
-            const SizedBox(height: 4),
-            if (p.direccion != null && p.direccion!.isNotEmpty)
-              Text(p.direccion!),
-            const SizedBox(height: 8),
-            Text(
-              '${p.lat.toStringAsFixed(5)}, ${p.lng.toStringAsFixed(5)}',
-              style: const TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cerrar'),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildRouteStats(ColorScheme scheme) {
     final fare = _estimatedFare;

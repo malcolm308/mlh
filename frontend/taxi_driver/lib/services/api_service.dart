@@ -308,14 +308,4 @@ class ApiService {
   Future<Map<String, dynamic>> applyDailyBonus(String driverId) async {
     return _map('POST', '/drivers/$driverId/bonus');
   }
-
-  // ------------------- PUNTOS DE INTERÉS -------------------
-
-  Future<List<Poi>> getPois({String? categoria}) async {
-    final filtro = (categoria == null || categoria.isEmpty)
-        ? ''
-        : '?categoria=${Uri.encodeQueryComponent(categoria)}';
-    final list = await _list('GET', '/pois$filtro');
-    return list.whereType<Map<String, dynamic>>().map(Poi.fromJson).toList();
-  }
 }

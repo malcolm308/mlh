@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
@@ -11,9 +10,6 @@ import '../api_config.dart';
 ///
 /// Los marcadores de color (recogida, destino, vehiculo, mi ubicacion) se
 /// pintan como circulos con borde blanco mediante una `CircleLayer` del estilo.
-/// Los que llevan [onTap] (los POIs) se resuelven por proximity: MapLibre
-/// 0.27.1 no expone `project()` para superponer widgets, asi que se calcula el
-/// POI mas cercano al punto tocado.
 class MapPin {
   final LatLng point;
   final Color color;
@@ -25,16 +21,12 @@ class MapPin {
   final double haloRadius;
   final Color haloColor;
 
-  /// Callback opcional. Si es `null` el pin no es interactivo.
-  final VoidCallback? onTap;
-
   const MapPin(
     this.point, {
     required this.color,
     this.radius = 19,
     this.haloRadius = 0,
     this.haloColor = const Color(0x2E007AFF),
-    this.onTap,
   });
 }
 
@@ -422,54 +414,13 @@ class _ClientMapViewState extends State<ClientMapView> {
         anchoPx * 2.75,
       ];
 
-  /// Resuelve el pin interactivo mas cercano al punto tocado.
+  /// Coloca el pin en el punto tocado del mapa.
   ///
-  /// MapLibre 0.27.1 no expone `project()`, asi que no se puede comparar en
-  /// pixeles. Se usa la distancia real en metros escalada por el zoom: a cada
-  /// zoom un tile de 256 px cubre menos metros, asi que el margen util tambien
-  /// se encoge.
+  /// MapLibre 0.27.1 no expone `project()`, asi que no se pueden superponer
+  /// widgets sobre el mapa: toda la interaccion del toque se resuelve aqui.
   void _gestionarTap(mlib.LatLng punto) {
-    final objetivo = LatLng(punto.latitude, punto.longitude);
-    MapPin? mejor;
-    double mejorMetros = double.infinity;
-
-final zoom = widget.controller.zoom;
-    // Metros por pixel aproximado: 156543 * cos(lat) / 2^zoom.
-    final metrosPorPx =
-        156543.03 *
-            math.cos(objetivo.latitude * math.pi / 180) /
-            (1 << zoom.clamp(0, 22).round());
-    final margen = (metrosPorPx * 46).clamp(12.0, 400.0);
-
-    for (final pin in widget.pins) {
-      if (pin.onTap == null) continue;
-      final d = _distanciaMetros(objetivo, pin.point);
-      if (d <= margen && d < mejorMetros) {
-        mejorMetros = d;
-        mejor = pin;
-      }
-    }
-
-    if (mejor != null) {
-      mejor.onTap!();
-      return;
-    }
-    widget.onTap?.call(objetivo);
+    widget.onTap?.call(LatLng(punto.latitude, punto.longitude));
   }
-
-  /// Distancia en metros entre dos puntos (haversine).
-  static double _distanciaMetros(LatLng a, LatLng b) {
-    const r = 6371000.0;
-    final dLat = _aRad(b.latitude - a.latitude);
-    final dLon = _aRad(b.longitude - a.longitude);
-    final s = math.pow(math.sin(dLat / 2), 2) +
-        math.cos(_aRad(a.latitude)) *
-            math.cos(_aRad(b.latitude)) *
-            math.pow(math.sin(dLon / 2), 2);
-    return 2 * r * math.asin(math.min(1.0, math.sqrt(s)));
-  }
-
-  static double _aRad(double g) => g * math.pi / 180;
 
   @override
   Widget build(BuildContext context) {

@@ -64,10 +64,7 @@ class NavigationMapView extends StatefulWidget {
   /// mismo que cambiar la posicion: solo reenviar el source.
   final double? rumboVehiculo;
 
-  /// Marcadores de los puntos de interes de la zona.
-  final List<LatLng> pois;
-
-  /// Se invoca en cuanto el estilo ha cargado y las capas estan listas.
+/// Se invoca en cuanto el estilo ha cargado y las capas estan listas.
   final VoidCallback? onListo;
 
   /// Se invoca en cuanto el controlador del mapa existe.
@@ -86,8 +83,7 @@ class NavigationMapView extends StatefulWidget {
     required this.zoom,
     this.ruta = const [],
     this.posicionVehiculo,
-    this.rumboVehiculo,
-    this.pois = const [],
+this.rumboVehiculo,
     this.onListo,
     this.onControlador,
   });
@@ -136,8 +132,7 @@ class _NavigationMapViewState extends State<NavigationMapView> {
   ///
   /// La ruta cambia cuando OSRM recalcula, no en cada tic del GPS. Comparar
   /// evita ponerla otra vez cuando el numero de puntos es el mismo.
-  int _puntosRutaEnviados = -1;
-  int _poisEnviados = -1;
+int _puntosRutaEnviados = -1;
 
   /// Ultima posicion del vehiculo enviada al estilo.
   ///
@@ -166,9 +161,8 @@ class _NavigationMapViewState extends State<NavigationMapView> {
     // La camara se actualiza aqui y no en `build`, porque `moveCamera` es
     // asincrono y solo tiene sentido cuando el mapa ya esta montado.
     if (!_estiloListo) return;
-    _aplicarCamara();
+_aplicarCamara();
     _aplicarRuta();
-    _aplicarPois();
     _aplicarVehiculo();
   }
 
@@ -347,27 +341,13 @@ class _NavigationMapViewState extends State<NavigationMapView> {
           // flecha esta tapada y no dibujarla.
           iconAllowOverlap: true,
           // Sin esto el motor colisiona los iconos entre si y puede esconder
-          // la flecha si hay un POI cerca.
+          // la flecha cuando haya otro icono encima.
           iconIgnorePlacement: true,
           iconOpacity: 0.95,
         ),
         // Encima de las carreteras y de los nombres: el conductor tiene que
         // ver siempre su propia flecha.
-        belowLayerId: 'nombres-carretera',
-      );
-
-      // Puntos de interes. Circulos pequenos: el estilo no tiene sprite, y
-      // un icono por POI seria depender de imagenes que hay que servir aparte.
-      await ctl.addGeoJsonSource(_idPois, _puntosGeoJson(widget.pois));
-      await ctl.addCircleLayer(
-        _idPois,
-        _capaPois,
-        const CircleLayerProperties(
-          circleRadius: 3,
-          circleColor: '#e5533d',
-          circleStrokeWidth: 1,
-          circleStrokeColor: '#ffffff',
-        ),
+belowLayerId: 'nombres-carretera',
       );
     } catch (_) {
       // Si el estilo se recarga mientras se anaden las capas, la excepcion es
@@ -376,8 +356,7 @@ class _NavigationMapViewState extends State<NavigationMapView> {
       return;
     }
 
-    _puntosRutaEnviados = widget.ruta.length;
-    _poisEnviados = widget.pois.length;
+_puntosRutaEnviados = widget.ruta.length;
     _vehiculoEnviado = widget.posicionVehiculo;
 
     _aplicarCamara();
@@ -393,16 +372,7 @@ class _NavigationMapViewState extends State<NavigationMapView> {
     ctl.setGeoJsonSource(_idRuta, _lineaGeoJson(widget.ruta));
   }
 
-  /// Envia los POI al estilo si han cambiado.
-  void _aplicarPois() {
-    final ctl = _controlador;
-    if (ctl == null) return;
-    if (widget.pois.length == _poisEnviados) return;
-    _poisEnviados = widget.pois.length;
-    ctl.setGeoJsonSource(_idPois, _puntosGeoJson(widget.pois));
-  }
-
-  /// Envia la posicion del vehiculo si ha cambiado de verdad.
+/// Envia la posicion del vehiculo si ha cambiado de verdad.
 void _aplicarVehiculo() {
     final ctl = _controlador;
     if (ctl == null) return;
@@ -484,30 +454,7 @@ void _aplicarVehiculo() {
     };
   }
 
-  /// GeoJSON de una coleccion de puntos.
-  static Map<String, dynamic> _puntosGeoJson(List<LatLng> puntos) {
-    if (puntos.isEmpty) {
-      return {
-        'type': 'FeatureCollection',
-        'features': <dynamic>[],
-      };
-    }
-    return {
-      'type': 'FeatureCollection',
-      'features': puntos
-          .map((p) => {
-                'type': 'Feature',
-                'geometry': {
-                  'type': 'Point',
-                  'coordinates': <double>[p.longitude, p.latitude],
-                },
-                'properties': <String, dynamic>{},
-              })
-          .toList(),
-    };
-  }
-
-  // Identificadores. El prefijo evita colisionar con las capas del estilo
+/// Identificadores. El prefijo evita colisionar con las capas del estilo
   // (`carreteras`, `edificios`...), que son suyas y no se deben tocar.
   static const String _idRuta = 'taxi-ruta';
   static const String _capaRutaHalo = 'taxi-ruta-halo';
@@ -517,8 +464,6 @@ void _aplicarVehiculo() {
 
   /// Nombre con el que se registra la imagen en el motor.
   static const String _idIcono = 'chevron';
-  static const String _idPois = 'taxi-pois';
-  static const String _capaPois = 'taxi-pois-capa';
 
   @override
   Widget build(BuildContext context) {

@@ -197,14 +197,4 @@ class ApiService {
     final list = await _list('GET', '/trips/client/$clientId?limit=$limit');
     return list.whereType<Map<String, dynamic>>().map(ClientTrip.fromJson).toList();
   }
-
-  // ------------------- PUNTOS DE INTERÉS -------------------
-
-  Future<List<Poi>> getPois({String? categoria}) async {
-    final filtro = (categoria == null || categoria.isEmpty)
-        ? ''
-        : '?categoria=${Uri.encodeQueryComponent(categoria)}';
-    final list = await _list('GET', '/pois$filtro');
-    return list.whereType<Map<String, dynamic>>().map(Poi.fromJson).toList();
-  }
 }

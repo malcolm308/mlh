@@ -119,32 +119,3 @@ class RoutePoint {
 
   LatLng get point => LatLng(lat, lng);
 }
-
-/// Punto de interes que se muestra en el mapa (hotel, bar, hostal, centro
-/// recreativo). Llega desde GET /pois del backend.
-class Poi {
-  final String id;
-  final String nombre;
-  final String categoria;
-  final double lat;
-  final double lng;
-  final String? direccion;
-
-  const Poi({
-    required this.id,
-    required this.nombre,
-    required this.categoria,
-    required this.lat,
-    required this.lng,
-    this.direccion,
-  });
-
-  factory Poi.fromJson(Map<String, dynamic> j) => Poi(
-        id: j['id']?.toString() ?? j['_id']?.toString() ?? '',
-        nombre: j['nombre']?.toString() ?? '',
-        categoria: j['categoria']?.toString() ?? '',
-        lat: (j['lat'] as num?)?.toDouble() ?? 0,
-        lng: (j['lng'] as num?)?.toDouble() ?? 0,
-        direccion: j['direccion']?.toString(),
-      );
-}
