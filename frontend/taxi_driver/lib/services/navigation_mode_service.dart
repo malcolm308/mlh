@@ -75,6 +75,20 @@ class NavigationModeService {
   /// lo saca de la calle.
   static const double _extrapolacionMaxima = 3.0;
 
+  /// Velocidad (m/s) por encima de la cual se considera movimiento sin viaje.
+  ///
+  /// 0.83 m/s son 3 km/h. Reutiliza el umbral de la pausa del GPS
+  /// ([ApiConfig.pausaVelocidadAltaMps]) para que "en marcha" signifique lo
+  /// mismo en toda la app: por debajo, el GPS no da rumbo fiable.
+  static const double _velocidadMovimientoIdle = ApiConfig.pausaVelocidadAltaMps;
+
+  /// Tiempo parado sin viaje tras el cual se apaga la camara de conduccion.
+  ///
+  /// 5 s. Un semaforo corto no debe desactivar el heading-up ni el tilt; solo
+  /// una parada real, para no mantener la perspectiva girando hacia ninguna
+  /// parte y gastando bateria.
+  static const Duration _retardoApagarIdle = Duration(seconds: 5);
+
   /// Cuanto se acerca la camara a su objetivo por frame (a 60 Hz).
   ///
   /// 0.16: llega al 90 % del camino en unos 14 frames, ~230 ms.
@@ -138,6 +152,20 @@ class NavigationModeService {
   // Histeresis
   int? _quietoDesdeMs;
   int? _enMarchaDesdeMs;
+
+  /// `true` si el vehiculo se mueve SIN viaje activo (idle).
+  ///
+  /// Es lo que permite tener la camara de conduccion (tilt 45 y heading-up)
+  /// tambien en idle, como se pide: mientras el chofer se desplaza sin
+  /// carrera, el mapa le sigue con perspectiva. Con viaje activo no pinta
+  /// nada, ahi manda la fase. Se apaga al quedarse parado mas de
+  /// [_retardoApagarIdle].
+  bool _enMovimientoIdle = false;
+  bool get idleEnMovimiento => _enMovimientoIdle;
+
+  /// Momento (reloj monotono) en que el vehiculo se quedo parado en idle,
+  /// para contar el retardo de apagado.
+  int? _idleParadoDesdeMs;
 
   // Rendimiento
   double _fps = 60.0;
@@ -313,9 +341,11 @@ void activar(String? status, {LatLng? posicionConocida}) {
   /// mas falta hace la perspectiva.
   ///
   /// Sin viaje activo no hace nada: no hay modo navegacion al que volver, y la
-  /// camara la lleva [NavCamera].
+  /// camara la lleva [NavCamera]. La excepcion es el movimiento en idle: si el
+  /// chofer se esta desplazando sin carrera, el modo de conduccion esta vivo y
+  /// recentrar debe recuperar el control, como durante un viaje.
   void recentrar() {
-    if (_fase == null) return;
+    if (_fase == null && !_enMovimientoIdle) return;
     _modo = ModoNavegacion.siguiendo;
     _rumboGps = null;
     _quietoDesdeMs = null;
@@ -371,26 +401,20 @@ void activar(String? status, {LatLng? posicionConocida}) {
 
   void _notificarCambioTilt() => _alCambiarTilt?.call(tiltObjetivo);
 
-  /// Tilt que corresponde a la velocidad actual, en grados.
+  /// Tilt que corresponde al modo navegacion, en grados.
   ///
-  /// Es el valor ADAPTATIVO: 0 quieto, ~42 en ciudad, hasta 58 en carretera.
-  /// Ver [ApiConfig.tiltObjetivoParaVelocidad].
-double get tiltObjetivo {
+  /// Es un valor FIJO de [ApiConfig.tiltNavegacion] (45) mientras la camara
+  /// sigue al vehiculo, sea cual sea la velocidad o que haya viaje activo.
+  /// Antes era adaptativo por velocidad ([ApiConfig.tiltObjetivoParaVelocidad]):
+  /// al frenar en un semaforo el mapa se aplanaba y al acelerar volvia a
+  /// levantarse, un doble salto en cada cruce. Con el angulo constante la
+  /// perspectiva no se pierde al parar, que es justo lo que se pide: durante
+  /// un viaje activo (o mientras el coche se mueve en idle) el mapa se queda
+  /// inclinado siempre.
+  double get tiltObjetivo {
     if (_modo != ModoNavegacion.siguiendo) return ApiConfig.tiltDegradado;
     if (_tiltDegradado) return ApiConfig.tiltDegradado;
-    // El recentrar impone su angulo mientras el GPS siga sin velocidad.
-    final forzado = _tiltForzado;
-    if (forzado != null && _velocidadMps < ApiConfig.velocidadMinimaTilt) {
-      return forzado;
-    }
-    // Por debajo del umbral se conserva el angulo que ya tenia en vez de
-    // aplanarse: ver [ApiConfig.tiltObjetivoParaVelocidad]. Se pasa el tilt
-    // actual, no el objetivo, para que la rampa de 30 grados/s siga
-    // mandando y el congelado no de un salto.
-    return ApiConfig.tiltObjetivoParaVelocidad(
-      _velocidadMps,
-      anterior: _tiltActual,
-    );
+    return ApiConfig.tiltNavegacion;
   }
 
   /// Tilt vigente, ya rampingado, en grados.
@@ -461,6 +485,11 @@ double get tiltObjetivo {
     // El fix real es el punto de partida de la extrapolacion.
     _ultimoMonotonoMs = fix.elapsedRealtimeMs ?? _ultimoMonotonoMs;
 
+    // Sin viaje se decide si el modo navegacion debe estar activo por
+    // movimiento: el chofer desplazandose en idle quiere la misma perspectiva
+    // que en una carrera. Con viaje activo eso no se evalua, manda la fase.
+    if (_fase == null) _reevaluarMovimientoIdle(fix);
+
     if (_modo == ModoNavegacion.siguiendo) {
       _recalcularObjetivo();
       _revisarHisteresis(fix);
@@ -497,6 +526,63 @@ double get tiltObjetivo {
   static int _desde(int? desde) => desde == null ? 0 : _ahoraMs - desde;
 
   // ---------------- histeresis ----------------
+
+  /// Decide si la camara de conduccion debe estar activa SIN viaje.
+  ///
+  /// Se evalua con cada fix mientras no haya viaje activo:
+  ///
+  ///  * por encima de [_velocidadMovimientoIdle] (3 km/h) se entra al modo
+  ///    seguimiento: tilt 45 y heading-up, igual que en una carrera;
+  ///  * por debajo, se espera [_retardoApagarIdle] (5 s) antes de apagar, para
+  ///    que un semaforo corto no desactive la vista.
+  ///
+  /// Con viaje activo este metodo no se llama: ahi el modo lo gobierna la fase.
+  void _reevaluarMovimientoIdle(GeoFix fix) {
+    final v = fix.speedMps ?? 0.0;
+    final ahora = _ahoraMs;
+    if (v >= _velocidadMovimientoIdle) {
+      _idleParadoDesdeMs = null;
+      if (!_enMovimientoIdle) {
+        _enMovimientoIdle = true;
+        _activarModoIdle();
+      }
+      return;
+    }
+    if (!_enMovimientoIdle) return;
+    _idleParadoDesdeMs ??= ahora;
+    if (_desde(_idleParadoDesdeMs) >= _retardoApagarIdle.inMilliseconds) {
+      _enMovimientoIdle = false;
+      _idleParadoDesdeMs = null;
+      if (_modo == ModoNavegacion.siguiendo) {
+        // Salida limpia del modo: el siguiente repintado lee bearing 0 (norte
+        // arriba), tilt 0 y el zoom general, en vez de heredar los ultimos
+        // valores de conduccion como si siguiera activo.
+        _rotacionActual = null;
+        _tiltActual = ApiConfig.tiltDegradado;
+        _zoomActual = null;
+        apagar();
+      }
+    }
+  }
+
+  /// Activa el modo seguimiento sin viaje, para el movimiento en idle.
+  ///
+  /// Mismo comportamiento que [activar] con fase: arranca el ticker (el fix ya
+  /// esta en `_fix`, se acaba de actualizar) y entra ya inclinado, porque el
+  /// coche se esta moviendo y la perspectiva hace falta desde el primer
+  /// momento.
+  void _activarModoIdle() {
+    final estabaApagado = _modo == ModoNavegacion.apagado;
+    _modo = ModoNavegacion.siguiendo;
+    if (estabaApagado) {
+      _tiltActual = ApiConfig.tiltNavegacion;
+      _notificarCambioTilt();
+    }
+    _iniciarTicker();
+    _activarMedicionFps();
+    _recalcularObjetivo();
+    notificar();
+  }
 
   void _revisarHisteresis(GeoFix fix) {
     final v = fix.speedMps ?? 0.0;

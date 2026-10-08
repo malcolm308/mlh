@@ -31,6 +31,15 @@ class ApiConfig {
   /// Servicio público de ruteo OSRM (mismo que usa el mapa web de referencia).
   static String routing() => 'https://router.project-osrm.org/route/v1/driving';
 
+  /// Timeout por intento de la peticion a OSRM.
+  ///
+  /// 30 s. El servidor publico de ruteo esta en otro pais y desde una red movil
+  /// normal tarda mas en calcular que el backend propio, asi que el timeout de
+  /// 15 s del [ApiClient] le venia corto y la ruta caia al fallback en linea
+  /// recta. Con 30 s por intento (y los reintentos de red del cliente) queda
+  /// margen de sobra sin bloquear la interfaz.
+  static const Duration osrmTimeout = Duration(seconds: 30);
+
   /// Recalculo de ruta por el backend (proxy contra OSRM, `routers/routing.py`,
   /// que monta el prefix `/api/routing`).
   static String recalculate() => '$baseUrl/api/routing/recalculate';

@@ -22,6 +22,7 @@ import '../services/whatsapp_service.dart';
 import '../widgets/navigation_map_view.dart';
 import '../widgets/cancel_reason_dialog.dart';
 import '../widgets/cancel_trip_dialog.dart';
+import '../widgets/trip_info_panel.dart';
 import 'driver_profile_screen.dart';
 import 'driver_settings_screen.dart';
 import 'driver_fondo_screen.dart';
@@ -707,14 +708,20 @@ int _routeReq = 0;
   /// Pone la camara en el modo que toca segun la fase del viaje.
   ///
   /// Sin viaje: norte arriba, sin tilt (comportamiento de siempre). Con viaje:
-  /// el servicio de navegacion toma el relevo con heading-up y tilt.
+  /// el servicio de navegacion toma el relevo con heading-up y tilt. La
+  /// excepcion es el movimiento en idle: si el chofer se desplaza sin carrera,
+  /// el modo de conduccion ya esta activo por [NavigationModeService.idleEnMovimiento]
+  /// y no se apaga aqui; se apaga solo cuando el vehiculo se queda parado
+  /// mas de 5 s.
   void _activarCamaraDeFase() {
     final fase = _faseCamara;
     if (fase == null) {
-      _nav.apagar();
+      if (!_nav.idleEnMovimiento) {
+        _nav.apagar();
+        final ctl = _controlador;
+        if (ctl != null) NavCamera.aplicarFase(ctl, _driverPos, status: null);
+      }
       _recalc.detener();
-      final ctl = _controlador;
-      if (ctl != null) NavCamera.aplicarFase(ctl, _driverPos, status: null);
       return;
     }
     // Se pasa la posicion real del GPS: el servicio la usa como punto de partida
@@ -873,6 +880,14 @@ int _routeReq = 0;
       _tripKm = toDropoff?.distanceKm;
       _tripMin = toDropoff?.durationMinutes;
     });
+    // Si OSRM fallo, `_rutaVisible` se cae a la linea recta entre extremos:
+    // se deja constancia para no confundir un fallo de calculo con una ruta
+    // rara dibujada. El detalle del error ya lo logueo `OsrmService.route`.
+    if (inTripPhase && toDropoff == null && dropoff != null) {
+      debugPrint('[OSRM] FALLA - usando fallback en linea recta al destino');
+    } else if (!inTripPhase && toPickup == null) {
+      debugPrint('[OSRM] FALLA - usando fallback en linea recta a la recogida');
+    }
     _encuadrarTrayecto(pickup: pickup, dropoff: inTripPhase ? dropoff : null);
 
     // El recalculo de desvio solo tiene sentido con una ruta que seguir y un
@@ -1538,14 +1553,7 @@ void _startTripPoller() {
           ),
           if (_selectedOffer != null || _lostOffer != null)
             _buildOfferOverlay(),
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 8,
-            child: (_selectedOffer != null || _lostOffer != null)
-                ? const SizedBox.shrink()
-                : _buildBottomPanel(),
-          ),
+          if (_selectedOffer == null && _lostOffer == null) _buildPanelInferior(),
         ],
       ),
     );
@@ -2036,17 +2044,87 @@ String _fmtCoord(LatLng p) =>
     );
   }
 
-  Widget _buildBottomPanel() {
+  Widget _buildPanelInferior() {
     if (_loading) {
-      return const _PanelCard(
-        child: Padding(
-          padding: EdgeInsets.all(20),
-          child: Center(child: CircularProgressIndicator()),
+      return const Positioned(
+        left: 8,
+        right: 8,
+        bottom: 8,
+        child: _PanelCard(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Center(child: CircularProgressIndicator()),
+          ),
         ),
       );
     }
-    if (_activeTrip != null) return _buildActiveTripPanel();
-    return _buildControlPanel();
+    final trip = _activeTrip;
+    if (trip != null) {
+      // Panel del viaje en curso: una hoja arrastrable que se abre COLAPSADA
+      // (solo destino + precio) y deja el mapa y la flecha de navegacion a la
+      // vista. Se despliega con el asa o arrastrando.
+      return Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: CollapsibleTripPanel(
+          tripId: trip.tripId,
+          collapsed: _buildTripResumen(trip),
+          expanded: _buildActiveTripPanel(),
+        ),
+      );
+    }
+    return Positioned(
+      left: 8,
+      right: 8,
+      bottom: 8,
+      child: _buildControlPanel(),
+    );
+  }
+
+  /// Resumen compacto del viaje para el panel COLAPSADO.
+  ///
+  /// Solo destino y precio, como se pide: lo que el chofer necesita de un
+  /// vistazo sin que el panel le tape la flecha de navegacion del mapa.
+  Widget _buildTripResumen(TripOffer t) {
+    const text = Color(0xFF1F2937);
+    const muted = Color(0xFF6B7280);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const SizedBox(
+          width: 16,
+          height: 16,
+          child: CheckeredFlag(color: Colors.black, checks: Colors.white),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Destino',
+                  style: TextStyle(fontSize: 10, color: muted)),
+              _addressLine(t, pickup: false),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            const Text('Precio',
+                style: TextStyle(fontSize: 10, color: muted)),
+            Text(
+              '${t.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
+              style: const TextStyle(
+                  color: text, fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   Widget _buildControlPanel() {
@@ -2202,12 +2280,13 @@ String _fmtCoord(LatLng p) =>
       'in_progress' => 'Completar viaje',
       _ => null,
     };
-    return _PanelCard(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    // Sin `_PanelCard`: el asa y el material los pone `CollapsibleTripPanel`,
+    // que es el contenedor de este contenido cuando hay viaje en curso.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
             children: [
               const Icon(Icons.route, color: Colors.orangeAccent),
               const SizedBox(width: 8),
@@ -2310,7 +2389,6 @@ if (pickup != null)
           const SizedBox(height: 8),
           _buildBotonCancelar(trip),
         ],
-      ),
     );
   }
 

@@ -53,7 +53,12 @@ class TripNotificationService {
   static const int fallbackExpiresSecs = 60;
 
   /// Canal de las notificaciones de oferta.
-  static const String channelId = 'trip_offers';
+  ///
+  /// `trip_offers_v2` (no `trip_offers`): Android no aplica el sonido de un
+  /// canal que ya fue creado por una version anterior de la app. Al cambiar el
+  /// id, el telefono crea el canal con la configuracion actual (spacebell) en
+  /// lugar de reutilizar el viejo que quedo sin sonido.
+  static const String channelId = 'trip_offers_v2';
   static const String channelName = 'Ofertas de viaje';
 
   /// Timbres en `android/app/src/main/res/raw`. Sin el prefijo `android.resource`
