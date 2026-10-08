@@ -54,11 +54,12 @@ class TripNotificationService {
 
   /// Canal de las notificaciones de oferta.
   ///
-  /// `trip_offers_v2` (no `trip_offers`): Android no aplica el sonido de un
-  /// canal que ya fue creado por una version anterior de la app. Al cambiar el
-  /// id, el telefono crea el canal con la configuracion actual (spacebell) en
-  /// lugar de reutilizar el viejo que quedo sin sonido.
-  static const String channelId = 'trip_offers_v2';
+  /// `trip_offers_v3` (no `trip_offers` ni `_v2`): Android congela la
+  /// importancia y el sonido de un canal en el momento de crearlo y no deja
+  /// cambiarlos después; un id nuevo hace que el teléfono cree el canal con
+  /// `Importance.max` y el `spacebell` actuales en lugar de reutilizar uno
+  /// anterior con parámetros viejos.
+  static const String channelId = 'trip_offers_v3';
   static const String channelName = 'Ofertas de viaje';
 
   /// Timbres en `android/app/src/main/res/raw`. Sin el prefijo `android.resource`
@@ -448,7 +449,9 @@ class PlatformNotificationPort extends NotificationPort {
       TripNotificationService.channelId,
       TripNotificationService.channelName,
       description: 'Aviso de una nueva oferta de viaje.',
-      importance: Importance.high,
+      // Máxima importancia: es la única garantía de que Android reproduzca
+      // el sonido del canal en cuanto llega la oferta.
+      importance: Importance.max,
       playSound: true,
       sound: RawResourceAndroidNotificationSound(TripNotificationService.ringtone),
       enableVibration: true,
@@ -484,8 +487,8 @@ class PlatformNotificationPort extends NotificationPort {
       TripNotificationService.channelId,
       TripNotificationService.channelName,
       channelDescription: 'Aviso de una nueva oferta de viaje.',
-      importance: Importance.high,
-      priority: Priority.high,
+      importance: Importance.max,
+      priority: Priority.max,
       playSound: true,
       sound: RawResourceAndroidNotificationSound(TripNotificationService.ringtone),
       enableVibration: true,

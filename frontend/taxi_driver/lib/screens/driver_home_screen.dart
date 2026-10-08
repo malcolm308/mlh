@@ -142,6 +142,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   TripOffer? _selectedOffer;
   TripOffer? _activeTrip;
 
+  /// Vista previa del panel de viaje en curso, para desarrollo.
+  ///
+  /// Se activa solo con `flutter run --dart-define=PANEL_DEMO=true`: al abrir
+  /// la pantalla se pinta un viaje ficticio, sin oferta ni backend. En build
+  /// normal vale `false` y todo este codigo se elimina del binario.
+  static const bool _panelDemo = bool.fromEnvironment('PANEL_DEMO');
+
   /// Aviso de oferta en el panel de notificaciones, con su sonido y su
   /// contador en el icono.
   ///
@@ -267,7 +274,33 @@ int _routeReq = 0;
     _nav.alCambiarTilt(_alCambiarTilt);
     // Aviso unico de degradacion por rendimiento.
     _nav.alDegradar(_alDegradarTilt);
+
+    // Vista previa del panel: viaje ficticio para verlo sin oferta real.
+    if (_panelDemo) _activeTrip = _viajeDemo();
+
+    // Viaje en curso a mitad de carrera: si la app se reinicia con uno vivo
+    // en el backend, se recupera aqui para que el panel vuelva a aparecer.
+    _restaurarViajeActivo();
   }
+
+  /// Viaje ficticio con el que se previsualiza el panel de viaje en curso.
+  ///
+  /// Solo lo usa [_panelDemo]. No existe en el backend: los botones del panel
+  /// fallarian al pulsarlos, pero el layout es el real, con la misma ruta,
+  /// direcciones y precios que un viaje de verdad.
+  TripOffer _viajeDemo() => TripOffer(
+        tripId: 'demo',
+        pickup: LatLng(23.1385, -82.3806),
+        dropoff: LatLng(23.1410, -82.3560),
+        precioEstimado: 450,
+        totalFare: 450,
+        distanceKm: 3.4,
+        status: 'accepted',
+        clientName: 'Cliente demo',
+        clientPhone: '5355555555',
+        requestAddress: 'Calle 23 e I, Vedado',
+        dropoffAddress: 'Paseo del Prado, Centro Habana',
+      );
 
   /// El servicio ha recalculado la camara: repinta la pantalla.
   ///
@@ -564,6 +597,9 @@ int _routeReq = 0;
   }
 
   Future<void> _tick() async {
+    // En vista previa ([_panelDemo]) no se piden ofertas: el viaje ficticio
+    // se ve sin que una tarjeta real lo tape ni el sondeo lo quite.
+    if (_panelDemo) return;
     if (_online && _activeTrip != null) return;
     try {
       final list = await widget.api.getNearbyRequestedTrips(
@@ -1076,6 +1112,48 @@ int _routeReq = 0;
   }
 
   // ---------------- VIAJE ----------------
+
+  /// Restaura el viaje en curso tras un reinicio de la app.
+  ///
+  /// [_activeTrip] vive solo en memoria: se asignaba al aceptar la oferta y
+  /// en el sondeo, de modo que si el proceso murió (reinicio del teléfono,
+  /// cierre del sistema, actualización) el panel de "VIAJE EN CURSO"
+  /// desaparecía aunque el viaje siguiera vivo en el backend, y el chofer no
+  /// tenía manera de recuperarlo. Se consulta el historial del chofer y se
+  /// recoge el viaje vivo más reciente; si existe, arranca el mismo circuito
+  /// que al aceptar: sondeo, límite de cancelaciones y rutas.
+  ///
+  /// Cualquier fallo se traga en silencio: sin red no hay nada que
+  /// restaurar y el resto de la pantalla sigue siendo usable; al próximo
+  /// arranque se reintenta.
+  Future<void> _restaurarViajeActivo() async {
+    if (_panelDemo || _activeTrip != null) return;
+    try {
+      final historial = await widget.api.getTripsByDriver(widget.driverId);
+      final vivos = historial
+          .where((t) => estadosViajeVivos.contains(t.status))
+          .toList();
+      if (vivos.isEmpty) return;
+      // El historial puede venir sin orden garantizado: el vivo que importa
+      // es el más reciente.
+      vivos.sort(
+          (a, b) => (b.requestedAt ?? '').compareTo(a.requestedAt ?? ''));
+      final viaje = await widget.api.getTrip(vivos.first.tripId);
+      if (!mounted || _activeTrip != null) return;
+      // Entre consultas el viaje pudo terminar: si ya no está vivo, no se
+      // monta el panel de un viaje que el backend dio por cerrado.
+      if (!estadosViajeVivos.contains(viaje.status)) return;
+      setState(() {
+        _activeTrip = viaje;
+        _route = [];
+      });
+      _startTripPoller();
+      _cancelacion.cargar(driverId: widget.driverId);
+      _refreshRoutes();
+    } catch (_) {
+      // Silencioso: ver doc del método.
+    }
+  }
 
   Future<void> _acceptOffer(TripOffer offer) async {
     _offerTimer?.cancel();
