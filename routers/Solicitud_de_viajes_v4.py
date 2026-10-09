@@ -791,16 +791,27 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
             # 7. Calcular duracion real (desde que se inicio el viaje)
             #
-            # `started_at` puede venir nulo: hay viajes que llegaron a
-            # 'in_progress' por una via que no pasa por `update_trip_status`
-            # (por ejemplo, restaurados tras un reinicio de la app). Restarlo
-            # sin mas lanzaba TypeError y devolvia un 500 sin explicacion,
-            # dejando el viaje atascado en 'in_progress' para siempre. Se cae al
-            # `requested_at` y, si tampoco existe, a cero.
+            # Sale de ahi el 500 que veia el chofer al pulsar
+            # "Completar viaje" (TypeError: can't subtract offset-naive and
+            # offset-aware datetimes):
+            #
+            #  * `started_at`/`requested_at` pueden venir NULOS: hay viajes que
+            #    llegaron a 'in_progress' por una via que no pasa por
+            #    `update_trip_status` (por ejemplo, restaurados al reabrir la
+            #    app). Sin cubrirlo, la resta reventaba.
+            #  * Las columnas `started_at`/`requested_at` son TIMESTAMP **sin
+            #    zona horaria**, asi que psycopg2 devuelve datetimes *naive*,
+            #    mientras que `now` es *aware* (UTC). Restar uno de otro es un
+            #    TypeError directo. Como lo que se guarda en esas columnas es
+            #    `datetime.now(timezone.utc)`, el valor ES UTC: solo hay que
+            #    volver a pegarle la zona. Es el mismo criterio que ya usa
+            #    `_offer_secs_left`.
             started = trip["started_at"] or trip["requested_at"]
             if started is None:
                 duration_secs = 0
             else:
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
                 duration_secs = max(0, int((now - started).total_seconds()))
             duration_min = duration_secs / 60.0
 
