@@ -212,7 +212,13 @@ class _CollapsibleTripPanelState extends State<CollapsibleTripPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
+    // La hoja es un `DraggableScrollableSheet`, que necesita una altura
+    // ACOTADA para calcular sus fracciones. Un padre que monte este widget en
+    // un `Positioned` de `Stack` con solo `bottom` entrega `maxHeight:
+    // infinito` y la hoja degenera (no se pinta y el mapa acumula errores de
+    // transformación). Se acota la altura aquí para que el panel funcione en
+    // cualquier contexto.
+    final hoja = DraggableScrollableSheet(
       controller: _ctl,
       minChildSize: CollapsibleTripPanel.minimo,
       maxChildSize: CollapsibleTripPanel.maximo,
@@ -273,6 +279,20 @@ class _CollapsibleTripPanelState extends State<CollapsibleTripPanel> {
               ],
             ),
           ),
+        );
+      },
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.hasBoundedHeight) return hoja;
+        // El padre no acotó la altura: se acota con la pantalla real para que
+        // la hoja siga pudiendo calcular su fracción.
+        return SizedBox(
+          width: constraints.hasBoundedWidth
+              ? constraints.maxWidth
+              : MediaQuery.sizeOf(context).width,
+          height: MediaQuery.sizeOf(context).height,
+          child: hoja,
         );
       },
     );

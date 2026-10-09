@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Sonido de la notificacion de ofertas.
+
+    `flutter_local_notifications` lo referencia por NOMBRE
+    (RawResourceAndroidNotificationSound('spacebell')), no por R.raw.spacebell,
+    asi que la optimizacion de recursos no puede ver esa referencia y borra el
+    fichero del APK (la notificacion llega con "invalid sound"). tools:keep lo
+    fuerza a sobrevivir al empaquetado.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/spacebell" />

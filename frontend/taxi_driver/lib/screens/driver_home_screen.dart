@@ -49,6 +49,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     with SingleTickerProviderStateMixin {
   static const int _offerLimitSecs = 20;
   static const int _lostCloseSecs = 5;
+
+  /// Máximo de antigüedad de un viaje 'accepted' para restaurarlo al abrir.
+  ///
+  /// En Cuba la red se cae y los móviles se apagan a media carrera. Un
+  /// 'accepted' reciente (menos de este tiempo) es una carrera legítima que
+  /// el chofer estaba siguiendo y se restaura tal cual. Uno más viejo es un
+  /// viaje huérfano (el pasajero se fue, la app de cliente se quedó sin red,
+  /// el chofer cerró la suya...): se libera solo para que no quede atascado
+  /// con un fantasma que no puede completar ni cancelar.
+  static const int _maxAcceptedAgeMinutes = 15;
+
+  /// Marcador del viaje activo en `SharedPreferences`. No guarda el viaje
+  /// entero (la fuente de verdad es el backend), solo el par id + timestamp
+  /// con el que medir la antigüedad de un 'accepted' cuando el backend no
+  /// manda `requested_at`.
+  static const String _prefViajeTrip = 'viaje_activo_trip';
+  static const String _prefViajeTs = 'viaje_activo_ts';
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   /// Controlador del mapa, que entrega NavigationMapView al crearse.
@@ -141,6 +159,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   int _lostCountdown = 0;
   TripOffer? _selectedOffer;
   TripOffer? _activeTrip;
+
+  /// Viaje cuya aceptacion esta en vuelo (el POST ya salio, la respuesta no
+  /// ha llegado).
+  ///
+  /// Mientras este marcado, el sondeo no debe tratar ese viaje como perdido:
+  /// al aceptar, el viaje deja de salir en `requested-nearby` antes de que la
+  /// respuesta asigne [_activeTrip], y en esa ventana el poller veia "ya no
+  /// está" y mostraba la carta de "Otro conductor aceptó el viaje" sobre el
+  /// viaje que acababa de ganar el propio chofer.
+  String? _aceptandoTripId;
 
   /// Vista previa del panel de viaje en curso, para desarrollo.
   ///
@@ -543,6 +571,13 @@ int _routeReq = 0;
   /// Otro conductor se llevo el viaje. Para este chofer ya no existe.
   void _alTomarOtroOferta(TripOffer offer) {
     if (!mounted) return;
+    // Guardado de la carrera de aceptacion: el propio chofer tambien puede
+    // llegar aqui si su viaje desaparece del sondeo en plena toma. Su viaje
+    // no esta "perdido", y mostrarlo como tal es exactamente el fallo reportado.
+    if (_aceptandoTripId == offer.tripId ||
+        _activeTrip?.tripId == offer.tripId) {
+      return;
+    }
     _markOfferLost(offer);
     _mostrarAviso('Otro conductor aceptó el viaje a ${_destino(offer)}');
   }
@@ -553,6 +588,15 @@ int _routeReq = 0;
   /// Si el estado no se puede leer, se retira el aviso en silencio: dar un
   /// veredicto que no se puede sostener seria peor que no decir nada.
   Future<void> _retirarAvisoSiDesaparecio(String tripId) async {
+    // Si el viaje es nuestro (aceptacion en vuelo o ya en curso), que haya
+    // dejado de salir en el sondeo NO es que "otro conductor lo tomó" (es
+    // justo lo contrario). Sin este guardado, el chofer que ganaba el viaje
+    // recibia la carta de "Aceptado por otro chofer" sobre su propia carrera.
+    if (tripId == _aceptandoTripId || tripId == _activeTrip?.tripId) {
+      await _notif.handleOfferGone(tripId);
+      return;
+    }
+
     TripOffer? offer;
     try {
       offer = await widget.api.getTrip(tripId);
@@ -564,6 +608,14 @@ int _routeReq = 0;
     if (status == 'accepted' ||
         status == 'in_progress' ||
         status == 'driver_assigned') {
+      // Un 'accepted' con nuestro driver_id es un viaje ganado por nosotros,
+      // no un viaje perdido. (El guardado de arriba ya cubre el caso comun;
+      // este cubre cualquier otra secuencia en que el sondeo llegue antes.)
+      final propietario = offer?.tripDriverId;
+      if (propietario != null && propietario == widget.driverId) {
+        await _notif.handleOfferGone(tripId);
+        return;
+      }
       await _notif.handleTripTakenByOther(tripId);
       return;
     }
@@ -1071,6 +1123,13 @@ int _routeReq = 0;
   }
 
   void _markOfferLost(TripOffer offer) {
+    // Si el viaje es nuestro (aceptacion en vuelo o ya en curso) no esta
+    // perdido; la carta de "otro chofer" sobre la propia carrera es el fallo
+    // que este guardado evita.
+    if (_aceptandoTripId == offer.tripId ||
+        _activeTrip?.tripId == offer.tripId) {
+      return;
+    }
     _offerTimer?.cancel();
     if (!mounted) return;
     setState(() {
@@ -1133,7 +1192,10 @@ int _routeReq = 0;
       final vivos = historial
           .where((t) => estadosViajeVivos.contains(t.status))
           .toList();
-      if (vivos.isEmpty) return;
+      if (vivos.isEmpty) {
+        await _limpiarMarcadorViaje();
+        return;
+      }
       // El historial puede venir sin orden garantizado: el vivo que importa
       // es el más reciente.
       vivos.sort(
@@ -1142,17 +1204,98 @@ int _routeReq = 0;
       if (!mounted || _activeTrip != null) return;
       // Entre consultas el viaje pudo terminar: si ya no está vivo, no se
       // monta el panel de un viaje que el backend dio por cerrado.
-      if (!estadosViajeVivos.contains(viaje.status)) return;
+      if (!estadosViajeVivos.contains(viaje.status)) {
+        await _limpiarMarcadorViaje();
+        return;
+      }
+      // Un 'accepted' que no avanzó en demasiado tiempo es un viaje huérfano
+      // (el pasajero se fue, la app de cliente se quedó sin red...): se
+      // libera solo, sin tocar las cancelaciones del chofer, y no se
+      // restaura. Los estados ya encaminados (`driver_arrived`,
+      // `in_progress`) se restauran SIEMPRE: el chofer está en la carrera y
+      // esa carrera no debe expirar.
+      if (viaje.status == 'accepted' && await _esViajeObsoleto(viaje)) {
+        try {
+          await widget.api.releaseTrip(viaje.tripId);
+        } catch (_) {
+          // Si el release falla (el viaje ya no existe y el backend responde
+          // 400, o la red se cortó) igual se limpia el marcador: aquí no hay
+          // nada accionable que restaurar. El chofer vuelve a quedar libre
+          // para recibir ofertas.
+        }
+        await _limpiarMarcadorViaje();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Viaje anterior liberado por inactividad'),
+          ));
+        }
+        return;
+      }
       setState(() {
         _activeTrip = viaje;
         _route = [];
       });
+      await _guardarMarcadorViaje(viaje);
       _startTripPoller();
       _cancelacion.cargar(driverId: widget.driverId);
       _refreshRoutes();
     } catch (_) {
-      // Silencioso: ver doc del método.
+      // Silencioso: ver doc del método. Sin red no hay nada que restaurar; el
+      // marcador se conserva para reintentar en el próximo arranque y el
+      // chofer queda disponible (idle), que es la consecuencia más segura.
     }
+  }
+
+  /// Guarda el par id + timestamp del viaje en curso.
+  ///
+  /// No es una copia del viaje (el backend es la fuente de verdad): solo se
+  /// usa como regla de intendencia para medir la antigüedad de un 'accepted'
+  /// cuando el viaje no trae `requested_at`.
+  Future<void> _guardarMarcadorViaje(TripOffer viaje) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefViajeTrip, viaje.tripId);
+    await prefs.setString(
+        _prefViajeTs, DateTime.now().toUtc().toIso8601String());
+  }
+
+  Future<void> _limpiarMarcadorViaje() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefViajeTrip);
+    await prefs.remove(_prefViajeTs);
+  }
+
+  /// Dice si un viaje 'accepted' es obsoleto: lleva más de
+  /// [_maxAcceptedAgeMinutes] sin avanzar.
+  ///
+  /// Se prefiere el `requested_at` del backend (reloj del servidor) a fiarse
+  /// del reloj del móvil; si el viaje no lo trae, se usa el timestamp que se
+  /// guardó al aceptar o restaurar el viaje.
+  Future<bool> _esViajeObsoleto(TripOffer viaje) async {
+    final ahora = DateTime.now().toUtc();
+    DateTime? base = _parseTimestampUtc(viaje.requestedAt);
+    if (base == null) {
+      final ts =
+          (await SharedPreferences.getInstance()).getString(_prefViajeTs);
+      base = ts == null ? null : DateTime.tryParse(ts);
+    }
+    if (base == null) return false;
+    final antiguedad = ahora.difference(base);
+    return antiguedad.inMinutes > _maxAcceptedAgeMinutes;
+  }
+
+  /// Convierte un timestamp del backend a UTC.
+  ///
+  /// `requested_at` sale de Postgres como TIMESTAMP en UTC; el JSON puede
+  /// traerlo con sufijo de zona ("...Z" o "+00:00") o sin él. Sin sufijo, Dart
+  /// lo interpretaría como hora LOCAL del móvil y la antigüedad se
+  /// calcularía mal, así que se fuerza a UTC con el mismo reloj de pared.
+  static DateTime? _parseTimestampUtc(String? s) {
+    if (s == null) return null;
+    final t = DateTime.tryParse(s);
+    if (t == null) return null;
+    if (s.endsWith('Z') || s.contains('+')) return t.toUtc();
+    return DateTime.utc(t.year, t.month, t.day, t.hour, t.minute, t.second,
+        t.millisecond, t.microsecond);
   }
 
   Future<void> _acceptOffer(TripOffer offer) async {
@@ -1162,6 +1305,9 @@ int _routeReq = 0;
       _selectedOffer = null;
       _error = null;
     });
+    // Marca la toma en vuelo: hasta que la aceptacion termine, el sondeo no
+    // debe interpretar la desaparicion del viaje como "otro chofer".
+    _aceptandoTripId = offer.tripId;
     try {
       await widget.api.acceptTrip(offer.tripId, widget.driverId);
       await widget.api.setDriverStatus(widget.driverId, 'busy');
@@ -1172,6 +1318,10 @@ int _routeReq = 0;
         _loading = false;
         _route = [];
       });
+      _aceptandoTripId = null;
+      // Al aceptar se guarda el marcador (id + ts) con el que medir después
+      // la antigüedad de un 'accepted' al reabrir la app.
+      await _guardarMarcadorViaje(trip);
       _startTripPoller();
       // El limite de cancelaciones se consulta al empezar un viaje: es
       // cuando empieza a contar, y asi el boton llega con el numero correcto
@@ -1179,6 +1329,7 @@ int _routeReq = 0;
       _cancelacion.cargar(driverId: widget.driverId);
       _refreshRoutes();
     } catch (e) {
+      _aceptandoTripId = null;
       if (!mounted) return;
       setState(() => _loading = false);
       _showError('$e');
@@ -1267,6 +1418,7 @@ final updated = await widget.api.getTrip(trip.tripId);
   Future<void> _alPerderElViaje(String motivo, {bool mostrarAviso = true}) async {
     if (_activeTrip == null) return;
 
+    _aceptandoTripId = null;
     _tripPoller?.cancel();
     _tripPoller = null;
     _recalc.detener();
@@ -1290,6 +1442,8 @@ final updated = await widget.api.getTrip(trip.tripId);
       _toPickupKm = null;
       _toPickupMin = null;
     });
+    // Sin viaje en curso ya no hace falta el marcador de antigüedad.
+    await _limpiarMarcadorViaje();
 
     // El chofer vuelve a estar disponible para recibir ofertas. Si esto fallara
     // no se interrumpe la limpieza: es peor quedar con un viaje fantasma que no
@@ -1487,6 +1641,7 @@ void _startTripPoller() {
   }
 
   Future<void> _logout() async {
+    await _limpiarMarcadorViaje();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('driver_token');
     await prefs.remove('driver_id');
@@ -2122,10 +2277,14 @@ String _fmtCoord(LatLng p) =>
       // Panel del viaje en curso: una hoja arrastrable que se abre COLAPSADA
       // (solo destino + precio) y deja el mapa y la flecha de navegacion a la
       // vista. Se despliega con el asa o arrastrando.
-      return Positioned(
-        left: 0,
-        right: 0,
-        bottom: 0,
+      //
+      // Va con `Positioned.fill` (no `left/right/bottom` a secas): un
+      // `DraggableScrollableSheet` necesita una altura ACOTADA para calcular
+      // sus fracciones. Con solo `bottom`, el Stack entrega `maxHeight:
+      // infinito` y la hoja degenera (no se pinta y el mapa acumula errores
+      // de transformacion). `Positioned.fill` fija top+bottom y la hoja queda
+      // con la altura de la pantalla, anclada a su borde inferior.
+      return Positioned.fill(
         child: CollapsibleTripPanel(
           tripId: trip.tripId,
           collapsed: _buildTripResumen(trip),

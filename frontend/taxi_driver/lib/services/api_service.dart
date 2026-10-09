@@ -238,6 +238,16 @@ class ApiService {
     return _map('POST', '/trips/$tripId/decline?driver_id=$driverId');
   }
 
+  /// Libera un viaje 'accepted' que quedo obsoleto al reabrir la app.
+  ///
+  /// Reutiliza el endpoint de cancelar SIN `driver_id` a proposito: asi el
+  /// backend lo trata como una cancelacion ajena al chofer (la del pasajero),
+  /// que no descuenta ninguna de las tres chances del dia. No existe un
+  /// endpoint `release` aparte.
+  Future<void> releaseTrip(String tripId) async {
+    await _map('POST', '/trips/$tripId/cancel', body: const {});
+  }
+
   Future<TripOffer> getTrip(String tripId) async {
     final j = await _map('GET', '/trips/$tripId');
     return TripOffer.fromJson(j);

@@ -1,8 +1,6 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import '../api_config.dart';
@@ -300,18 +298,11 @@ _aplicarCamara();
 
 // Flecha de ubicacion del chofer.
       //
-      // Va como `SymbolLayer` y no como circulo para que pueda ROTAR con el
-      // rumbo. Un `CircleLayer` es redondo y no orienta; la flecha es lo que
-      // dice en que direccion va el coche, que es justo lo que un taxista
-      // necesita ver de un vistazo.
-      //
-      // El icono se carga con `addImage` ANTES de crear la capa: si la capa
-      // se registra antes que la imagen, MapLibre no encuentra el `iconImage`
-      // y la capa queda vacia sin avisar.
-      await ctl.addImage(
-        _idIcono,
-        await _cargarIconoChevron(),
-      );
+      // Se cambia de `SymbolLayer` a `CircleLayer` (N4): se reemplaza el
+      // chevron por un punto circular, manteniendo la capa encima de la ruta y
+      // sin romper navegacion ni heading-up. El rumbo se sigue gestionando en el
+      // modo navegacion (no se pinta con iconRotate, pero el seguimiento del mapa
+      // conserva heading-up).
       await ctl.addGeoJsonSource(
         _idVehiculo,
         _vehiculoGeoJson(
@@ -319,35 +310,42 @@ _aplicarCamara();
           widget.rumboVehiculo ?? 0.0,
         ),
       );
-      await ctl.addSymbolLayer(
+      await ctl.addCircleLayer(
         _idVehiculo,
         _capaVehiculo,
-        SymbolLayerProperties(
-          // 1.6 sobre un PNG de 96 px deja la flecha cerca de 32 px en pantalla
-          // en un movil de densidad 2.75, que es lo que se ve bien a zoom 17.
-          // El PNG es de 96 y no de 48 para que al ampliar no se vea borroso.
-          iconImage: _idIcono,
-          iconSize: 1.6,
-          // El icono apunta a ARUBA, que es como se genero. MapLibre lo gira
-          // desde ahi con el valor de la propiedad `bearing` del punto.
-          iconRotate: ['get', 'bearing'],
-          // Con `map` la flecha rota con el plano, de modo que sigue
-          // apuntando al rumbo real por muy girada que este la camara. Con
-          // `viewport` se quedaria siempre vertical en pantalla, que es lo
-          // contrario de lo que se busca en modo navegacion.
-          iconRotationAlignment: 'map',
-          // `true` porque el punto focal del mapa no coincide con el del
-          // conductor cuando hay offset: si no, el motor podria decidir que la
-          // flecha esta tapada y no dibujarla.
-          iconAllowOverlap: true,
-          // Sin esto el motor colisiona los iconos entre si y puede esconder
-          // la flecha cuando haya otro icono encima.
-          iconIgnorePlacement: true,
-          iconOpacity: 0.95,
+        CircleLayerProperties(
+          // Punto azul ~32 dp: el radio crece con el zoom para mantener el
+          // tamaño visible sin distorsionar. En z17 ronda ~16 px.
+          circleRadius: [
+            'interpolate',
+            ['exponential', 1.6],
+            ['zoom'],
+            14,
+            8.0,
+            16,
+            14.0,
+            18,
+            20.0,
+          ],
+          // Relleno azul (#1E88E5)
+          circleColor: '#1E88E5',
+          // Borde blanco de 2 dp, tambien escalado con el zoom.
+          circleStrokeWidth: [
+            'interpolate',
+            ['exponential', 1.6],
+            ['zoom'],
+            14,
+            2.0,
+            16,
+            2.5,
+            18,
+            3.0,
+          ],
+          circleStrokeColor: '#ffffff',
+          circleOpacity: 0.95,
+          circleStrokeOpacity: 1.0,
         ),
-        // Encima de las carreteras y de los nombres: el conductor tiene que
-        // ver siempre su propia flecha.
-belowLayerId: 'nombres-carretera',
+        belowLayerId: 'nombres-carretera',
       );
     } catch (_) {
       // Si el estilo se recarga mientras se anaden las capas, la excepcion es
@@ -422,16 +420,7 @@ void _aplicarVehiculo() {
     };
   }
 
-  /// Lee el PNG del chevron de los assets.
-  ///
-  /// Va por `rootBundle` y no por `File` porque en release los assets van
-  /// empaquetados dentro del APK y no hay ruta de fichero.
-  static Future<Uint8List> _cargarIconoChevron() async {
-    final datos = await rootBundle.load('assets/icons/chevron.png');
-    return datos.buffer.asUint8List();
-  }
-
-/// GeoJSON de una linea a partir de una lista de coordenadas.
+  /// GeoJSON de una linea a partir de una lista de coordenadas.
   static Map<String, dynamic> _lineaGeoJson(List<LatLng> puntos) {
     if (puntos.length < 2) {
       return {
@@ -462,8 +451,6 @@ void _aplicarVehiculo() {
   static const String _idVehiculo = 'taxi-vehiculo';
   static const String _capaVehiculo = 'taxi-vehiculo-capa';
 
-  /// Nombre con el que se registra la imagen en el motor.
-  static const String _idIcono = 'chevron';
 
   @override
   Widget build(BuildContext context) {

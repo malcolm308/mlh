@@ -109,7 +109,7 @@ class TripOffer {
   final double? distanciaChoferKm;
   final String? clientName;
   final String? clientPhone;
-  final String status;
+final String status;
   final String? requestedAt;
   final String? requestAddress;
   final String? dropoffAddress;
@@ -117,6 +117,13 @@ class TripOffer {
   final double? distanceKm;
   final String currency;
   final int? offerExpiresInSecs;
+
+  /// Chofer adjudicado al viaje, si lo hay.
+  ///
+  /// Lo devuelve el backend en `driver_id` de `getTrip`. Se usa para saber si
+  /// un viaje que desaparece del sondeo lo tomó otro chofer o lo ganó este:
+  /// si el `driver_id` es el nuestro, no es un viaje perdido.
+  final String? tripDriverId;
 
   TripOffer({
     required this.tripId,
@@ -137,8 +144,9 @@ class TripOffer {
     this.dropoffAddress,
     this.totalFare,
     this.distanceKm,
-    this.currency = 'CUP',
+this.currency = 'CUP',
     this.offerExpiresInSecs,
+    this.tripDriverId,
   });
 
   factory TripOffer.fromJson(Map<String, dynamic> j) => TripOffer(
@@ -162,8 +170,9 @@ class TripOffer {
         dropoffAddress: j['dropoff_address']?.toString(),
         totalFare: (j['total_fare'] ?? j['total_fare'])?.toDouble(),
         distanceKm: (j['distance_km'] ?? j['distance_km'])?.toDouble(),
-        currency: (j['currency'] ?? 'CUP').toString(),
+currency: (j['currency'] ?? 'CUP').toString(),
         offerExpiresInSecs: (j['offer_expires_in_secs'])?.toInt(),
+        tripDriverId: j['driver_id']?.toString(),
       );
 }
 

@@ -144,8 +144,9 @@ class ApiClient {
     String url, {
     Map<String, dynamic>? body,
     Map<String, String>? headers,
+    Duration? timeout,
   }) =>
-      _request('POST', url, body: body, headers: headers);
+      _request('POST', url, body: body, headers: headers, timeout: timeout);
 
   static Future<dynamic> put(
     String url, {

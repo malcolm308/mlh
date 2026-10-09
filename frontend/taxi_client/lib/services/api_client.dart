@@ -59,13 +59,19 @@ class ApiClient {
   }
 
   /// Ejecuta [accion] con timeout y reintentos de fallos de red.
+  ///
+  /// [timeout] sobreescribe el de 15 s por peticion. Lo usa OSRM, que desde
+  /// una red movil normal puede tardar mas que el backend propio en devolver
+  /// la ruta: con 15 s por intento el trayecto caia al fallback en linea
+  /// recta.
   static Future<http.Response> _ejecutar(
-    Future<http.Response> Function() accion,
-  ) async {
+    Future<http.Response> Function() accion, {
+    Duration? timeout,
+  }) async {
     var fallidos = 0;
     while (true) {
       try {
-        return await accion().timeout(_timeout);
+        return await accion().timeout(timeout ?? _timeout);
       } on SocketException {
         if (fallidos >= _reintentos.length) {
           throw ApiException(
@@ -96,6 +102,7 @@ class ApiClient {
     String url, {
     Map<String, dynamic>? body,
     Map<String, String>? headers,
+    Duration? timeout,
   }) async {
     final r = await _ejecutar(() {
       final uri = Uri.parse(url);
@@ -119,7 +126,7 @@ class ApiClient {
         default:
           throw ApiException('Método HTTP no soportado: $method');
       }
-    });
+    }, timeout: timeout);
     if (r.statusCode >= 200 && r.statusCode < 300) return _descodificar(r);
     throw ApiException(
       '${_errorLegible(r)} (HTTP ${r.statusCode})',
@@ -127,15 +134,17 @@ class ApiClient {
     );
   }
 
-  static Future<dynamic> get(String url, {Map<String, String>? headers}) =>
-      _request('GET', url, headers: headers);
+  static Future<dynamic> get(String url,
+          {Map<String, String>? headers, Duration? timeout}) =>
+      _request('GET', url, headers: headers, timeout: timeout);
 
   static Future<dynamic> post(
     String url, {
     Map<String, dynamic>? body,
     Map<String, String>? headers,
+    Duration? timeout,
   }) =>
-      _request('POST', url, body: body, headers: headers);
+      _request('POST', url, body: body, headers: headers, timeout: timeout);
 
   static Future<dynamic> put(
     String url, {

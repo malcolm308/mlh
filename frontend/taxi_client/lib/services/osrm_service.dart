@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:latlong2/latlong.dart';
 
 import '../api_config.dart';
@@ -19,36 +20,64 @@ class OsrmRoute {
   double get durationMinutes => durationSeconds / 60;
 }
 
-/// Cliente del servicio público de ruteo OSRM (mismo que usa el
-/// mapa web de referencia):
-///   https://router.project-osrm.org/route/v1/driving/{lon,lat};{lon,lat}...
+/// Cliente de ruteo del pasajero.
+///
+/// La ruta NO se pide directo al servidor publico de OSRM: desde Cuba ese host
+/// es inestable (a veces responde en 1 s, a veces se cuelga 30 s+). Por eso
+/// esta app habla con el backend propio ([ApiConfig.recalculate]), que ya es
+/// fiable desde aqui, y es el backend quien consulta a OSRM desde su red (mismo
+/// canal que usa el recalculo de desvios del conductor).
 class OsrmService {
   OsrmService._();
 
   /// Calcula la ruta por carretera entre [from] y [to].
   ///
-  /// Devuelve `null` si el servidor no responde o no encuentra ruta.
+  /// Devuelve `null` si el proxy no encuentra ruta o si el backend/OSRM no
+  /// responde a tiempo. Cuando eso pasa, la pantalla se queda con el fallback
+  /// en linea recta, asi que se deja constancia en el log para poder distinguir
+  /// si el fallo fue de red (timeout) o de ruta inexistente. Lleva su propio
+  /// timeout ([ApiConfig.osrmTimeout]) y no el generico de 15 s del [ApiClient].
   static Future<OsrmRoute?> route(LatLng from, LatLng to) async {
-    final url = '${ApiConfig.routing()}/${from.longitude},${from.latitude};'
-        '${to.longitude},${to.latitude}'
-        '?overview=full&geometries=geojson&steps=false&alternatives=false';
+    final cronometro = Stopwatch()..start();
     try {
-      final json = await ApiClient.get(url);
-      final routes = json['routes'] as List<dynamic>?;
-      if (routes == null || routes.isEmpty) return null;
-      final route = routes.first as Map<String, dynamic>;
-      final geometry = route['geometry'] as Map<String, dynamic>;
-      final coords =
-          (geometry['coordinates'] as List<dynamic>).cast<List<dynamic>>();
-      return OsrmRoute(
+      final json = await ApiClient.post(
+        ApiConfig.recalculate(),
+        body: {
+          'origin': {'lat': from.latitude, 'lng': from.longitude},
+          'destination': {'lat': to.latitude, 'lng': to.longitude},
+          'profile': 'driving',
+        },
+        timeout: ApiConfig.osrmTimeout,
+      );
+      // Respuesta del proxy: {route, geometry, distance_meters,
+      // duration_seconds}. La geometría es un LineString GeoJSON con
+      // coordenadas [lon, lat], el mismo orden que leia la respuesta de OSRM.
+      final geometry = json['geometry'] as Map<String, dynamic>?;
+      final coords = geometry?['coordinates'] as List<dynamic>?;
+      if (coords == null || coords.length < 2) {
+        debugPrint('[OSRM] FALLA en ${cronometro.elapsedMilliseconds} ms - '
+            'sin ruta para ${from.latitude},${from.longitude} -> '
+            '${to.latitude},${to.longitude}');
+        return null;
+      }
+      final ruta = OsrmRoute(
         points: coords
             .map((c) =>
                 LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
             .toList(),
-        distanceMeters: (route['distance'] as num).toDouble(),
-        durationSeconds: (route['duration'] as num).toDouble(),
+        distanceMeters:
+            ((json['distance_meters'] ?? json['distance']) as num).toDouble(),
+        durationSeconds:
+            ((json['duration_seconds'] ?? json['duration']) as num).toDouble(),
       );
-    } catch (_) {
+      debugPrint('[OSRM] OK en ${cronometro.elapsedMilliseconds} ms - '
+          '${ruta.points.length} puntos '
+          '(${ruta.distanceKm.toStringAsFixed(1)} km, '
+          '${ruta.durationMinutes.toStringAsFixed(0)} min)');
+      return ruta;
+    } catch (e) {
+      debugPrint('[OSRM] FALLA en ${cronometro.elapsedMilliseconds} ms - '
+          'fallback en linea recta: $e');
       return null;
     }
   }

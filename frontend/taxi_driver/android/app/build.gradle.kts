@@ -67,6 +67,14 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+
+            // El plugin de Flutter activa minify y el resource shrinker en
+            // release. El shrinker de AGP elimina `res/raw/spacebell.mp3`
+            // porque Dart lo referencia solo por nombre de cadena (no por
+            // `R.raw`), pese al `res/values/keep.xml`. Se apagan para que el
+            // sonido de la notificacion entre SIEMPRE al APK.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

@@ -27,11 +27,18 @@ class ApiConfig {
 
   // ---------------- Endpoints del backend ----------------
 
-  /// Servicio público de ruteo OSRM (mismo que usa el mapa web de referencia).
-  static String routing() => 'https://router.project-osrm.org/route/v1/driving';
+  /// Tiempo máximo que se espera a OSRM (via el proxy del backend) antes de
+  /// caer al fallback en línea recta. El proxy sale del backend a OSRM, y desde
+  /// una red móvil normal puede tardar más que el backend propio: 30 s dejan
+  /// margen sin condenar al pasajero a esperar demasiado.
+  static const Duration osrmTimeout = Duration(seconds: 30);
 
-  /// Recalculo de ruta por el backend (proxy contra OSRM, `routers/routing.py`,
-  /// que monta el prefix `/api/routing`).
+  /// Ruta por carretera calculada por el backend (proxy contra OSRM,
+  /// `routers/routing.py`, que monta el prefix `/api/routing`).
+  ///
+  /// La ruta inicial también va por aquí, no directo al servidor público de
+  /// OSRM: desde Cuba ese host es inestable y el fallo dejaba el mapa en línea
+  /// recta. Es el mismo canal fiable que ya usa el recalculo de desvíos.
   static String recalculate() => '$baseUrl/api/routing/recalculate';
 
   /// Cancelación de un viaje por el pasajero.

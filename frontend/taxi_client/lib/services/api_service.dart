@@ -189,7 +189,14 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> cancelTrip(String tripId) async {
-    return ApiClient.post(ApiConfig.cancelTrip(tripId)) as Map<String, dynamic>;
+    try {
+      final res = await ApiClient.post(ApiConfig.cancelTrip(tripId));
+      if (res is Map<String, dynamic>) return res;
+      if (res is Map) return Map<String, dynamic>.from(res);
+      return <String, dynamic>{'ok': true};
+    } on Exception catch (_) {
+      rethrow;
+    }
   }
 
   Future<List<ClientTrip>> getTripsByClient(String clientId,
