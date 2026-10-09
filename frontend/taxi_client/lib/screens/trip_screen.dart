@@ -323,7 +323,9 @@ class _TripScreenState extends State<TripScreen> {
                             MapPin(
                               _driverPos!,
                               color: const Color(0xFF007AFF),
-                              radius: 19,
+                              // Reducido un 25 % (era 19): tapaba la calle de
+                              // al lado y no dejaba ver el trayecto util.
+                              radius: 14,
                             ),
                           if (t.requestLocation != null)
                             MapPin(

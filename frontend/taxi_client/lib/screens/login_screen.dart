@@ -93,136 +93,166 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              const Color(0xFF007AFF).withValues(alpha: 0.22),
-              scheme.surface,
-            ],
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Fondo: la imagen ocupa la pantalla completa. Va con `cover` para
+          // que llene el movil entero aunque el formato no coincida.
+          Image.asset(
+            'assets/images/login_bg.png',
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
           ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Form(
-                key: _formKey,
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        CircleAvatar(
-                          radius: 36,
-                          backgroundColor:
-                              scheme.primaryContainer.withValues(alpha: 0.6),
-                          child: Icon(Icons.directions_car,
-                              size: 40, color: scheme.primary),
-                        ),
-                        const SizedBox(height: 14),
-                          Text(
-                            'RapiTaxi',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context)
-                              .textTheme
-                              .headlineSmall
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          'App de cliente',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Pide un taxi y sigue tu viaje',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 24),
-                        TextFormField(
-                          controller: _email,
-                          keyboardType: TextInputType.emailAddress,
-                          autocorrect: false,
-                          decoration: const InputDecoration(
-                            labelText: 'Email',
-                            prefixIcon: Icon(Icons.email_outlined),
+
+          // Velo oscuro suave: sin esto los campos claros sobre una foto
+          // nocturna pierden contraste y el texto de la imagen choca.
+          Container(color: Colors.black.withValues(alpha: 0.25)),
+
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  child: ConstrainedBox(
+                    // El alto minimo mantiene el contenido centrado en
+                    // pantallas altas, pero deja que scrollee si el teclado
+                    // sube y no cabe todo.
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight - 40,
+                    ),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Hueco para el logo, que ya viene impreso en la
+                          // foto de fondo. Es proporcional al alto util para
+                          // que en un movil normal quede arriba del formulario.
+                          SizedBox(height: constraints.maxHeight * 0.30),
+                          const SizedBox(height: 16),
+
+                          // Tarjeta de credenciales. Fondo casi opaco para
+                          // que el texto se lea de sobra sobre la foto.
+                          Container(
+                            padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.90),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 12,
+                                  offset: Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                TextFormField(
+                                  controller: _email,
+                                  keyboardType: TextInputType.emailAddress,
+                                  autocorrect: false,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Email',
+                                    prefixIcon: Icon(Icons.email_outlined),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  validator: (v) => (v == null || v.trim().isEmpty)
+                                      ? 'Ingresa tu email'
+                                      : null,
+                                ),
+                                const SizedBox(height: 14),
+                                TextFormField(
+                                  controller: _password,
+                                  obscureText: true,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Contraseña',
+                                    prefixIcon: Icon(Icons.lock_outline),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  validator: (v) => (v == null || v.isEmpty)
+                                      ? 'Ingresa tu contraseña'
+                                      : null,
+                                  onFieldSubmitted: (_) => _login(),
+                                ),
+                                if (_error != null) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    _error!,
+                                    style: TextStyle(
+                                      color: scheme.error,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                                const SizedBox(height: 20),
+                                FilledButton.icon(
+                                  onPressed: _loading ? null : _login,
+                                  icon: _loading
+                                      ? const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : const Icon(Icons.login),
+                                  label: Text(
+                                    _loading ? 'Ingresando...' : 'Iniciar sesión',
+                                  ),
+                                  style: FilledButton.styleFrom(
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 16),
+                                    backgroundColor: const Color(0xFF007AFF),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                OutlinedButton.icon(
+                                  onPressed: _loading
+                                      ? null
+                                      : () => Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  const RegisterScreen(),
+                                            ),
+                                          ),
+                                  icon: const Icon(Icons.person_add_alt_1),
+                                  label: const Text('Registrarse'),
+                                  style: OutlinedButton.styleFrom(
+                                    minimumSize: const Size.fromHeight(48),
+                                    foregroundColor: const Color(0xFF007AFF),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'Ingresa tu email'
-                              : null,
-                        ),
-                        const SizedBox(height: 14),
-                        TextFormField(
-                          controller: _password,
-                          obscureText: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Contraseña',
-                            prefixIcon: Icon(Icons.lock_outline),
-                          ),
-                          validator: (v) => (v == null || v.isEmpty)
-                              ? 'Ingresa tu contraseña'
-                              : null,
-                          onFieldSubmitted: (_) => _login(),
-                        ),
-                        if (_error != null) ...[
                           const SizedBox(height: 14),
                           Text(
-                            _error!,
-                            style: TextStyle(color: scheme.error, fontSize: 13),
+                            'Backend: ${ApiConfig.baseUrl}',
                             textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                            ),
                           ),
                         ],
-                        const SizedBox(height: 22),
-                        FilledButton.icon(
-                          onPressed: _loading ? null : _login,
-                          icon: _loading
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2),
-                                )
-                              : const Icon(Icons.login),
-                          label:
-                              Text(_loading ? 'Ingresando...' : 'Iniciar sesión'),
-                        ),
-                        const SizedBox(height: 14),
-                        OutlinedButton.icon(
-                          onPressed: _loading
-                              ? null
-                              : () => Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                        builder: (_) => const RegisterScreen()),
-                                  ),
-                          icon: const Icon(Icons.person_add_alt_1),
-                          label: const Text('Registrarse'),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size.fromHeight(48),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Text(
-                          'Backend: ${ApiConfig.baseUrl}',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
-        ),
+        ],
       ),
     );
   }

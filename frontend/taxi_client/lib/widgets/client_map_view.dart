@@ -386,8 +386,9 @@ class _ClientMapViewState extends State<ClientMapView> {
           circleColor: ['get', 'color'],
           circleRadius: ['get', 'radio'],
           // Borde blanco: es lo que hacia el marcador con `Container`.
+          // Reducido un 25 % (era 3) junto con el radio del punto.
           circleStrokeColor: '#ffffff',
-          circleStrokeWidth: 3,
+          circleStrokeWidth: 2.5,
         ),
         belowLayerId: _layerRuta,
       );

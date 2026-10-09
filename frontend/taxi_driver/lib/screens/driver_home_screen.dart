@@ -658,6 +658,9 @@ int _routeReq = 0;
         _driverPos.latitude,
         _driverPos.longitude,
         driverId: widget.driverId,
+        // El backend filtra por esto: solo llegan ofertas del mismo tipo de
+        // vehiculo que declara el chofer.
+        vehicleType: widget.profile.vehicleType,
       );
       if (!mounted) return;
       final now = DateTime.now().toUtc();

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_config.dart';
@@ -93,106 +93,166 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: scheme.surface,
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Icon(Icons.local_taxi, size: 72, color: scheme.primary),
-                  const SizedBox(height: 12),
-                  Text(
-                    'RapiTaxi Chofer',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: scheme.primary,
-                        ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Conduce y acepta viajes de los clientes',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 32),
-                  TextFormField(
-                    controller: _email,
-                    keyboardType: TextInputType.emailAddress,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: 'Email',
-                      prefixIcon: Icon(Icons.email_outlined),
-                      border: OutlineInputBorder(),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Fondo: la imagen ocupa la pantalla completa. Va con `cover` para
+          // que llene el movil entero aunque el formato no coincida.
+          Image.asset(
+            'assets/images/login_bg.png',
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+          ),
+
+          // Velo oscuro suave: sin esto los campos claros sobre una foto
+          // nocturna pierden contraste y el texto de la imagen choca.
+          Container(color: Colors.black.withValues(alpha: 0.25)),
+
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  child: ConstrainedBox(
+                    // El alto minimo mantiene el contenido centrado en
+                    // pantallas altas, pero deja que scrollee si el teclado
+                    // sube y no cabe todo.
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight - 40,
                     ),
-                    validator: (v) =>
-                        (v == null || v.trim().isEmpty) ? 'Ingresa tu email' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _password,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Contraseña',
-                      prefixIcon: Icon(Icons.lock_outline),
-                      border: OutlineInputBorder(),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Hueco para el logo, que ya viene impreso en la
+                          // foto de fondo. Es proporcional al alto util para
+                          // que en un movil normal quede arriba del formulario.
+                          SizedBox(height: constraints.maxHeight * 0.30),
+                          const SizedBox(height: 16),
+
+                          // Tarjeta de credenciales. Fondo casi opaco para
+                          // que el texto se lea de sobra sobre la foto.
+                          Container(
+                            padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.90),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 12,
+                                  offset: Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                TextFormField(
+                                  controller: _email,
+                                  keyboardType: TextInputType.emailAddress,
+                                  autocorrect: false,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Email',
+                                    prefixIcon: Icon(Icons.email_outlined),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  validator: (v) => (v == null || v.trim().isEmpty)
+                                      ? 'Ingresa tu email'
+                                      : null,
+                                ),
+                                const SizedBox(height: 14),
+                                TextFormField(
+                                  controller: _password,
+                                  obscureText: true,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Contraseña',
+                                    prefixIcon: Icon(Icons.lock_outline),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  validator: (v) => (v == null || v.isEmpty)
+                                      ? 'Ingresa tu contraseña'
+                                      : null,
+                                  onFieldSubmitted: (_) => _login(),
+                                ),
+                                if (_error != null) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    _error!,
+                                    style: TextStyle(
+                                      color: scheme.error,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                                const SizedBox(height: 20),
+                                FilledButton.icon(
+                                  onPressed: _loading ? null : _login,
+                                  icon: _loading
+                                      ? const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : const Icon(Icons.login),
+                                  label: Text(
+                                    _loading ? 'Ingresando...' : 'Iniciar sesión',
+                                  ),
+                                  style: FilledButton.styleFrom(
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 16),
+                                    backgroundColor: const Color(0xFF007AFF),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                OutlinedButton.icon(
+                                  onPressed: _loading
+                                      ? null
+                                      : () => Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  const RegisterScreen(),
+                                            ),
+                                          ),
+                                  icon: const Icon(Icons.person_add_alt_1),
+                                  label: const Text('Registrarse'),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 14),
+                                    foregroundColor: const Color(0xFF007AFF),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            'Backend: ${ApiConfig.baseUrl}',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    validator: (v) => (v == null || v.isEmpty)
-                        ? 'Ingresa tu contraseña'
-                        : null,
-                    onFieldSubmitted: (_) => _login(),
                   ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 16),
-                    Text(
-                      _error!,
-                      style: TextStyle(color: scheme.error),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: _loading ? null : _login,
-                    icon: _loading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.login),
-                    label: Text(_loading ? 'Ingresando...' : 'Iniciar sesión'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  OutlinedButton.icon(
-                    onPressed: _loading
-                        ? null
-                        : () => Navigator.of(context).push(MaterialPageRoute(
-                            builder: (_) => const RegisterScreen())),
-                    icon: const Icon(Icons.person_add_alt_1),
-                    label: const Text('Registrarse'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Backend: ${ApiConfig.baseUrl}',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
+                );
+              },
             ),
           ),
-        ),
+        ],
       ),
     );
   }

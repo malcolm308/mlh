@@ -216,11 +216,18 @@ class ApiService {
     double radiusKm = 5,
     int limit = 20,
     String? driverId,
+    String? vehicleType,
   }) async {
     final id = driverId == null || driverId.isEmpty ? '' : '&driver_id=$driverId';
+    // El tipo de vehiculo viaja al backend para que el sondeo devuelva solo
+    // viajes del mismo tipo. Sin esto el chofer con moto veia ofertas de
+    // viajes 'confort', que no puede atender.
+    final tipo = vehicleType == null || vehicleType.trim().isEmpty
+        ? ''
+        : '&vehicle_type=${Uri.encodeQueryComponent(vehicleType.trim())}';
     final list = await _list(
       'GET',
-      '/trips/requested-nearby?lat=$lat&lng=$lng&radius_km=$radiusKm&limit=$limit$id',
+      '/trips/requested-nearby?lat=$lat&lng=$lng&radius_km=$radiusKm&limit=$limit$id$tipo',
     );
     return list
         .whereType<Map<String, dynamic>>()

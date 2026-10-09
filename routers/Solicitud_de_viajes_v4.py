@@ -956,11 +956,42 @@ def get_trips_by_status(status: str, limit: int = 50) -> list[dict]:
         return rows
 
 
-def get_nearby_requested_trips(lat: float, lng: float, radius_km: float = 5, limit: int = 20) -> list[dict]:
+def get_nearby_requested_trips(
+    lat: float,
+    lng: float,
+    radius_km: float = 5,
+    limit: int = 20,
+    vehicle_type: Optional[str] = None,
+) -> list[dict]:
+    """Viajes 'requested' cercanos, opcionalmente filtrados por tipo de vehiculo.
+
+    El filtro por ``vehicle_type`` es lo que evita que un chofer con moto vea
+    ofertas de un viaje 'confort'. Va en el propio SQL (y no en un filtrado de
+    Python) para que el ``LIMIT`` no se llene de viajes que luego se descartan
+    y deje al conductor sin ofertas aunque las tenga compatibles.
+    """
+    where = """
+        WHERE status = 'requested'
+          AND ST_DWithin(
+              request_location,
+              ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
+              %s * 1000
+          )
+    """
+    params: list = [lng, lat, radius_km]
+
+    # Solo se filtra si el conductor manda su tipo. Si no lo manda, el
+    # comportamiento es el de siempre: ver todo (por ejemplo, cuando el viaje
+    # se crea sin tipo y el backend asume 'basico').
+    tipo_norm = _normalize_vehicle_type(vehicle_type)
+    if tipo_norm:
+        where += "          AND lower(vehicle_type) = %s"
+        params.append(tipo_norm)
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT
                 trip_id, client_id, driver_id, status,
                 ST_AsText(request_location) as request_location,
@@ -977,16 +1008,11 @@ def get_nearby_requested_trips(lat: float, lng: float, radius_km: float = 5, lim
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
                 ) / 1000 AS distance_from_driver_km
             FROM trips
-            WHERE status = 'requested'
-              AND ST_DWithin(
-                  request_location,
-                  ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
-                  %s * 1000
-              )
+            {where}
             ORDER BY requested_at ASC
             LIMIT %s;
             """,
-            (lng, lat, lng, lat, radius_km, limit),
+            [lng, lat, *params, limit],
         )
         rows = [dict(r) for r in cur.fetchall()]
         cur.close()
@@ -1820,6 +1846,14 @@ async def api_get_requested_trips_nearby(
         None,
         description="Si se envia, se excluyen los viajes que este conductor ya rechazo",
     ),
+    vehicle_type: Optional[str] = Query(
+        None,
+        description=(
+            "Tipo de vehiculo del conductor. Si se envia, solo devuelve viajes "
+            "que piden ese mismo tipo: es lo que evita que un chofer con moto "
+            "vea ofertas de un viaje 'confort'."
+        ),
+    ),
 ):
     """
     Retorna viajes en estado 'requested' (sin conductor asignado) cercanos a
@@ -1827,8 +1861,15 @@ async def api_get_requested_trips_nearby(
     Permite a los choferes ver viajes disponibles para aceptar.
     Los rechazos del conductor se filtran aqui para que un viaje rechazado no
     le vuelva a salir: solo reaparece con una solicitud nueva del cliente.
+
+    Tambien se filtra por `vehicle_type`: el conductor declara con que vehiculo
+    sale y solo le llegan los viajes de ese tipo. Sin este filtro el sondeo
+    devolvia TODO lo que hubiera alrededor, y un chofer de moto se encontraba
+    ofertas de un viaje 'confort' que no podia atender.
     """
-    trips = get_nearby_requested_trips(lat, lng, radius_km, limit)
+    trips = get_nearby_requested_trips(
+        lat, lng, radius_km, limit, vehicle_type=vehicle_type
+    )
     trips = await filter_declined_trips(trips, driver_id)
     # Enriquecer con datos del cliente desde MongoDB
     enriched = []

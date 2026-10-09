@@ -314,32 +314,33 @@ _aplicarCamara();
         _idVehiculo,
         _capaVehiculo,
         CircleLayerProperties(
-          // Punto azul ~32 dp: el radio crece con el zoom para mantener el
-          // tamaño visible sin distorsionar. En z17 ronda ~16 px.
+          // Punto azul ~24 dp: el radio crece con el zoom para mantener el
+          // tamaño visible sin distorsionar. Reducido un 25 % (era 8/14/20)
+          // porque tapaba demasiado vehiculo y calle alrededor.
           circleRadius: [
             'interpolate',
             ['exponential', 1.6],
             ['zoom'],
             14,
-            8.0,
+            6.0,
             16,
-            14.0,
+            10.5,
             18,
-            20.0,
+            15.0,
           ],
           // Relleno azul (#1E88E5)
           circleColor: '#1E88E5',
-          // Borde blanco de 2 dp, tambien escalado con el zoom.
+          // Borde blanco de 2 dp, tambien escalado con el zoom (era 2/2.5/3).
           circleStrokeWidth: [
             'interpolate',
             ['exponential', 1.6],
             ['zoom'],
             14,
-            2.0,
+            1.5,
             16,
-            2.5,
+            2.0,
             18,
-            3.0,
+            2.5,
           ],
           circleStrokeColor: '#ffffff',
           circleOpacity: 0.95,
