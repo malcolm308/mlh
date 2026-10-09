@@ -961,6 +961,11 @@ int _routeReq = 0;
       _routeToPickup = toPickup?.points ?? const [];
       _toPickupKm = toPickup?.distanceKm;
       _toPickupMin = toPickup?.durationMinutes;
+      // La ruta del tramo en curso va en `_route`: durante el traslado es la
+      // unica que se dibuja. Sin esta asignacion `_route` se quedaba vacia y
+      // `_rutaVisible` caia al fallback en linea recta, aunque OSRM devolviera
+      // la ruta por calles.
+      _route = toDropoff?.points ?? const [];
       _tripKm = toDropoff?.distanceKm;
       _tripMin = toDropoff?.durationMinutes;
     });
