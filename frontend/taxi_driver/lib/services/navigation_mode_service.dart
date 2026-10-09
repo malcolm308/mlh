@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, visibleForTesting;
 import 'package:flutter/scheduler.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
@@ -226,7 +227,10 @@ double _tiltActual = ApiConfig.tiltDegradado;
     // tiene muestras recientes aunque el GPS llegue a 1 Hz.
     _subRumbo = LocationService.headings().listen(_alRecibirRumbo);
 
-    LocationService.tieneSensorRumbo().then((v) => _haySensor = v);
+    LocationService.tieneSensorRumbo().then((v) {
+      _haySensor = v;
+      debugPrint('[NAV] sensor de rumbo disponible: $v');
+    });
   }
 
   void dispose() {
@@ -269,6 +273,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
     _activarMedicionFps();
     _recalcularObjetivo();
     notificar();
+    debugPrint('[NAV] modo navegacion ACTIVADO fase=$status pos=$_pos');
 
     // Unico sitio donde se toca el tilt: entrar o salir del modo. Adentro la
     // rampa por frame se encarga sola.
@@ -571,9 +576,11 @@ void activar(String? status, {LatLng? posicionConocida}) {
   /// esta en `_fix`, se acaba de actualizar) y entra ya inclinado, porque el
   /// coche se esta moviendo y la perspectiva hace falta desde el primer
   /// momento.
-  void _activarModoIdle() {
-    final estabaApagado = _modo == ModoNavegacion.apagado;
-    _modo = ModoNavegacion.siguiendo;
+void _activarModoIdle() {
+        final estabaApagado = _modo == ModoNavegacion.apagado;
+        _modo = ModoNavegacion.siguiendo;
+        debugPrint('[NAV] modo navegacion ACTIVADO por movimiento en idle '
+            'v=${(_fix?.speedMps ?? 0.0).toStringAsFixed(1)} m/s');
     if (estabaApagado) {
       _tiltActual = ApiConfig.tiltNavegacion;
       _notificarCambioTilt();
@@ -672,7 +679,25 @@ final v = _buffer.velocidadFiltrada();
     }
 
     _centroObjetivo = _pos;
+
+    // Traza de la camara: una linea cada vez que el objetivo cambia de verdad.
+    // Es lo que dice si el heading-up tiene datos con los que trabajar o si se
+    // queda clavado en el norte porque nunca llega un rumbo.
+    final clave = '${_rotacionObjetivo?.toStringAsFixed(0)}|'
+        '${_tiltActual.toStringAsFixed(0)}|${z.toStringAsFixed(1)}';
+    if (clave != _trazaCamara) {
+      _trazaCamara = clave;
+      debugPrint('[NAV] rotacion=${_rotacionObjetivo?.toStringAsFixed(0)} '
+          'actual=${_rotacionActual?.toStringAsFixed(0)} '
+          'rumbo=${r?.toStringAsFixed(0)} '
+          'rumboGps=${_rumboGps?.toStringAsFixed(0)} '
+          'v=${v.toStringAsFixed(1)} tilt=${_tiltActual.toStringAsFixed(0)} '
+          'zoom=$z');
+    }
   }
+
+  /// Ultima combinacion de camara registrada en la traza, para no repetir linea.
+  String? _trazaCamara;
 
   /// Mueve el tilt vigente hacia el objetivo sin pasarse.
   ///

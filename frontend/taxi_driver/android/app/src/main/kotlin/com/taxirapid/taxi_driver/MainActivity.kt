@@ -65,7 +65,23 @@ class MainActivity : FlutterActivity() {
     private var pendingPermission: MethodChannel.Result? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lastFix = AtomicReference<Location?>(null)
+
+    /**
+     * Listener del MODO FLOTA (10 s / 20 m).
+     *
+     * Antes este unico `listener` lo compartia con el modo navegacion, y al
+     * arrancar el modo flota el `startUpdates` se carryaba el de 1 Hz con el
+     * (los dos son del mismo LocationManager y no pueden convivir en un solo
+     * campo). El resultado era que la navegacion se quedaba sin fixes a 1 Hz:
+     * sin velocidad ni rumbo por fix, el heading-up no tenia con que trabajar y
+     * el mapa se quedaba en norte arriba y plano. Ahora son dos campos
+     * separados y ambos flujos-conviven.
+     */
     private var listener: LocationListener? = null
+
+    /** Listener del MODO NAVEGACION (1 Hz). Ver [listener]. */
+    private var listenerNav: LocationListener? = null
+
     private var currentTimeout: Runnable? = null
 
     /**
@@ -99,7 +115,7 @@ class MainActivity : FlutterActivity() {
             if (!navActivo) return
             val ahora = SystemClock.elapsedRealtime()
 
-            if (listener == null) {
+            if (listenerNav == null) {
                 // El GPS de navegacion esta en pausa por parado. Sin listener no
                 // llegan fixes, asi que `ultimoEnMarchaMs` (y con el la rama de
                 // reanudacion de mas abajo) se quedaba congelado en el pasado y
@@ -110,8 +126,8 @@ class MainActivity : FlutterActivity() {
             } else if (ahora - ultimoEnMarchaMs >= PAUSA_PARADO_MS) {
                 // Mas de 10 s sin moverse: pausar el GPS a 1 Hz. El detector
                 // barato (1,5 s / 5 m) consume casi nada mientras este parado.
-                runCatching { locationManager?.removeUpdates(listener!!) }
-                listener = null
+                runCatching { locationManager?.removeUpdates(listenerNav!!) }
+                listenerNav = null
                 detectarMovimiento()
             }
             mainHandler.postDelayed(this, 2000L)
@@ -312,6 +328,7 @@ class MainActivity : FlutterActivity() {
      * debe cambiar de comportamiento al añadir navegacion.
      */
     private fun startNav(result: MethodChannel.Result) {
+        android.util.Log.i("RapiTaxi", "startNav: permiso=${hasLocationPermission()} sensor=${mejorSensorRumbo()?.name}")
         if (!hasLocationPermission()) {
             result.error("SIN_PERMISO", "Falta el permiso de ubicacion", null)
             return
@@ -377,9 +394,15 @@ class MainActivity : FlutterActivity() {
     /** Registra (o reactiva) las actualizaciones de posicion a 1 Hz. */
     private fun reanudarNavegacion() {
         if (!navActivo) return
+        // Si ya esta escuchando, no se toca: el detector de movimiento llama a
+        // este metodo cada vez que avanza, y re-registrar el listener en cada
+        // llamada lo que haria es desconectar y reconectar el GPS sin parar.
+        if (listenerNav != null) return
         val lm = locationManager ?: return
         val provider = pickProvider() ?: return
-        stopUpdates()
+        // Solo se sustituye el listener de NAVEGACION. El del modo flota se
+        // respeta: ambos estan activos a la vez y cada uno con su ritmo.
+        listenerNav?.let { runCatching { lm.removeUpdates(it) } }
         val l = object : LocationListener {
             override fun onLocationChanged(location: Location) = emit(location)
             override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
@@ -388,14 +411,16 @@ class MainActivity : FlutterActivity() {
         }
         runCatching {
             lm.requestLocationUpdates(provider, NAV_INTERVAL_MS, 0f, l, mainLooper)
-        }.onSuccess { listener = l }
+        }.onSuccess { listenerNav = l }
     }
 
     /** Corta GPS y sensor: el viaje se termino, cancelo o la app se cierra. */
     private fun stopNav() {
         navActivo = false
         mainHandler.removeCallbacks(tareaParado)
-        stopUpdates()
+        listenerNav?.let { runCatching { locationManager?.removeUpdates(it) } }
+        listenerNav = null
+        detenerDetector()
         sensorManager?.unregisterListener(sensorListener)
         sensorListener = null
     }
@@ -429,7 +454,10 @@ class MainActivity : FlutterActivity() {
         val sm = sensorManager ?: return
         sm.unregisterListener(sensorListener)
 
-        val sensor = mejorSensorRumbo() ?: return
+        val sensor = mejorSensorRumbo() ?: run {
+            android.util.Log.w("RapiTaxi", "registrarSensorRumbo: el dispositivo NO tiene sensor de rumbo")
+            return
+        }
         val necesitaAcelerometro =
             sensor.type == Sensor.TYPE_MAGNETIC_FIELD
 
@@ -592,8 +620,8 @@ class MainActivity : FlutterActivity() {
             .onFailure { result.error("SIN_SISTEMA", it.message, null) }
     }
 
+    /** Corta SOLO el GPS de modo flota. El de navegacion se corta en [stopNav]. */
     private fun stopUpdates() {
-        detenerDetector()
         listener?.let { l ->
             runCatching { locationManager?.removeUpdates(l) }
         }

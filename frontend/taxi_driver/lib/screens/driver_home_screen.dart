@@ -1327,6 +1327,9 @@ int _routeReq = 0;
         _route = [];
       });
       _aceptandoTripId = null;
+      // Viaje nuevo: la ruta guardada es del trayecto anterior y no debe
+      // reutilizarse (el destino nuevo puede estar a menos de 150 m del viejo).
+      OsrmService.olvidarCache();
       // Al aceptar se guarda el marcador (id + ts) con el que medir después
       // la antigüedad de un 'accepted' al reabrir la app.
       await _guardarMarcadorViaje(trip);
