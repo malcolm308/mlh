@@ -790,8 +790,18 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             distance_km = float(cur.fetchone()["distance_km"] or 0.0)
 
             # 7. Calcular duracion real (desde que se inicio el viaje)
-            started = trip["started_at"]
-            duration_secs = int((now - started).total_seconds())
+            #
+            # `started_at` puede venir nulo: hay viajes que llegaron a
+            # 'in_progress' por una via que no pasa por `update_trip_status`
+            # (por ejemplo, restaurados tras un reinicio de la app). Restarlo
+            # sin mas lanzaba TypeError y devolvia un 500 sin explicacion,
+            # dejando el viaje atascado en 'in_progress' para siempre. Se cae al
+            # `requested_at` y, si tampoco existe, a cero.
+            started = trip["started_at"] or trip["requested_at"]
+            if started is None:
+                duration_secs = 0
+            else:
+                duration_secs = max(0, int((now - started).total_seconds()))
             duration_min = duration_secs / 60.0
 
             # 8. Calcular componentes de tarifa
@@ -820,7 +830,13 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 base_fare, distance_fare, tip, total_fare,
                 trip_id
             ))
-            updated_trip = dict(cur.fetchone())
+            updated_trip = cur.fetchone()
+            if updated_trip is None:
+                # El UPDATE no toco ninguna fila (borrado o viaje movido entre
+                # la lectura y la escritura). Antes `dict(None)` reventaba con
+                # TypeError y el chofer se comia un 500 sin motivo claro.
+                raise ValueError("El viaje ya no existe o cambio de estado")
+            updated_trip = dict(updated_trip)
             conn.commit()
 
             # 10. Descontar la comision del FONDO del conductor.
@@ -866,7 +882,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
         except Exception as e:
             conn.rollback()
-            raise e
+            # Traza completa en el log del servidor. Sin esto, un fallo aqui
+            # salia como "Internal Server Error" y no habia forma de saber que
+            # campo o consulta lo habia provocado.
+            logger.exception("complete_trip fallo para el viaje %s", trip_id)
+            raise
         finally:
             cur.close()
 
@@ -2001,7 +2021,9 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
             raise
         except Exception as e:
             conn.rollback()
-            raise HTTPException(500, f"Error al aceptar viaje: {e}")
+            logger.exception("accept_trip fallo para el viaje %s", trip_id)
+            raise e
+
         finally:
             cur.close()
 
@@ -2082,6 +2104,20 @@ async def api_complete_trip(trip_id: str, body: TripComplete, background: Backgr
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        # Cualquier otra excepcion (Mongo caido, campo nulo, error de Postgres)
+        # llegaba como un 500 sin texto. Se registra con traza y se devuelve un
+        # mensaje que el chofer pueda entender, sin filtrar detalles internos.
+        logger.exception("api_complete_trip fallo para el viaje %s", trip_id)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "No se pudo completar el viaje. Vuelve a intentarlo; si sigue "
+                "fallando, el viaje quedo pendiente y hay que cerrarlo a mano."
+            ),
+        )
 
     driver_id = result["driver_id"]
     await set_driver_status(driver_id, "available")
