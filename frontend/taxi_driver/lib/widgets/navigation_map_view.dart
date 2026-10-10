@@ -196,7 +196,7 @@ _aplicarCamara();
     _tiltAplicado = widget.tilt;
     _bearingAplicado = widget.bearing;
 
-    // Sin animacion: la camara la manda el GPS, y una transicion de 500 ms
+// Sin animacion: la camara la manda el GPS, y una transicion de 500 ms
     // llegaria tarde a cada fix, dejando el vehiculo desfasado del mapa.
     ctl.moveCamera(
       CameraUpdate.newCameraPosition(
@@ -211,6 +211,28 @@ _aplicarCamara();
       ),
     );
   }
+
+  /// Coloca el vehiculo en el tercio inferior de la pantalla.
+  ///
+  /// Sin esto el punto queda en el centro geométrico y, con el mapa inclinado,
+  /// el chofer ve mas suelo delante que calle por la que va: justo lo contrario
+  /// de lo que sirve para conducir. El margen de abajo deja sitio al panel del
+  /// viaje, que ocupa la parte baja.
+  void _aplicarPaddingConduccion() {
+    final ctl = _controlador;
+    if (ctl == null) return;
+    if (_paddingAplicado) return;
+    _paddingAplicado = true;
+    // Un tercio del alto, medido con el tamano real de la pantalla y no con un
+    // literal: en un movil pequeno y en una tablet la proporcion que se busca
+    // es la misma.
+    final alto = MediaQuery.sizeOf(context).height;
+    if (alto <= 0) return;
+    ctl.setPadding(bottom: alto * 0.33);
+  }
+
+  /// `true` cuando el padding de conduccion ya se aplico una vez.
+  bool _paddingAplicado = false;
 
   /// Anade sources y layers al estilo recien cargado.
   ///
@@ -359,6 +381,7 @@ _puntosRutaEnviados = widget.ruta.length;
     _vehiculoEnviado = widget.posicionVehiculo;
 
     _aplicarCamara();
+    _aplicarPaddingConduccion();
     widget.onListo?.call();
   }
 

@@ -85,10 +85,14 @@ class NavigationModeService {
 
   /// Tiempo parado sin viaje tras el cual se apaga la camara de conduccion.
   ///
-  /// 5 s. Un semaforo corto no debe desactivar el heading-up ni el tilt; solo
-  /// una parada real, para no mantener la perspectiva girando hacia ninguna
-  /// parte y gastando bateria.
-  static const Duration _retardoApagarIdle = Duration(seconds: 5);
+  /// 30 s. Con 5 s bastaba un semaforo o una frenada momentanea para tirar el
+  /// heading-up y devolver el mapa al norte, y eso es exactamente lo que hace
+  /// que parezca que "el mapa no se orienta": en conduccion urbana hay mil
+  /// paradas cortas y con un umbral tan corto se pierde la orientacion una y
+  /// otra vez. 30 s deja margen de sobra para los semaforos y el trafico lento,
+  /// y aun asi recupera el norte arriba cuando el vehiculo esta realmente
+  /// aparcado.
+  static const Duration _retardoApagarIdle = Duration(seconds: 30);
 
   /// Cuanto se acerca la camara a su objetivo por frame (a 60 Hz).
   ///
