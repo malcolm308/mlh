@@ -106,17 +106,28 @@ class LoginWindow(tk.Toplevel):
         self._vigilar_entrada()
 
     def _vigilar_entrada(self):
-        """Mientras el hilo trabaja, avisa si la instancia esta despertando.
+        """Vigila el hilo del login y acts cuando termina.
 
-        Se llama cada 200 ms desde el hilo de Tkinter. Cuando la peticion lleva
-        mas del tiempo de aviso sin responder, el texto cambia para que el
-        administrador sepa que hay que esperar y no que el panel se cuelgo.
+        Se llama cada 200 ms desde el hilo de Tkinter. Dos casos:
+
+        * el hilo sigue vivo: si la peticion pasa del tiempo de aviso, el
+          texto avisa de que el servidor esta despertando, para que el
+          administrador sepa que hay que esperar.
+        * el hilo termino: si hubo error se muestra y se devuelve el boton;
+          si NO hubo error, es que el login fue bien y hay que abrir el panel.
+          Este ultimo camino es el que faltaba y hacia que el boton volviera
+          a "Entrar" sin mas, dando la sensacion de que no hacia nada.
         """
         if not self._hilo.is_alive():
-            self.btn_entrar.config(state="normal", text="Entrar")
+            self.var_estado.set("")
             if self._error_entrando is not None:
+                self.btn_entrar.config(state="normal", text="Entrar")
                 self._error(str(self._error_entrando))
                 self._error_entrando = None
+                return
+            # Login correcto: `api` ya tiene el token. Se abre el panel.
+            self.btn_entrar.config(state="disabled", text="Entrando...")
+            self.on_ok(self.api)
             return
         if self.api.desperando:
             self.var_estado.set(
