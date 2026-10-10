@@ -179,6 +179,19 @@ class ApiClient:
         except urllib.error.URLError as e:
             raise ApiError("No se pudo conectar con el servidor (%s)." % e.reason)
 
+    # ---------- administradores ----------
+    def crear_administrador(self, nombre, email, telefono, password, rol="admin"):
+        return self.post("/admin/administradores", {
+            "nombre": nombre,
+            "email": email,
+            "telefono": telefono,
+            "password": password,
+            "rol": rol,
+        })
+
+    def administradores(self):
+        return self.get("/admin/administradores")
+
     # ---------- billetera ----------
     def choferes_busqueda(self, q=None):
         return self.get("/billetera/choferes", {"q": q})

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from api_client import ApiClient, ApiError, API_URL   # noqa: E402
 from config import PING_CADA_SEGUNDOS                 # noqa: E402
 from login_window import LoginWindow                  # noqa: E402
+from admin_nuevo_window import VentanaAltaAdmin       # noqa: E402
 from tab_viajes import TabViajes                      # noqa: E402
 from tab_choferes import TabChoferes                  # noqa: E402
 from tab_billetera import TabBilletera                # noqa: E402
@@ -77,6 +78,15 @@ class AppAdmin(tk.Tk):
         self.lbl_user = tk.Label(barra, text=self.api.admin_email, bg="#243447",
                                  fg="#9fb3c8", font=("Segoe UI", 9))
         self.lbl_user.pack(side="right", padx=14)
+
+        # Alta de administradores. Va en la barra, no en una pestana: solo se
+        # usa de vez en cuando y no compite con los tres bloques de trabajo.
+        self.btn_admin = tk.Button(
+            barra, text="+ Administrador", command=self._abrir_alta_admin,
+            bg="#2f80ed", fg="#ffffff", activebackground="#1f6fd0",
+            activeforeground="#ffffff", font=("Segoe UI", 9, "bold"),
+            relief="flat", cursor="hand2", padx=12, pady=3)
+        self.btn_admin.pack(side="right", padx=(0, 8), pady=6)
 
         # pestanas
         self.notebook = ttk.Notebook(self)
@@ -158,6 +168,17 @@ class AppAdmin(tk.Tk):
         if messagebox.askokcancel("Salir", "Cerrar el panel de administracion?"):
             self.api.logout()
             self.destroy()
+
+    # ---------------- altas ----------------
+
+    def _abrir_alta_admin(self):
+        """Abre el dialogo de alta de administrador.
+
+        Va en un hilo aparte por lo mismo que el resto: si el backend esta
+        despierto, la llamada tarda lo que tarde, y el dialogo se queda
+        visible dando mensaje en vez de freezing la ventana.
+        """
+        VentanaAltaAdmin(self, self.api)
 
 
 def main():

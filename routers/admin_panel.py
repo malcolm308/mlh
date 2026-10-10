@@ -8,6 +8,8 @@ Consumida por la app de escritorio `desktop_admin/`:
     GET  /admin/trips/dia                detalle de los viajes de un dia
     GET  /admin/trips/resumen            totales del dia
     GET  /admin/choferes/top             choferes con mas viajes del dia
+    POST /admin/administradores          crea una cuenta de administrador
+    GET  /admin/administradores          lista las cuentas de administrador
 
 Todos los endpoints exigen token de administrador.
 """
@@ -15,6 +17,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+import bcrypt
 import psycopg2
 import psycopg2.extras
 from bson import ObjectId
@@ -150,6 +153,120 @@ def _validar_fecha(valor: Optional[str]) -> date:
 class EstadoChoferIn(BaseModel):
     estado: str
     motivo: Optional[str] = None
+
+
+class AdminNuevoIn(BaseModel):
+    """Datos minimos para dar de alta a otra cuenta de administrador.
+
+    Se piden solo los campos que hacen falta para entrar al panel y para saber
+    quien es: nombre, email, telefono, rol y contrasena. El hash lo pone el
+    backend; la contrasena en claro nunca se guarda ni se devuelve.
+    """
+
+    nombre: str
+    email: str
+    telefono: str
+    password: str
+    rol: str = "admin"
+
+
+# Contrasena minima: por debajo de esto no protege nada, y un panel sin
+# proteccion real es peor que no tener panel.
+ADMIN_PASSWORD_MINIMA = 8
+
+
+def _validar_admin_nuevo(datos: AdminNuevoIn) -> dict:
+    """Normaliza y valida. Devuelve el documento listo para insertar.
+
+    Se separa del endpoint para que las mismas reglas sirvan al alta y a
+    cualquier edicion posterior.
+    """
+    nombre = (datos.nombre or "").strip()
+    email = (datos.email or "").strip().lower()
+    telefono = (datos.telefono or "").strip()
+    rol = (datos.rol or "").strip().lower() or "admin"
+
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre es obligatorio.")
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(
+            status_code=400, detail="El email no tiene un formato valido.")
+
+    # El mismo correo que usa /login. Aqui se compara en minusculas porque el
+    # login tambien normaliza, y si se guardara con mayusculas la cuenta
+    # quedaria inaccesible.
+    if admin_coleccion.find_one({"email": email}):
+        raise HTTPException(
+            status_code=409, detail="Ya existe un administrador con ese email.")
+
+    if len(datos.password) < ADMIN_PASSWORD_MINIMA:
+        raise HTTPException(
+            status_code=400,
+            detail="La contrasena debe tener al menos %d caracteres."
+                   % ADMIN_PASSWORD_MINIMA)
+
+    ahora = datetime.utcnow()
+    return {
+        "nombre": nombre,
+        "email": email,
+        "telefono": telefono,
+        # bcrypt con sal propia. El login usa `checkpw`, que compara contra
+        # esto; guardar el texto plano seria inutil y peligroso.
+        "password": bcrypt.hashpw(
+            datos.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
+        "rol": rol,
+        "created_at": ahora,
+        "updated_at": ahora,
+    }
+
+
+@router.post("/administradores", status_code=201)
+async def crear_administrador(
+    body: AdminNuevoIn,
+    admin: dict = Depends(require_admin),
+):
+    """Crea una cuenta de administrador.
+
+    Exige sesion de administrador: es el endpoint que permite abrir la puerta,
+    asi que dejarlo sin proteger convertiria cualquier error de autenticacion en
+    un acceso total al panel.
+    """
+    documento = _validar_admin_nuevo(body)
+    resultado = admin_coleccion.insert_one(documento)
+
+    logger.info("Administrador creado: %s por %s",
+                documento["email"], admin.get("email"))
+
+    # El documento de vuelta lleva el hash fuera a proposito: que no salga por
+    # la red ni siquiera una vez evita que acabe en un log del panel.
+    return {
+        "id": str(resultado.inserted_id),
+        "nombre": documento["nombre"],
+        "email": documento["email"],
+        "telefono": documento["telefono"],
+        "rol": documento["rol"],
+        "message": "Administrador creado correctamente",
+    }
+
+
+@router.get("/administradores")
+async def listar_administradores(admin: dict = Depends(require_admin)):
+    """Lista las cuentas de administrador, sin passwords."""
+    admins = admin_coleccion.find({}).sort("created_at", 1)
+    return {
+        "administradores": [
+            {
+                "id": str(a["_id"]),
+                "nombre": a.get("nombre", ""),
+                "email": a.get("email", ""),
+                "telefono": a.get("telefono", ""),
+                "rol": a.get("rol", "admin"),
+                "created_at": a["created_at"].isoformat()
+                if isinstance(a.get("created_at"), datetime) else None,
+            }
+            for a in admins
+        ]
+    }
 
 
 @router.get("/choferes")
