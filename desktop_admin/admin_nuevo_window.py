@@ -57,6 +57,9 @@ class VentanaAltaAdmin(tk.Toplevel):
         self.var_password2 = tk.StringVar()
         self.var_rol = tk.StringVar(value=ROLES[0])
 
+        # Aviso de espera del servidor. Se vacia al terminar.
+        self.var_estado = tk.StringVar(value="")
+
         f_nombre = tk.Frame(marco, bg="#1b2a3a")
         f_nombre.pack(fill="x", pady=5)
         tk.Label(f_nombre, text="Nombre", bg="#1b2a3a", fg="#cfd8e3", width=10,
