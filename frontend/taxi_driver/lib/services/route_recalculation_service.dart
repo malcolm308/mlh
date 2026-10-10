@@ -29,21 +29,48 @@ enum RouteRecalcState {
 /// Zona donde se esta conduciendo, que decide el umbral de desvio.
 ///
 /// Ciudad y carretera no usan el mismo margen: en ciudad el GPS tiene mas
-/// ruido por los edificios y las calles estrechas, asi que 40 m es
-/// conservador y evita recambios por una sola lectura mala. En carretera la
+/// ruido por los edificios y las calles estrechas, asi que un margen pequeno
+/// es conservador y evita recambios por una sola lectura mala. En carretera la
 /// carretera es mas ancha y el GPS mas limpio, asi que se puede exigir mas
 /// antes de dar un desvio por bueno.
 enum ZonaRuta { ciudad, carretera }
 
-/// Cuanto mide un desvio antes de pedir ruta nueva, en metros.
+/// Umbral de desvio segun lo rapido que se va, en metros.
 ///
-/// Se sube de 40 a 80 en carretera. Un parametro generico daria falsos
-/// positivos en una y falsos negativos en la otra.
-extension UmbralZonaRuta on ZonaRuta {
+/// Con un unico umbral fijo hay una combinacion que siempre falla: si es
+/// pequeno, en ciudad se recalcula cada dos cuadras por el ruido del GPS; si
+/// es grande, en carretera no se detecta un desvio real hasta que el chofer
+/// lleva media hora yendo por donde no era. El margen tiene que crecer con la
+/// velocidad, que es justo cuando mas costly sale recalcular de mas (mas
+/// bateria, mas trafico, mas esperas) y cuando el GPS mas tiende a la deriva.
+///
+///   < 20 km/h  -> 100 m: calles estrechas y GPS muy ruidoso
+///   20-40 km/h -> 150 m: ciudad normal
+///   40-60 km/h -> 250 m: avenidas
+///   > 60 km/h  -> 400 m: carretera
+extension UmbralPorVelocidad on ZonaRuta {
+  static const double _baja = 100;
+  static const double _media = 150;
+  static const double _alta = 250;
+  static const double _autopista = 400;
+
+  /// Velocidades en km/h que cortan cada tramo.
+  static const double _corteBaja = 20;
+  static const double _corteMedia = 40;
+  static const double _corteAlta = 60;
+
   double get metros => switch (this) {
-        ZonaRuta.ciudad => ApiConfig.desvioUmbralCiudadMetros,
-        ZonaRuta.carretera => ApiConfig.desvioUmbralCarreteraMetros,
+        ZonaRuta.ciudad => _media,
+        ZonaRuta.carretera => _alta,
       };
+
+  /// Umbral para una velocidad dada, en km/h.
+  static double paraVelocidadKmh(double kmh) {
+    if (kmh < _corteBaja) return _baja;
+    if (kmh < _corteMedia) return _media;
+    if (kmh < _corteAlta) return _alta;
+    return _autopista;
+  }
 }
 
 /// Detecta que el conductor se ha salido de la ruta y pide una nueva.
@@ -99,9 +126,6 @@ class RouteRecalculationService extends ChangeNotifier {
 
   /// Trazado que se sigue ahora mismo, para medir la distancia perpendicular.
   List<LatLng> _ruta = const [];
-
-  /// Zona actual, la decide la velocidad como en el resto del modo navegacion.
-  ZonaRuta _zona = ZonaRuta.ciudad;
 
   // ---- Estado de la deteccion ----
 
@@ -187,7 +211,6 @@ class RouteRecalculationService extends ChangeNotifier {
     if (_ruta.length < 2) return; // sin trazado no hay nada que comparar
     if (!_reloj.isRunning) _reloj.start();
 
-    _actualizarZona(velocidadMps);
     _detectarParado(velocidadMps);
 
     // Se guarda la ultima posicion para usarla como origen del recalculo: es el
@@ -204,7 +227,11 @@ class RouteRecalculationService extends ChangeNotifier {
 
     final distancia = distanciaPerpendicularMetros(posicion, _ruta);
 
-    if (distancia > _zona.metros) {
+    // El umbral sale de la velocidad del tramo, no de un valor fijo: ver
+    // [UmbralPorVelocidad.paraVelocidadKmh].
+    final umbral = UmbralPorVelocidad.paraVelocidadKmh(velocidadMps * 3.6);
+
+    if (distancia > umbral) {
       _fueraConsecutivas++;
       if (_fueraConsecutivas >= ApiConfig.desvioMuestrasConsecutivas) {
         _fueraConsecutivas = 0;
@@ -218,12 +245,6 @@ class RouteRecalculationService extends ChangeNotifier {
   }
 
   // ---------------- Deteccion ----------------
-
-  void _actualizarZona(double velocidadMps) {
-    _zona = velocidadMps >= ApiConfig.desvioVelocidadCarreteraMps
-        ? ZonaRuta.carretera
-        : ZonaRuta.ciudad;
-  }
 
   /// Gestiona la pausa por vehiculo parado.
   ///

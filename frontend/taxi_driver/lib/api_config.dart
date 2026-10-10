@@ -254,39 +254,21 @@ class ApiConfig {
 
   // ---------------- RECALCULO DE RUTA POR DESVIO ----------------
 
-  /// Distancia a la ruta a partir de la cual se considera desvio, en ciudad.
-  ///
-  /// 40 m. El GPS urbano tiene ruido de 10-30 m por los edificios y las calles
-  /// estrechas, asi que un umbral mas bajo daria recambios falsos en cada
-  /// esquina. Con 40 y tres muestras seguidas, un fix suelto脱出 nunca llega a
-  /// disparar.
-  static const double desvioUmbralCiudadMetros = 40.0;
-
-  /// Distancia de desvio en carretera, en metros.
-  ///
-  /// 80. Fuera de la ciudad la carretera es mas ancha y el GPS mas limpio, asi
-  /// que se puede exigir mas antes de dar por bueno un desvio.
-  static const double desvioUmbralCarreteraMetros = 80.0;
-
-  /// Muestras consecutivas fuera de umbral que confirman un desvio.
+/// Muestras consecutivas fuera de umbral que confirman un desvio.
   ///
   /// 3. A 1 Hz son 3 segundos: tiempo de sobra para que un fix erroneo se
   /// desmienta solo, y lo justo para no tardar en corregir cuando el giro se
   /// ha de hecho de verdad.
   static const int desvioMuestrasConsecutivas = 3;
 
-  /// Velocidad (m/s) a partir de la cual se considera carretera.
-  ///
-  /// 16.7 m/s son 60 km/h. El mismo umbral que usa el resto del modo
-  /// navegacion, para que la idea de "carretera" sea una sola en toda la app.
-  static const double desvioVelocidadCarreteraMps = 16.7;
-
   /// Silencio tras pedir un recalculo, antes de volver a detectar desvio.
   ///
-  /// 5 s. El conductor no corrige en el instante: hasta que no haya girado, su
+  /// 30 s. El conductor no corrige en el instante: hasta que no haya girado, su
   /// posicion sigue sobre la calle vieja y volver a medir daria un segundo
-  /// recalculo nada mas. Sin esto se encadena un recalculo cada tres segundos.
-  static const Duration desvioPausaMsTrasRecalculo = Duration(seconds: 5);
+  /// recalculo nada mas. Con 5 s se encadenaba un recalculo cada tres segundos
+  /// con el backend lento; 30 s deja que la maniobra se complete y da margen
+  /// para que la ruta nueva llegue y se asiente.
+  static const Duration desvioPausaMsTrasRecalculo = Duration(seconds: 30);
 
   /// Enfriamiento tras recibir una ruta correcta.
   ///

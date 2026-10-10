@@ -365,32 +365,39 @@ void main() {
     });
   });
 
-  group('umbrales configurables', () {
-    test('ciudad usa 40 m y carretera 80 m', () {
-      expect(ZonaRuta.ciudad.metros, 40.0);
-      expect(ZonaRuta.carretera.metros, 80.0);
+  group('umbrales por velocidad', () {
+    // El margen crece con la velocidad: en ciudad el GPS es ruidoso y recalcular
+    // de mas sale caro, y en carretera hace falta un margen mayor porque el
+    // error del GPS pesa menos frente a lo lejos que se puede llegar.
+    test('los cuatro tramos dan 100 / 150 / 250 / 400 m', () {
+      expect(UmbralPorVelocidad.paraVelocidadKmh(0), 100.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(19.9), 100.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(20), 150.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(39.9), 150.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(40), 250.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(59.9), 250.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(60), 400.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(120), 400.0);
     });
 
-    test('los valores salen de config', () {
-      expect(
-        ZonaRuta.ciudad.metros,
-        ApiConfig.desvioUmbralCiudadMetros,
-      );
-      expect(
-        ZonaRuta.carretera.metros,
-        ApiConfig.desvioUmbralCarreteraMetros,
-      );
+    test('el umbral nunca decrece al subir la velocidad', () {
+      var anterior = 0.0;
+      for (var kmh = 0.0; kmh <= 120; kmh += 5) {
+        final actual = UmbralPorVelocidad.paraVelocidadKmh(kmh);
+        expect(actual, greaterThanOrEqualTo(anterior));
+        anterior = actual;
+      }
     });
 
-    test('carretera exige mas distancia antes de recalcular', () {
-      // Un punto a 60 m: fuera de umbral en ciudad, dentro en carretera.
-      final ruta = const [LatLng(23.10, -82.36), LatLng(23.12, -82.36)];
-      final punto = const LatLng(23.1100, -82.35950); // ~52 m al este
+    test('una velocidad baja no dispara antes que una alta', () {
+      // La distancia que dispara con 10 km/h tiene que estar dentro del umbral
+      // de 60 km/h, que es la garantia de que el margen escala.
+      expect(120.0, greaterThan(UmbralPorVelocidad.paraVelocidadKmh(10)));
+      expect(120.0, lessThan(UmbralPorVelocidad.paraVelocidadKmh(60)));
+    });
 
-      final distancia =
-          RouteRecalculationService.distanciaPerpendicularMetros(punto, ruta);
-      expect(distancia, greaterThan(40.0));
-      expect(distancia, lessThan(80.0));
+    test('la pausa tras recalcular es de 30 s', () {
+      expect(ApiConfig.desvioPausaMsTrasRecalculo.inSeconds, 30);
     });
   });
 }

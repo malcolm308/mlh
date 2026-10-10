@@ -470,18 +470,43 @@ class MainActivity : FlutterActivity() {
                 if (event.values.size < 3) return
                 SensorManager.getRotationMatrixFromVector(matriz, event.values)
 
-                // El azimut de la matriz depende de como se sostenga el telefono:
-                // sin remapear sale 90 grados desviado al rotar la pantalla.
-                val ejes = when (remapSegunPantalla()) {
-                    0 -> SensorManager.AXIS_X to SensorManager.AXIS_Z
-                    1 -> SensorManager.AXIS_Y to SensorManager.AXIS_Z
-                    2 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_Z
-                    else -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_Z
+                // El azimut depende de los ejes que se eligen como referencia.
+                //
+                // Sin remapear, `getOrientation` mide el azimut sobre el eje Y del
+                // telefono (la "arriba" de la pantalla), que en vertical apunta al
+                // cielo: el resultado sale 90 grados desviado. La referencia
+                // correcta en vertical es la X del telefono (su ejederecho) y la
+                // Z (la normal de la pantalla, que es la que mira al conductor).
+                //
+                // Antes se pasaba `AXIS_X to AXIS_Z`, que parece un remapeo pero
+                // no lo es: la funcion de Android calcula `Z = Y xor X` y
+                // permuta las filas enteras, asi que con esos dos ejes la
+                // permutacion cae en la identidad y el mapa salia girado justo
+                // los 90 grados de los que se queja.
+                //
+                // El remapeo se hace aqui en vez de con
+                // `SensorManager.remapCoordinateSystem` porque esa funcion
+                // rechaza los ejes negativos (`AXIS_MINUS_X` es -1 y no pasa su
+                // comprobacion `X & 0x7C`), que hacen falta en las rotaciones de
+                // pantalla, y porque deja `outR` intacto cuando devuelve false:
+                // un fallo silencioso que hacia que en horizontal se siguiera
+                // leyendo la matriz del evento anterior.
+                val (ejeX, ejeY, signoX, signoY) = when (remapSegunPantalla()) {
+                    0 -> Ejes(
+                        SensorManager.AXIS_X, SensorManager.AXIS_Y, 1f, 1f)
+                    1 -> Ejes(
+                        SensorManager.AXIS_Y, SensorManager.AXIS_X, 1f, -1f)
+                    2 -> Ejes(
+                        SensorManager.AXIS_X, SensorManager.AXIS_Y, -1f, -1f)
+                    else -> Ejes(
+                        SensorManager.AXIS_Y, SensorManager.AXIS_X, -1f, 1f)
                 }
-                SensorManager.remapCoordinateSystem(matriz, ejes.first, ejes.second, matrizRemapeada)
+                remapParaAzimut(matriz, matrizRemapeada, ejeX, ejeY, signoX, signoY)
                 SensorManager.getOrientation(matrizRemapeada, orientacion)
 
-                // orientacion[0] es el azimut: 0 = norte, sentido horario.
+                // orientacion[0] es el azimut en RADIANES, 0 = norte y growing en
+                // sentido horario, que es justo lo que espera el `bearing` de
+                // MapLibre. Se convierte a grados al mandar.
                 val azimut = Math.toDegrees(orientacion[0].toDouble())
                 channel?.invokeMethod(
                     "onHeading",
@@ -507,6 +532,47 @@ class MainActivity : FlutterActivity() {
                 sm.registerListener(l, it, SensorManager.SENSOR_DELAY_GAME)
             }
         }
+    }
+
+    /** Par de ejes (y sus signos) con el que se remapea la matriz de rotacion. */
+    private data class Ejes(
+        val ejeX: Int,
+        val ejeY: Int,
+        val signoX: Float,
+        val signoY: Float,
+    )
+
+    /**
+     * Reordena [entrada] para que `getOrientation` mida el azimut sobre los ejes
+     * indicados.
+     *
+     * Es el mismo criterio que `SensorManager.remapCoordinateSystem`, pero
+     * admitiendo signos: pone la fila del eje X en la fila 0, la del eje Y en
+     * la 1, y calcula la tercera como el producto vectorial de las dos para que
+     * la matriz siga siendo ortonormal. Sin ese signo la matriz se sesga y el
+     * azimut sale peor que un simple desfase.
+     *
+     * Los indices siguen la convencion de `SensorManager`: AXIS_X=1,
+     * AXIS_Y=2, AXIS_Z=3, y la fila `eje` empieza en `eje * 3`.
+     */
+    private fun remapParaAzimut(
+        entrada: FloatArray,
+        salida: FloatArray,
+        ejeX: Int,
+        ejeY: Int,
+        signoX: Float,
+        signoY: Float,
+    ) {
+        for (i in 0..2) {
+            salida[i] = entrada[ejeX * 3 + i] * signoX
+            salida[3 + i] = entrada[ejeY * 3 + i] * signoY
+        }
+        // Fila 2 = producto vectorial de las filas 0 y 1.
+        val ax = salida[0]; val ay = salida[1]; val az = salida[2]
+        val bx = salida[3]; val by = salida[4]; val bz = salida[5]
+        salida[6] = ay * bz - az * by
+        salida[7] = az * bx - ax * bz
+        salida[8] = ax * by - ay * bx
     }
 
     /** Rotacion actual de la pantalla, para remapear los ejes del sensor. */
