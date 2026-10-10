@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from tkinter import ttk, messagebox
 
 from api_client import ApiError
-from ui_common import Tabla, money, boton
+from ui_common import Tabla, money, boton, consultar_en_hilo
 
 DIAS_SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
 
@@ -14,6 +14,8 @@ class TabViajes(ttk.Frame):
         super().__init__(master)
         self.app = app
         self.api = app.api
+        # `ventana` que espera `ui_common.consultar_en_hilo`.
+        self._consulta_en_curso = False
         self._build()
         self.after(200, self.cargar)
 
@@ -87,15 +89,18 @@ class TabViajes(ttk.Frame):
         except (TypeError, ValueError):
             dias = 7
 
-        self.app.status("Consultando viajes...")
-        self.update_idletasks()
-        try:
-            datos = self.api.viajes_diarios(dias=dias)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
-            return
+        consultar_en_hilo(
+            self,
+            lambda api: api.viajes_diarios(dias=dias),
+            lambda datos: self._pintar(datos, dias),
+            lambda e: self._fallo(e),
+            "Consultando viajes...")
 
+    def _fallo(self, e):
+        self.app.status("Error: %s" % e.mensaje, error=True)
+        messagebox.showerror("Error", str(e.mensaje))
+
+    def _pintar(self, datos, dias):
         filas = datos.get("dias", [])
         totales = datos.get("totales", {})
         hoy = str(date.today())

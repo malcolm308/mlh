@@ -4,7 +4,7 @@ from tkinter import ttk, messagebox, simpledialog
 
 from api_client import ApiError
 from documentos_window import VentanaDocumentos
-from ui_common import Tabla, money, boton, etiqueta_estado
+from ui_common import Tabla, money, boton, etiqueta_estado, consultar_en_hilo
 
 FILTROS = [("pendiente", "Solo pendientes"), ("aprobado", "Solo aprobados"),
            ("rechazado", "Solo rechazados"), ("", "Todos")]
@@ -15,6 +15,8 @@ class TabChoferes(ttk.Frame):
         super().__init__(master)
         self.app = app
         self.api = app.api
+        # `ventana` que espera `ui_common.consultar_en_hilo`.
+        self._consulta_en_curso = False
         self._build()
         self.after(200, self.cargar)
 
@@ -77,16 +79,20 @@ class TabChoferes(ttk.Frame):
 
     def cargar(self):
         self.api = self.app.api
-        self.app.status("Consultando choferes...")
-        self.update_idletasks()
-        try:
-            datos = self.api.choferes(estado=self._filtro_actual() or None,
-                                      q=self.var_buscar.get().strip() or None)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
-            return
+        estado = self._filtro_actual() or None
+        q = self.var_buscar.get().strip() or None
+        consultar_en_hilo(
+            self,
+            lambda api: api.choferes(estado=estado, q=q),
+            self._pintar,
+            lambda e: self._fallo(e),
+            "Consultando choferes...")
 
+    def _fallo(self, e):
+        self.app.status("Error: %s" % e.mensaje, error=True)
+        messagebox.showerror("Error", str(e.mensaje))
+
+    def _pintar(self, datos):
         self.tabla.limpiar()
         for c in datos.get("choferes", []):
             docs = c.get("documentos") or {}

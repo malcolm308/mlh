@@ -4,7 +4,7 @@ from datetime import datetime
 from tkinter import ttk, messagebox, simpledialog
 
 from api_client import ApiError
-from ui_common import Tabla, money, boton, PanelDesplazable
+from ui_common import Tabla, money, boton, PanelDesplazable, consultar_en_hilo
 
 METODOS = ["efectivo", "transferencia", "pasarela", "promocion", "ajuste"]
 
@@ -15,6 +15,8 @@ class TabBilletera(ttk.Frame):
         self.app = app
         self.api = app.api
         self.seleccionado = None
+        # `ventana` que espera `ui_common.consultar_en_hilo`.
+        self._consulta_en_curso = False
         self._build()
         self.after(200, self.cargar_movimientos)
 
@@ -132,14 +134,19 @@ class TabBilletera(ttk.Frame):
     # ---------------- datos ----------------
     def buscar(self):
         self.api = self.app.api
-        self.app.status("Buscando choferes...")
-        self.update_idletasks()
-        try:
-            res = self.api.choferes_busqueda(self.var_buscar.get().strip() or None)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
-            return
+        q = self.var_buscar.get().strip() or None
+        consultar_en_hilo(
+            self,
+            lambda api: api.choferes_busqueda(q),
+            self._pintar_busqueda,
+            lambda e: self._fallo_busqueda(e),
+            "Buscando choferes...")
+
+    def _fallo_busqueda(self, e):
+        self.app.status("Error: %s" % e.mensaje, error=True)
+        messagebox.showerror("Error", str(e.mensaje))
+
+    def _pintar_busqueda(self, res):
         self.tree_bus.delete(*self.tree_bus.get_children())
         for c in res:
             self.tree_bus.insert("", "end", iid=c["driver_id"],
@@ -174,18 +181,25 @@ class TabBilletera(ttk.Frame):
 
     def cargar_movimientos(self):
         self.api = self.app.api
-        self.app.status("Cargando movimientos...")
-        self.update_idletasks()
-        try:
-            movs = self.api.movimientos(
-                driver_id=None if self.var_todos.get()
-                else (self.seleccionado or {}).get("driver_id"),
-                limit=200)
-            resumen = self.api.resumen_billetera()
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            return
+        todos = self.var_todos.get()
+        driver_id = None if todos else (self.seleccionado or {}).get("driver_id")
 
+        def consulta(api):
+            # Son dos peticiones encadenadas a proposito, en el mismo hilo
+            # auxiliar: separarlas duplicaria la espera si el backend esta
+            # despertando, que es justo lo que se quiere evitar.
+            return (api.movimientos(driver_id=driver_id, limit=200),
+                    api.resumen_billetera())
+
+        consultar_en_hilo(
+            self, consulta, self._pintar, lambda e: self._fallo(e),
+            "Cargando movimientos...")
+
+    def _fallo(self, e):
+        self.app.status("Error: %s" % e.mensaje, error=True)
+
+    def _pintar(self, datos):
+        movs, resumen = datos
         nombres = {}
         driver_id = (self.seleccionado or {}).get("driver_id")
         if not self.var_todos.get() and driver_id:

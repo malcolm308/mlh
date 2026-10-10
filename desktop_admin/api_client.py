@@ -3,12 +3,18 @@
 Solo usa la libreria estandar (urllib), sin dependencias externas.
 """
 import json
+import socket
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 
-API_URL = "http://127.0.0.1:18000"
-TIMEOUT = 30
+from config import API_TIMEOUT, API_TIMEOUT_AVISO, API_URL
+
+# Se reexportan para que los modulos que ya hacian `from api_client import
+# API_URL` sigan funcionando sin tocarlos.
+TIMEOUT = API_TIMEOUT
+TIMEOUT_AVISO = API_TIMEOUT_AVISO
 
 
 class ApiError(Exception):
@@ -19,14 +25,38 @@ class ApiError(Exception):
 
 
 class ApiClient:
-    def __init__(self, base_url=API_URL, timeout=TIMEOUT):
+    def __init__(self, base_url=API_URL, timeout=TIMEOUT,
+                 timeout_aviso=TIMEOUT_AVISO):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.timeout_aviso = timeout_aviso
         self.token = None
         self.admin_email = None
+        # Se activa cuando una peticion pasa del tiempo de aviso sin responder:
+        # es la senal de que la instancia de Render esta despertando. La UI la
+        # lee para explicar la espera en vez de dejar al usuario mirando una
+        # ventana congelada.
+        self.desperando = False
 
     # ---------- internals ----------
     def _request(self, method, path, params=None, body=None):
+        self.desperando = False
+        # Aviso temprano: si en `timeout_aviso` segundos no hay respuesta, se
+        # da por hecho que Render esta encendiendo la instancia. El temporizador
+        # se cancela al terminar, sea cual sea el resultado.
+        watchdog = threading.Timer(self.timeout_aviso, self._marcar_desperando)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            return self._request_real(method, path, params, body)
+        finally:
+            watchdog.cancel()
+            self.desperando = False
+
+    def _marcar_desperando(self):
+        self.desperando = True
+
+    def _request_real(self, method, path, params=None, body=None):
         url = self.base_url + path
         if params:
             limpio = {k: v for k, v in params.items() if v not in (None, "")}
@@ -61,8 +91,19 @@ class ApiClient:
                 pass
             raise ApiError(str(detalle), status=e.code)
         except urllib.error.URLError as e:
+            # `URLError` envuelve tanto "no hay red" como "tardo demasiado".
+            # El texto distingue los dos casos porque la causa mas frecuente en
+            # produccion es la segunda: la instancia gratuita de Render
+            # despertandose.
+            razon = str(e.reason)
+            if isinstance(e.reason, socket.timeout) or "timed out" in razon.lower():
+                raise ApiError(
+                    "El servidor tardo demasiado en responder.\n\n"
+                    "El backend esta en un plan gratuito que se apaga tras 15 min "
+                    "sin uso: la primera peticion lo despierta y puede tardar "
+                    "30-60 s.\n\nIntenta de nuevo en un momento.")
             raise ApiError("No se pudo conectar con el servidor (%s).\n"
-                           "Verifica que el backend este corriendo." % e.reason)
+                           "Revisa la conexion a internet." % razon)
         except Exception as e:
             raise ApiError("Error inesperado: %s" % e)
 

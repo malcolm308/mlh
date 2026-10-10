@@ -1,10 +1,9 @@
 """Ventana de inicio de sesion del administrador."""
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from api_client import ApiClient, ApiError
-
-API_URL = "http://127.0.0.1:18000"
+from api_client import ApiClient, ApiError, API_URL
 
 
 class LoginWindow(tk.Toplevel):
@@ -12,6 +11,9 @@ class LoginWindow(tk.Toplevel):
         super().__init__(master)
         self.on_ok = on_ok
         self.api = ApiClient(API_URL)
+        self._hilo = None
+        self._error_entrando = None
+        self.var_estado = tk.StringVar(value="")
         self._build()
         self._centrar(400, 300)
         self.protocol("WM_DELETE_WINDOW", self._cancelar)
@@ -54,6 +56,11 @@ class LoginWindow(tk.Toplevel):
                                     relief="flat", pady=6)
         self.btn_entrar.pack(fill="x", pady=(14, 6), ipady=2)
 
+        self.lbl_estado = tk.Label(marco, textvariable=self.var_estado, bg="#1b2a3a",
+                                fg="#ffc107", font=("Segoe UI", 8),
+                                wraplength=330, justify="left")
+        self.lbl_estado.pack(pady=(12, 0))
+
         tk.Label(marco, text="Servidor: %s" % API_URL, bg="#1b2a3a", fg="#6b7d8f",
                  font=("Segoe UI", 8)).pack(pady=(10, 0))
 
@@ -70,8 +77,16 @@ class LoginWindow(tk.Toplevel):
         self.geometry("%dx%d+%d+%d" % (w, h, x, y))
 
     def _error(self, msg):
+        """Muestra el error debajo del boton.
+
+        Se empaqueta de nuevo antes de cada llamada: al inicio se ocultaba con
+        `pack_forget`, y si solo se actualizara el texto sin volver a
+        empaquetar, el mensaje apareceria en un sitio u otro segun cuantas
+        veces se hubiera escrito. `before` apunta al marco de los campos, que
+        es el mismo padre de esta etiqueta, asi que la coloca encima.
+        """
         self.lbl_error.config(text=msg)
-        self.lbl_error.pack(pady=(10, 0), before=self.ent_email.master.master)
+        self.lbl_error.pack(pady=(10, 0), before=self.lbl_estado)
 
     def _entrar(self):
         email = self.var_email.get().strip()
@@ -79,15 +94,44 @@ class LoginWindow(tk.Toplevel):
         if not email or not password:
             self._error("Escriba el email y la contrasena.")
             return
+
+        # La llamada va en un hilo aparte. Tkinter solo admite toques de su
+        # hilo principal, asi que este hilo no toca la ventana: solo avisa
+        # cuando `despertando` se activa y el resultado se recoge despues.
         self.btn_entrar.config(state="disabled", text="Entrando...")
-        self.update()
+        self.var_estado.set("Conectando con el servidor...")
+        self._hilo = threading.Thread(target=self._entrar_hilo,
+                                      args=(email, password), daemon=True)
+        self._hilo.start()
+        self._vigilar_entrada()
+
+    def _vigilar_entrada(self):
+        """Mientras el hilo trabaja, avisa si la instancia esta despertando.
+
+        Se llama cada 200 ms desde el hilo de Tkinter. Cuando la peticion lleva
+        mas del tiempo de aviso sin responder, el texto cambia para que el
+        administrador sepa que hay que esperar y no que el panel se cuelgo.
+        """
+        if not self._hilo.is_alive():
+            self.btn_entrar.config(state="normal", text="Entrar")
+            if self._error_entrando is not None:
+                self._error(str(self._error_entrando))
+                self._error_entrando = None
+            return
+        if self.api.desperando:
+            self.var_estado.set(
+                "El servidor esta despertando (plan gratuito de Render).\n"
+                "Puede tardar 30-60 segundos...")
+        self.after(200, self._vigilar_entrada)
+
+    def _entrar_hilo(self, email, password):
         try:
             self.api.login(email, password)
+            self._error_entrando = None
         except ApiError as e:
-            self.btn_entrar.config(state="normal", text="Entrar")
-            self._error(str(e.mensaje))
-            return
-        self.on_ok(self.api)
+            self._error_entrando = e
+        except Exception as e:
+            self._error_entrando = ApiError("Error inesperado: %s" % e)
 
     def _cancelar(self):
         self.master.destroy()

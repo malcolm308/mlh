@@ -1,6 +1,62 @@
 """Widgets compartidos por las pestanas del panel."""
+import threading
 import tkinter as tk
 from tkinter import ttk
+
+from api_client import ApiError
+
+
+def consultar_en_hilo(ventana, llamada, al_terminar, al_error,
+                      mensaje_espera="Consultando..."):
+    """Ejecuta una llamada al backend sin congelar la ventana.
+
+    Tkinter solo admite cambios de widgets desde su hilo principal, asi que
+    aqui el reparto es estricto: el hilo auxiliar solo hace la llamada y deja
+    el resultado (o el error) en una caja; el hilo de Tkinter la recoge y es el
+    unico que pinta.
+
+    Sin esto, abrir una pestana con el backend dormido dejaba la ventana
+    entera colgada 30-60 s y Windows la marcaba como "no responde".
+
+    * `llamada`: recibe el cliente y devuelve el resultado de la consulta.
+    * `al_terminar(resultado)`: se ejecuta en el hilo principal, sin errores.
+    * `al_error(ApiError)`: idem, para el fallo.
+    """
+    api = ventana.api
+    caja = {}
+
+    def trabajo():
+        try:
+            caja["ok"] = llamada(api)
+        except ApiError as e:
+            caja["error"] = e
+        except Exception as e:
+            caja["error"] = ApiError("Error inesperado: %s" % e)
+        finally:
+            caja["listo"] = True
+
+    hilo = threading.Thread(target=trabajo, daemon=True)
+    caja["hilo"] = hilo
+    if ventana.app is not None:
+        ventana.app.status(mensaje_espera)
+    ventana.update_idletasks()
+    hilo.start()
+
+    def vigilar():
+        if not caja.get("listo"):
+            if api.desperando and ventana.app is not None:
+                ventana.app.status(
+                    "El servidor esta despertando (plan gratuito de Render)...")
+            ventana.after(200, vigilar)
+            return
+        ventana._consulta_en_curso = False
+        if "error" in caja:
+            al_error(caja["error"])
+        else:
+            al_terminar(caja.get("ok"))
+
+    ventana._consulta_en_curso = True
+    ventana.after(200, vigilar)
 
 
 def money(v):
