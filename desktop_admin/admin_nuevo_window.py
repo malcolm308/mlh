@@ -231,10 +231,15 @@ class VentanaAltaAdmin(tk.Toplevel):
         creado = self._creado or {}
         nombre = creado.get("nombre", "")
         email = creado.get("email", "")
+        # El `parent` es lo que ata el dialogo a esta ventana. Sin el, Windows
+        # puede abrirlo detras de la ventana principal y parece que el boton no
+        # hace nada: el usuario pulsa "Crear administrador", no ve nada y vuelve
+        # a pulsar. Pasa siempre `self`.
         if messagebox.askokcancel(
                 "Administrador creado",
                 "Se creo la cuenta de %s (%s).\n\n"
-                "Quiere cerrar esta ventana?" % (nombre, email)):
+                "Quiere cerrar esta ventana?" % (nombre, email),
+                parent=self):
             self.destroy()
         else:
             # Dejar la ventana abierta para crear otra cuenta sin reentrar:
@@ -244,4 +249,5 @@ class VentanaAltaAdmin(tk.Toplevel):
                 var.set("")
             self.var_estado.set("")
             self._mostrar_error("")
+            self.btn_crear.config(state="normal", text="Crear administrador")
             self.ent_nombre.focus_set()
