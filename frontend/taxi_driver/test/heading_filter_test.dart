@@ -185,6 +185,61 @@ void main() {
     });
   });
 
+  group('Giro con el sensor a 50 Hz', () {
+    // Regresion del fallo real: en recta el mapa giraba bien, pero al doblar
+    // no seguia el giro. La causa era que todas las muestras del sensor de un
+    // mismo segundo llegaban con el sello de tiempo del fix GPS, asi que el
+    // buffer no podia ordenarlas y la media circular mezclaba rumbos viejos
+    // con los nuevos.
+
+    test('un giro se sigue aunque las muestras lleguen desordenadas', () {
+      final b = BufferCircularRumbo();
+      // Se llena el buffer con rumbo norte (0) avanzando en el tiempo.
+      for (var i = 0; i < 5; i++) {
+        b.add(rumbo: 0.0, velocidadMps: 12.0, tiempoMs: i * 20);
+      }
+      // Ahora el coche gira a este (90). Las muestras se agregan con el
+      // tiempo DESORDENADO a proposito, como pasaria si el sello de tiempo
+      // fuera a saltos.
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 160);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 100);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 180);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 120);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 140);
+
+      final r = b.rumboFiltrado()!;
+      // Tras el giro el rumbo debe acercarse a este (90), no quedarse a medio
+      // camino entre norte y este, que es lo que pasaba al fallar.
+      expect(r, greaterThan(70.0));
+    });
+
+    test('las muestras se devuelven ordenadas por tiempo', () {
+      final b = BufferCircularRumbo();
+      b.add(rumbo: 10.0, velocidadMps: 5.0, tiempoMs: 500);
+      b.add(rumbo: 20.0, velocidadMps: 5.0, tiempoMs: 100);
+      b.add(rumbo: 30.0, velocidadMps: 5.0, tiempoMs: 300);
+
+      final tiempos = b.muestras.map((m) => m.tiempoMs).toList();
+      for (var i = 1; i < tiempos.length; i++) {
+        expect(tiempos[i], greaterThanOrEqualTo(tiempos[i - 1]));
+      }
+    });
+
+    test('tras girar 180 el filtro no se queda en el rumbo viejo', () {
+      final b = BufferCircularRumbo();
+      for (var i = 0; i < 5; i++) {
+        b.add(rumbo: 0.0, velocidadMps: 12.0, tiempoMs: i * 20);
+      }
+      // Vuelta completa: el rumbo pasa de 0 a 180.
+      for (var i = 5; i < 10; i++) {
+        b.add(rumbo: 180.0, velocidadMps: 12.0, tiempoMs: i * 20);
+      }
+      final r = b.rumboFiltrado()!;
+      // No puede quedarse pegado al norte: ha de moverse hacia el sur.
+      expect(r, greaterThan(90.0));
+    });
+  });
+
   group('Rumbo retenido con vehiculo parado', () {
     test('parado devuelve el ultimo rumbo estable, no ruido', () {
       final b = BufferCircularRumbo();

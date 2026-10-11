@@ -147,6 +147,13 @@ class BufferCircularRumbo {
   }
 
   /// Las muestras en orden cronologico, de mas antigua a mas reciente.
+  ///
+  /// El buffer es circular, asi que el orden de la consulta depende del
+  /// `tiempoMs`, no del indice: con el sensor a 50 Hz y el GPS a 1 Hz llegan
+  /// muestras con sellos de tiempo distintos, y si se confiaran en el orden del
+  /// buffer las mas recientes podrian ir antes que las antiguas. Sin esto, al
+  /// girar se promediaban rumbos viejos con los nuevos y la media circular
+  /// daba un valor intermedio que no era el rumbo real en ningun momento.
   List<MuestraRumbo> get muestras {
     final out = <MuestraRumbo>[];
     for (var k = 0; k < _cantidad; k++) {
@@ -159,6 +166,13 @@ class BufferCircularRumbo {
         tiempoMs: _tiempos[i],
       ));
     }
+    // Orden cronologico real: de mas antigua a mas reciente. El desempate por
+    // rumbo mantiene el orden estable entre muestras del mismo milisegundo,
+    // que son las que llegan del sensor a distinta frecuencia.
+    out.sort((a, b) {
+      final c = a.tiempoMs.compareTo(b.tiempoMs);
+      return c != 0 ? c : a.rumbo.compareTo(b.rumbo);
+    });
     return out;
   }
 

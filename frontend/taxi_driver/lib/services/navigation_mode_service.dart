@@ -510,10 +510,17 @@ void activar(String? status, {LatLng? posicionConocida}) {
     // El sensor llega a ~50 Hz y el GPS a 1 Hz. Se alimenta el buffer con la
     // velocidad que se conoce del ultimo fix, de modo que el filtro de
     // aceleracion sigue teniendo sentido.
+    //
+    // El sello de tiempo es el del propio reloj del servicio, NO el del ultimo
+    // fix GPS. Reusar el del fix metia las ~50 muestras de un mismo segundo con
+    // la misma hora, y el filtro, que ordena y compara por deltas, perdia la
+    // cronologia: al girar se mezclaban rumbos viejos con los nuevos y la
+    // media circular no convergia, que es justo cuando mas falta es que el mapa
+    // gire con el coche.
     _buffer.add(
       rumbo: grados,
       velocidadMps: (_fix?.speedMps ?? 0.0),
-      tiempoMs: _ultimoMonotonoMs ?? _ahoraMs,
+      tiempoMs: _ahoraMs,
     );
     if (_modo == ModoNavegacion.siguiendo) {
       _recalcularObjetivo();
@@ -542,10 +549,12 @@ void activar(String? status, {LatLng? posicionConocida}) {
   ///
   ///  * por encima de [_velocidadMovimientoIdle] (3 km/h) se entra al modo
   ///    seguimiento: tilt 45 y heading-up, igual que en una carrera;
-  ///  * por debajo, se espera [_retardoApagarIdle] (5 s) antes de apagar, para
+  ///  * por debajo, se espera [_retardoApagarIdle] (30 s) antes de apagar, para
   ///    que un semaforo corto no desactive la vista.
   ///
-  /// Con viaje activo este metodo no se llama: ahi el modo lo gobierna la fase.
+  /// Con viaje activo este metodo NO se llama: ahi manda la fase (ver
+  /// [tiltObjetivo] y [modoConViajeActivo]), y el mapa se queda inclinado y
+  /// orientado aunque el vehiculo se detenga por completo.
   void _reevaluarMovimientoIdle(GeoFix fix) {
     final v = fix.speedMps ?? 0.0;
     final ahora = _ahoraMs;
@@ -670,16 +679,22 @@ final v = _buffer.velocidadFiltrada();
     // es el peor de los dos mundos: se ve el giro y encima el mapa queda
     // torcido. Google Maps mantiene tilt y rumbo juntos, y es lo coherente.
     //
-    // El umbral de [ApiConfig.velocidadMinimaHeading] (0.7 m/s) sigue
-    // mandando: por debajo de unos 2.5 km/h el sensor de rumbo es ruido, y ahi
-    // si se congela la ultima orientacion estable, que es lo que ya hacia el
-    // filtro de heading.
+    // Parado (por debajo de [ApiConfig.velocidadMinimaHeading], unos
+    // 2.5 km/h) el mapa CONGELA la ultima orientacion estable en vez de
+    // apagarse: en un semaforo el chofer quiere seguir viendo hacia donde
+    // avanza, no que el mapa le salte al norte.
+    //
+    // Y se congela lo que devuelve `r`, que con el vehiculo parado es el
+    // ultimo rumbo *en marcha* retenido por el filtro (heading_filter.dart),
+    // NO el `_rumboGps`. Con el vehiculo quieto, el GPS da un rumbo
+    // cualquiera segun donde casualmente se quede el error de posicion, y
+    // usarlo ahi hacia que el mapa girase solo mientras estava parado. El
+    // sensor, en cambio, sigue leyendo la orientacion real del coche.
     if (v < ApiConfig.velocidadMinimaHeading) {
-      _rotacionObjetivo = _rumboGps != null
-          ? normalizarGrados(_rumboGps!)
-          : _rotacionActual ?? 0.0;
+      _rotacionObjetivo = normalizarGrados(
+        r ?? _rotacionActual ?? _rumboGps ?? 0.0);
     } else {
-      _rotacionObjetivo = normalizarGrados(r ?? 0.0);
+      _rotacionObjetivo = normalizarGrados(r ?? _rumboGps ?? 0.0);
     }
 
     _centroObjetivo = _pos;
