@@ -710,7 +710,15 @@ final v = _buffer.velocidadFiltrada();
     // Traza de la camara: una linea cada vez que el objetivo cambia de verdad.
     // Es lo que dice si el heading-up tiene datos con los que trabajar o si se
     // queda clavado en el norte porque nunca llega un rumbo.
+    //
+    // La clave lleva Tambien `actual`. Antes no, y era justo lo que hacia
+    // imposible juzgar la convergencia: la traza se escribe desde
+    // [_recalcularObjetivo], que corre ANTES de que `_alTic` interpole, asi que
+    // la primera linea sale siempre con `actual=null` y, como la clave no cambiaba
+    // al pasar de null a un numero, no se volvia a escribir. El log se quedaba
+    // mudo justo en la transicion que habia que mirar.
     final clave = '${_rotacionObjetivo?.toStringAsFixed(0)}|'
+        '${_rotacionActual?.toStringAsFixed(0)}|'
         '${_tiltActual.toStringAsFixed(0)}|${z.toStringAsFixed(1)}';
     if (clave != _trazaCamara) {
       _trazaCamara = clave;
