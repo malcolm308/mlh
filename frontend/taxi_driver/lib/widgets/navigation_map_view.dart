@@ -214,21 +214,22 @@ _aplicarCamara();
 
 /// Coloca el vehiculo en el tercio inferior de la pantalla.
   ///
-  /// MapLibre ancla el objetivo de la camara en el CENTRO del rectangulo que
-  /// queda tras descontar el padding. O sea:
+  /// El padding de MapLibre NO centra el objetivo en el rectangulo que queda
+  /// libre: lo DESPLAZA desde el centro de la pantalla, y el sentido lo decide
+  /// la arista, no el lado contrario:
   ///
-  ///   - `padding.bottom` deja un rectangulo [0, H - bottom] y su centro queda
-  ///     en la mitad de eso, es decir ARRIBA. Con `bottom: 33 %` el vehiculo
-  ///     aparecia al 33 % de la pantalla, justo en el tercio SUPERIOR: se veia
-  ///     mucho mapa detras y casi ninguno por delante, al reves de lo que hace
-  ///     falta conduciendo.
-  ///   - `padding.top` deja [top, H] y su centro queda ABAJO. Es lo que mueve el
-  ///     vehiculo hacia el tercio inferior.
+  ///   - `padding.top` sube el objetivo.
+  ///   - `padding.bottom` lo baja.
   ///
-  /// El valor no llega al 68 % como en principio porque el panel del viaje se
-  /// lleva el tercio de abajo: con el vehiculo al 68 % quedaba justo detras del
-  /// panel, tapado. Al 57 % queda en la parte baja del mapa que se ve, con la
-  /// calle por delante por encima y sin que nada lo tape.
+  /// Medido en el movil con `top: 0.14` la flecha salio al 36.4 % del alto,
+  /// que es exactamente `50 % - 14 %`. Esa medicion es la que fija este
+  /// comentario: antes se creia que el objetivo se centraba en el hueco
+  /// restante y se uso `top`, con lo que el vehiculo acababa en el tercio
+  /// superior, justo al reves de lo pedido.
+  ///
+  /// El destino es el 64 %: el tercio inferior, pero con margen antes del panel
+  /// del viaje, que empieza hacia el 70 %. A mas bajo, la flecha queda detras
+  /// del panel.
   void _aplicarPaddingConduccion() {
     final ctl = _controlador;
     if (ctl == null) return;
@@ -239,11 +240,14 @@ _aplicarCamara();
     // es la misma.
     final alto = MediaQuery.sizeOf(context).height;
     if (alto <= 0) return;
-    ctl.setPadding(top: alto * 0.14);
+    ctl.setPadding(top: alto * 0.28);
   }
 
   /// `true` cuando el padding de conduccion ya se aplico una vez.
   bool _paddingAplicado = false;
+
+  /// Zoom con el que se construyeron los vertices de la flecha por ultima vez.
+  double? _zoomEnviado;
 
   /// Flecha del vehiculo como poligono GeoJSON.
   ///
@@ -520,7 +524,7 @@ _puntosRutaEnviados = widget.ruta.length;
   }
 
 /// Envia la posicion del vehiculo si ha cambiado de verdad.
-void _aplicarVehiculo() {
+  void _aplicarVehiculo() {
     final ctl = _controlador;
     if (ctl == null) return;
     final pos = widget.posicionVehiculo;
@@ -531,16 +535,26 @@ void _aplicarVehiculo() {
     // El umbral esta en la posicion porque es la que mas salta. El rumbo se
     // compara aparte: gira con el vehiculo y en parado se queda quieto, asi
     // que no genera ruido, pero si hay que reenviarlo cuando cambia.
+    //
+    // El ZOOM tambien cuenta. La flecha no es un icono de tamano fijo: es un
+    // poligono cuyos vertices se calculan en metros a partir de los metros por
+    // pixel del zoom. Si solo se reenvia cuando se mueve el vehiculo, con el
+    // coche parado el zoom cambia de fase y la flecha se queda con la geometria
+    // del zoom viejo: medido en el movil, se quedaba con el tamano del zoom 14
+    // y a 17 salia de 188 px de ancho en vez de unos 7, que es 26 veces mas.
     final sinCambios = pos == null && prev == null ||
         (pos != null &&
             prev != null &&
             (prev.latitude - pos.latitude).abs() < 1e-5 &&
             (prev.longitude - pos.longitude).abs() < 1e-5 &&
-            (prevRumbo - rumbo).abs() < 1.0);
+            (prevRumbo - rumbo).abs() < 1.0 &&
+            (_zoomEnviado == null ||
+                (_zoomEnviado! - widget.zoom).abs() < 0.01));
     if (sinCambios) return;
 
     _vehiculoEnviado = pos;
     _rumboEnviado = rumbo;
+    _zoomEnviado = widget.zoom;
     // La flecha es geometria calculada en metros a partir del zoom, asi que
     // tambien hay que reenviarla cuando el zoom cambia, no solo cuando se mueve
     // el vehiculo. Sin esto se quedaba con el tamano del zoom con el que se
