@@ -282,7 +282,7 @@ _aplicarCamara();
     // una flecha de 46 px medida en el centro sale de mas de 300 px en el tercio
     // inferior. El recorte de 150 m es el freno: sin el, en un zoom bajo la
     // flecha se comia media pantalla.
-    final largo = (metrosPorPixel * 30).clamp(4.0, 150.0);
+    final largo = (metrosPorPixel * 12).clamp(1.6, 60.0);
     final ancho = largo * 0.78;
 
     final rad = rumbo * math.pi / 180.0;
@@ -442,18 +442,20 @@ _aplicarCamara();
         _idVehiculo,
         _capaVehiculoHalo,
         CircleLayerProperties(
-          // Halo blanco detras de la flecha: la separa del asfalto y de la
-          // ruta azul, que si no se pierde cuando ambas coinciden.
+          // Halo blanco detras de la flecha: la separa del asfalto y de la ruta azul,
+          // que si no se pierde cuando ambas pasan por el mismo punto. Se
+          // escalo con la flecha (un 60 % menos) para que no acabe siendo una
+          // bola blanca con un triangulo pequeno dentro.
           circleRadius: [
             'interpolate',
             ['exponential', 1.6],
             ['zoom'],
             14,
-            9.0,
+            3.6,
             16,
-            13.0,
+            5.2,
             18,
-            18.0,
+            7.2,
           ],
           circleColor: '#ffffff',
           circleOpacity: 0.92,
