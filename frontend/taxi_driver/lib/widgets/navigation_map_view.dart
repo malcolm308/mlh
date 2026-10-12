@@ -223,11 +223,12 @@ _aplicarCamara();
   ///     mucho mapa detras y casi ninguno por delante, al reves de lo que hace
   ///     falta conduciendo.
   ///   - `padding.top` deja [top, H] y su centro queda ABAJO. Es lo que mueve el
-  ///     vehiculo al tercio inferior y deja la calle por la que se avanza por
-  ///     encima, que es como se ve en las apps de navegacion.
+  ///     vehiculo hacia el tercio inferior.
   ///
-  /// Con `top: 36 %` el centro del rectangulo util cae al 68 % del alto: la misma
-  /// proporcion de la referencia, y con margen de sobra para el panel del viaje.
+  /// El valor no llega al 68 % como en principio porque el panel del viaje se
+  /// lleva el tercio de abajo: con el vehiculo al 68 % quedaba justo detras del
+  /// panel, tapado. Al 57 % queda en la parte baja del mapa que se ve, con la
+  /// calle por delante por encima y sin que nada lo tape.
   void _aplicarPaddingConduccion() {
     final ctl = _controlador;
     if (ctl == null) return;
@@ -238,11 +239,97 @@ _aplicarCamara();
     // es la misma.
     final alto = MediaQuery.sizeOf(context).height;
     if (alto <= 0) return;
-    ctl.setPadding(top: alto * 0.36);
+    ctl.setPadding(top: alto * 0.14);
   }
 
   /// `true` cuando el padding de conduccion ya se aplico una vez.
   bool _paddingAplicado = false;
+
+  /// Flecha del vehiculo como poligono GeoJSON.
+  ///
+  /// Se construye en coordenadas geograficas a partir de la posicion, el rumbo
+  /// y el zoom, y se pinta con un `FillLayer`, que es la misma primitiva que ya
+  /// usan la ruta y el halo (y que si dibujan).
+  ///
+  /// El tamano se fija en PIXELES DE PANTALLA y se traduce a metros con los
+  /// metros por pixel del zoom actual. Asi la flecha mide lo mismo de cerca que
+  /// de lejos, que es lo que se ve en las apps de navegacion: el simbolo no
+  /// crece con el zoom, lo que lo haria desaparecer en cuanto se aleja un poco.
+  ///
+  /// Marco local de la figura: `x` hacia delante segun el rumbo, `y` hacia la
+  /// derecha. Es un dardo: punta al frente, hombros anchos y una base estrecha,
+  /// que es la silueta de las apps de referencia.
+  static Map<String, dynamic> _flechaGeoJson(
+    LatLng? pos,
+    double rumbo,
+    double zoom,
+  ) {
+    if (pos == null) {
+      return {'type': 'FeatureCollection', 'features': <dynamic>[]};
+    }
+
+    final latRad = pos.latitude * math.pi / 180.0;
+    // Metros por pixel en esta latitud y este zoom. El coseno de la latitud es
+    // lo que estira el eje este-oeste: sin el, a 23 grados la flecha sale
+    // achaparrada.
+    final metrosPorPixel =
+        156543.03392 * math.cos(latRad) / math.pow(2.0, zoom);
+    // Delante de la punta hasta la base.
+    //
+    // El tamano se fija en pixeles DE PANTALLA y no en metros fijos. Con la
+    // camara inclinada el suelo que hay por debajo del punto de mira esta mucho
+    // mas cerca que el del centro, y ahi un metro por pixel vale bastante menos:
+    // una flecha de 46 px medida en el centro sale de mas de 300 px en el tercio
+    // inferior. El recorte de 150 m es el freno: sin el, en un zoom bajo la
+    // flecha se comia media pantalla.
+    final largo = (metrosPorPixel * 30).clamp(4.0, 150.0);
+    final ancho = largo * 0.78;
+
+    final rad = rumbo * math.pi / 180.0;
+    // Ejes locales girados al rumbo: `adelante` y `derecha`.
+    final ax = math.sin(rad);
+    final ay = math.cos(rad);
+    final dx = math.cos(rad);
+    final dy = -math.sin(rad);
+
+    // Un grado de longitud vale menos metros que uno de latitud, y cada vez
+    // menos al alejarse del ecuador.
+    final metrosPorGradoLng = 111320.0 * math.cos(latRad).abs();
+    final metrosPorGradoLat = 110574.0;
+
+    List<double> punto(double adelante, double derecha) {
+      final este = ax * adelante + dx * derecha;
+      final norte = ay * adelante + dy * derecha;
+      return <double>[
+        pos.longitude + este / metrosPorGradoLng,
+        pos.latitude + norte / metrosPorGradoLat,
+      ];
+    }
+
+    // Silueta del dardo, en sentido horario empezando por la punta.
+    final anillo = <List<double>>[
+      punto(largo, 0.0),
+      punto(largo * -0.10, ancho / 2),
+      punto(largo * -0.55, ancho * 0.34),
+      punto(largo * -0.55, -ancho * 0.34),
+      punto(largo * -0.10, -ancho / 2),
+    ];
+    anillo.add(anillo.first);
+
+    return {
+      'type': 'FeatureCollection',
+      'features': <dynamic>[
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Polygon',
+            'coordinates': <List<List<double>>>[anillo],
+          },
+          'properties': <String, dynamic>{},
+        },
+      ],
+    };
+  }
 
   /// Anade sources y layers al estilo recien cargado.
   ///
@@ -330,11 +417,20 @@ _aplicarCamara();
 
 // Flecha de ubicacion del chofer.
       //
-      // Se cambia de `SymbolLayer` a `CircleLayer` (N4): se reemplaza el
-      // chevron por un punto circular, manteniendo la capa encima de la ruta y
-      // sin romper navegacion ni heading-up. El rumbo se sigue gestionando en el
-      // modo navegacion (no se pinta con iconRotate, pero el seguimiento del mapa
-      // conserva heading-up).
+      // Se dibuja como POLIGONO en coordenadas geograficas, no como icono ni
+      // como glifo. Los dos caminos anteriores fallaron en silencio:
+      //
+      //  * `text-field: '▲'` depende de la pila de fuentes que declara el
+      //    servidor de tiles. Si ese caracter no esta, MapLibre no dibuja nada
+      //    y la capa se crea sin error.
+      //  * `addImage` + `icon-image` tampoco llego a pintarse, con el halo
+      //    dibujandose bien al lado.
+      //
+      // Un `FillLayer` sobre un poligono calculado aqui no depende ni del
+      // servidor de tiles ni del registro de imagenes: es la misma primitiva que
+      // ya usan la ruta y el halo, que si dibujan. Ademas el tamano lo controlo
+      // yo en metros, de modo que la flecha mide lo mismo en pantalla a
+      // cualquier zoom.
       await ctl.addGeoJsonSource(
         _idVehiculo,
         _vehiculoGeoJson(
@@ -365,48 +461,36 @@ _aplicarCamara();
         belowLayerId: 'nombres-carretera',
       );
 
-      await ctl.addSymbolLayer(
-        _idVehiculo,
+await ctl.addGeoJsonSource(
+        _idFlecha,
+        _flechaGeoJson(
+          widget.posicionVehiculo,
+          widget.rumboVehiculo ?? 0.0,
+          widget.zoom,
+        ),
+      );
+      await ctl.addFillLayer(
+        _idFlecha,
         _capaVehiculo,
-        SymbolLayerProperties(
-          // Glifo de triangulo relleno, apuntando al norte por defecto.
-          // Un `text-field` no necesita asset ni registro de imagen: el motor lo
-          // resuelve con la fuente por defecto del estilo, asi que no hay nada
-          // que sincronizar con el servidor de tiles.
-          textField: '▲',
-          textSize: [
-            'interpolate',
-            ['exponential', 1.6],
-            ['zoom'],
-            14,
-            14.0,
-            16,
-            21.0,
-            18,
-            29.0,
-          ],
-          textColor: '#1A73E8',
-          // `map` = el glifo se inclina con el mapa. Con `viewport` la flecha
-          // queda siempre plana en pantalla y en un mapa en 3D parece un
-          // recorte pegado encima, que es justo lo que no queremos.
-          textRotationAlignment: 'map',
-          textPitchAlignment: 'map',
-          // El rumbo va como propiedad del Feature ([_vehiculoGeoJson]), asi que
-          // girar la flecha cuesta lo mismo que moverla.
-          textRotate: ['get', 'bearing'],
-          // El glifo se dibuja desde su linea base, no desde su centro. Sin este
-          // desplazamiento la punta queda a la altura del vehiculo y la flecha
-          // parece caida hacia atras.
-          textOffset: [0, 0.28],
-          textAllowOverlap: true,
-          textIgnorePlacement: true,
+        FillLayerProperties(
+          fillColor: '#1A73E8',
+          // El contorno blanco es lo que separa la flecha del asfalto y de la
+          // ruta azul, que si no se pierde cuando ambas pasan por el mismo punto.
+          fillOutlineColor: '#ffffff',
+          fillOpacity: 0.95,
         ),
         belowLayerId: 'nombres-carretera',
       );
-    } catch (_) {
+    } catch (e) {
       // Si el estilo se recarga mientras se anaden las capas, la excepcion es
       // esperable: se pierde parte del grafico, pero la app no cae. Lo
       // imprescindible (el mapa) ya esta.
+      //
+      // Se registra igual: con `catch (_)` silencioso, una capa que no se puede
+      // crear por un motivo real (una imagen que no se encontro, un id repetido)
+      // se confundia con un estilo que se recargo, y se perdia el vehiculo sin
+      // dejar rastro. Asi el fallo se ve en el log.
+      debugPrint('[MAPA] capas no completas: $e');
       return;
     }
 
@@ -450,6 +534,34 @@ void _aplicarVehiculo() {
     _vehiculoEnviado = pos;
     _rumboEnviado = rumbo;
     ctl.setGeoJsonSource(_idVehiculo, _vehiculoGeoJson(pos, rumbo));
+    // La flecha es geometria calculada en metros a partir del zoom, asi que
+    // tambien hay que reenviarla cuando el zoom cambia, no solo cuando se mueve
+    // el vehiculo. Sin esto se quedaba con el tamano del zoom con el que se
+    // creo al entrar en modo navegacion.
+    final geo = _flechaGeoJson(pos, rumbo, widget.zoom);
+    ctl.setGeoJsonSource(_idFlecha, geo);
+    // El ancho del poligono en grados es la medida util para comparar con lo
+    // que se ve en pantalla: el metraje se deforma con la inclinacion.
+    debugPrint('[MAPA] flecha z=${widget.zoom.toStringAsFixed(1)} '
+        'bearing=${rumbo.toStringAsFixed(0)} '
+        'anchoGrados=${_anchoPoligono(geo)}');
+  }
+
+  /// Ancho en grados de longitud del poligono, para diagnostics.
+  static String _anchoPoligono(Map<String, dynamic> geo) {
+    final feats = geo['features'] as List<dynamic>?;
+    if (feats == null || feats.isEmpty) return 'vacia';
+    final anillo =
+        ((feats.first as Map<String, dynamic>)['geometry']
+                as Map<String, dynamic>)['coordinates'][0] as List<dynamic>;
+    var min = double.infinity;
+    var max = -double.infinity;
+    for (final p in anillo) {
+      final lng = (p as List<dynamic>)[0] as double;
+      if (lng < min) min = lng;
+      if (lng > max) max = lng;
+    }
+    return (max - min).toStringAsFixed(6);
   }
 
   /// GeoJSON de un unico punto: la posicion del vehiculo con su rumbo.
@@ -507,6 +619,10 @@ void _aplicarVehiculo() {
   static const String _capaRuta = 'taxi-ruta-linea';
   static const String _idVehiculo = 'taxi-vehiculo';
   static const String _capaVehiculo = 'taxi-vehiculo-capa';
+
+  /// Source propio de la flecha. Va separado del punto porque son geometrias
+  /// distintas (punto frente a poligono) y se calculan por caminos distintos.
+  static const String _idFlecha = 'taxi-flecha';
 
   /// Halo blanco bajo la flecha. Va en una capa aparte porque un `CircleLayer` y
   /// un `SymbolLayer` no pueden compartir nombre aunque vinieran del mismo
