@@ -1,4 +1,4 @@
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -257,13 +257,13 @@ _aplicarCamara();
   /// crece con el zoom, lo que lo haria desaparecer en cuanto se aleja un poco.
   ///
   /// Marco local de la figura: `x` hacia delante segun el rumbo, `y` hacia la
-  /// derecha. Es un dardo: punta al frente, hombros anchos y una base estrecha,
-  /// que es la silueta de las apps de referencia.
-  static Map<String, dynamic> _flechaGeoJson(
+  /// derecha.
+static Map<String, dynamic> _flechaGeoJson(
     LatLng? pos,
     double rumbo,
-    double zoom,
-  ) {
+    double zoom, {
+    double escala = 1.0,
+  }) {
     if (pos == null) {
       return {'type': 'FeatureCollection', 'features': <dynamic>[]};
     }
@@ -274,16 +274,24 @@ _aplicarCamara();
     // achaparrada.
     final metrosPorPixel =
         156543.03392 * math.cos(latRad) / math.pow(2.0, zoom);
-    // Delante de la punta hasta la base.
+    // Alto total de la figura, de la punta a la base.
     //
     // El tamano se fija en pixeles DE PANTALLA y no en metros fijos. Con la
     // camara inclinada el suelo que hay por debajo del punto de mira esta mucho
     // mas cerca que el del centro, y ahi un metro por pixel vale bastante menos:
-    // una flecha de 46 px medida en el centro sale de mas de 300 px en el tercio
-    // inferior. El recorte de 150 m es el freno: sin el, en un zoom bajo la
-    // flecha se comia media pantalla.
-    final largo = (metrosPorPixel * 12).clamp(1.6, 60.0);
-    final ancho = largo * 0.78;
+    // una flecha medida en el centro sale de mas del doble abajo. El recorte es
+    // el freno: sin el, en un zoom bajo la flecha se comia media pantalla.
+    //
+    // `escala` multiplica el resultado y es lo que dibuja el borde: el mismo
+    // poligono un poco mayor, en blanco, debajo del azul.
+    final alto = (metrosPorPixel * 7.2 * escala).clamp(1.0, 40.0);
+
+    // Proporciones medidas sobre la silueta de referencia. En ese dibujo la
+    // base es tan ancha como el alto (1.005) y la muesca sube un 28 % desde
+    // la base, que es lo que hace que se lea como una flecha y no como un
+    // triángulo.
+    final mediaBase = alto * 0.5025;
+    final muesca = alto * 0.28;
 
     final rad = rumbo * math.pi / 180.0;
     // Ejes locales girados al rumbo: `adelante` y `derecha`.
@@ -306,13 +314,20 @@ _aplicarCamara();
       ];
     }
 
-    // Silueta del dardo, en sentido horario empezando por la punta.
+    // Silueta de la referencia: chevron de cuatro vertices con la base
+    // CONCAVA. Es lo que la diferencia de un simple triangulo: la muesca
+    // central hace que se lea como "voy hacia ahi" y no como "estoy ahi".
+    //
+    // El vertice no se pone en la punta sino a un 55 % del alto: el vehiculo
+    // queda bajo el centro de masa de la figura. Asi, al pintar el borde
+    // blanco con la misma figura un 45 % mayor, el escalado separa los cuatro
+    // vertices por igual. Con la punta en el origen, el borde no se separaria
+    // de ella y la flecha quedaria con el punta sin contornear.
     final anillo = <List<double>>[
-      punto(largo, 0.0),
-      punto(largo * -0.10, ancho / 2),
-      punto(largo * -0.55, ancho * 0.34),
-      punto(largo * -0.55, -ancho * 0.34),
-      punto(largo * -0.10, -ancho / 2),
+      punto(alto * 0.55, 0.0), // punta, al frente
+      punto(-alto * 0.45, mediaBase), // punta trasera derecha
+      punto(-alto * 0.45 + muesca, 0.0), // muesca, concave
+      punto(-alto * 0.45, -mediaBase), // punta trasera izquierda
     ];
     anillo.add(anillo.first);
 
@@ -420,7 +435,7 @@ _aplicarCamara();
       // Se dibuja como POLIGONO en coordenadas geograficas, no como icono ni
       // como glifo. Los dos caminos anteriores fallaron en silencio:
       //
-      //  * `text-field: '▲'` depende de la pila de fuentes que declara el
+      //  * `text-field: 'â–²'` depende de la pila de fuentes que declara el
       //    servidor de tiles. Si ese caracter no esta, MapLibre no dibuja nada
       //    y la capa se crea sin error.
       //  * `addImage` + `icon-image` tampoco llego a pintarse, con el halo
@@ -431,39 +446,32 @@ _aplicarCamara();
       // ya usan la ruta y el halo, que si dibujan. Ademas el tamano lo controlo
       // yo en metros, de modo que la flecha mide lo mismo en pantalla a
       // cualquier zoom.
+      // El borde blanco es un SEGUNDO poligono, un 45 % mas grande, pintado
+      // debajo del azul. La via rapida habria sido `fill-outline-color`, pero
+      // maplibre_gl 0.27 no expone `fill-outline-width`: solo el color, con el
+      // ancho por defecto en 0, o sea un contorno de medio pixel que no se ve.
+      // Dos poligonos superuestos dan un borde de verdad y con el grosor que
+      // se quiera.
       await ctl.addGeoJsonSource(
-        _idVehiculo,
-        _vehiculoGeoJson(
+        _idFlechaBorde,
+        _flechaGeoJson(
           widget.posicionVehiculo,
           widget.rumboVehiculo ?? 0.0,
+          widget.zoom,
+          escala: _escalaBorde,
         ),
       );
-      await ctl.addCircleLayer(
-        _idVehiculo,
-        _capaVehiculoHalo,
-        CircleLayerProperties(
-          // Halo blanco detras de la flecha: la separa del asfalto y de la ruta azul,
-          // que si no se pierde cuando ambas pasan por el mismo punto. Se
-          // escalo con la flecha (un 60 % menos) para que no acabe siendo una
-          // bola blanca con un triangulo pequeno dentro.
-          circleRadius: [
-            'interpolate',
-            ['exponential', 1.6],
-            ['zoom'],
-            14,
-            3.6,
-            16,
-            5.2,
-            18,
-            7.2,
-          ],
-          circleColor: '#ffffff',
-          circleOpacity: 0.92,
+      await ctl.addFillLayer(
+        _idFlechaBorde,
+        _capaVehiculoBorde,
+        FillLayerProperties(
+          fillColor: '#ffffff',
+          fillOpacity: 1.0,
         ),
         belowLayerId: 'nombres-carretera',
       );
 
-await ctl.addGeoJsonSource(
+      await ctl.addGeoJsonSource(
         _idFlecha,
         _flechaGeoJson(
           widget.posicionVehiculo,
@@ -475,11 +483,9 @@ await ctl.addGeoJsonSource(
         _idFlecha,
         _capaVehiculo,
         FillLayerProperties(
+          // Interior azul de marca.
           fillColor: '#1A73E8',
-          // El contorno blanco es lo que separa la flecha del asfalto y de la
-          // ruta azul, que si no se pierde cuando ambas pasan por el mismo punto.
-          fillOutlineColor: '#ffffff',
-          fillOpacity: 0.95,
+          fillOpacity: 1.0,
         ),
         belowLayerId: 'nombres-carretera',
       );
@@ -535,61 +541,22 @@ void _aplicarVehiculo() {
 
     _vehiculoEnviado = pos;
     _rumboEnviado = rumbo;
-    ctl.setGeoJsonSource(_idVehiculo, _vehiculoGeoJson(pos, rumbo));
     // La flecha es geometria calculada en metros a partir del zoom, asi que
     // tambien hay que reenviarla cuando el zoom cambia, no solo cuando se mueve
     // el vehiculo. Sin esto se quedaba con el tamano del zoom con el que se
     // creo al entrar en modo navegacion.
-    final geo = _flechaGeoJson(pos, rumbo, widget.zoom);
-    ctl.setGeoJsonSource(_idFlecha, geo);
-    // El ancho del poligono en grados es la medida util para comparar con lo
-    // que se ve en pantalla: el metraje se deforma con la inclinacion.
-    debugPrint('[MAPA] flecha z=${widget.zoom.toStringAsFixed(1)} '
-        'bearing=${rumbo.toStringAsFixed(0)} '
-        'anchoGrados=${_anchoPoligono(geo)}');
+    //
+    // Se mandan las dos: el borde blanco es el mismo poligono con otra escala.
+    ctl.setGeoJsonSource(
+      _idFlecha,
+      _flechaGeoJson(pos, rumbo, widget.zoom),
+    );
+    ctl.setGeoJsonSource(
+      _idFlechaBorde,
+      _flechaGeoJson(pos, rumbo, widget.zoom, escala: _escalaBorde),
+    );
   }
 
-  /// Ancho en grados de longitud del poligono, para diagnostics.
-  static String _anchoPoligono(Map<String, dynamic> geo) {
-    final feats = geo['features'] as List<dynamic>?;
-    if (feats == null || feats.isEmpty) return 'vacia';
-    final anillo =
-        ((feats.first as Map<String, dynamic>)['geometry']
-                as Map<String, dynamic>)['coordinates'][0] as List<dynamic>;
-    var min = double.infinity;
-    var max = -double.infinity;
-    for (final p in anillo) {
-      final lng = (p as List<dynamic>)[0] as double;
-      if (lng < min) min = lng;
-      if (lng > max) max = lng;
-    }
-    return (max - min).toStringAsFixed(6);
-  }
-
-  /// GeoJSON de un unico punto: la posicion del vehiculo con su rumbo.
-  ///
-  /// El `bearing` va como propiedad del Feature y lo lee la expresion
-  /// `icon-rotate: ['get', 'bearing']` de la capa. Al ser una propiedad, cambiar
-  /// el rumbo es tan barato como cambiar la posicion: solo hay que reenviar el
-  /// source.
-  static Map<String, dynamic> _vehiculoGeoJson(LatLng? pos, double rumbo) {
-    if (pos == null) {
-      return {'type': 'FeatureCollection', 'features': <dynamic>[]};
-    }
-    return {
-      'type': 'FeatureCollection',
-      'features': <dynamic>[
-        {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Point',
-            'coordinates': <double>[pos.longitude, pos.latitude],
-          },
-          'properties': <String, dynamic>{'bearing': rumbo},
-        },
-      ],
-    };
-  }
 
   /// GeoJSON de una linea a partir de una lista de coordenadas.
   static Map<String, dynamic> _lineaGeoJson(List<LatLng> puntos) {
@@ -619,18 +586,22 @@ void _aplicarVehiculo() {
   static const String _idRuta = 'taxi-ruta';
   static const String _capaRutaHalo = 'taxi-ruta-halo';
   static const String _capaRuta = 'taxi-ruta-linea';
-  static const String _idVehiculo = 'taxi-vehiculo';
+static const String _idFlecha = 'taxi-flecha';
   static const String _capaVehiculo = 'taxi-vehiculo-capa';
 
-  /// Source propio de la flecha. Va separado del punto porque son geometrias
-  /// distintas (punto frente a poligono) y se calculan por caminos distintos.
-  static const String _idFlecha = 'taxi-flecha';
+  /// Source y capa del contorno blanco.
+  ///
+  /// Van aparte porque el borde es el MISMO poligono un poco mas grande, no una
+  /// propiedad de la capa: maplibre_gl 0.27 no expone `fill-outline-width`.
+  static const String _idFlechaBorde = 'taxi-flecha-borde';
+  static const String _capaVehiculoBorde = 'taxi-vehiculo-borde-capa';
 
-  /// Halo blanco bajo la flecha. Va en una capa aparte porque un `CircleLayer` y
-  /// un `SymbolLayer` no pueden compartir nombre aunque vinieran del mismo
-  /// source.
-  static const String _capaVehiculoHalo = 'taxi-vehiculo-halo';
-
+  /// Cuanto mayor es el poligono blanco respecto al azul.
+  ///
+  /// Con 1.45 el blanco asoma unos 2 px por lado a los zooms de navegacion:
+  /// suficiente para separar la flecha del asfalto y de la ruta azul, sin que
+  /// parezca un contorno gruboso.
+  static const double _escalaBorde = 1.45;
 
   @override
   Widget build(BuildContext context) {
