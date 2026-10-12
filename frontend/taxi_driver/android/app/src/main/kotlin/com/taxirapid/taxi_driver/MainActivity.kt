@@ -182,6 +182,16 @@ class MainActivity : FlutterActivity() {
             }
             "hasHeadingSensor" -> result.success(tieneSensorRumbo())
 
+            // Ruta donde la app puede escribir su propio registro de traza.
+            //
+            // Se pide a Android en vez de ahipertura con una constante porque el
+            // camino incluye el paquete y cambia con la version installed. Es el
+            // directorio externo propio de la app, que en Android 11 y superior
+            // se puede escribir sin permiso y que `adb shell` si puede leer.
+            "logPath" -> result.success(
+                getExternalFilesDir(null)?.absolutePath?.plus("/navlog.txt")
+            )
+
             "openSettings" -> {
                 val intent = android.content.Intent(
                     android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,

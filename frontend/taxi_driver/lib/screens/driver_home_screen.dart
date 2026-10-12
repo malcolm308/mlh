@@ -28,6 +28,7 @@ import 'driver_settings_screen.dart';
 import 'driver_fondo_screen.dart';
 import 'history_screen.dart';
 import 'support_screen.dart';
+import '../services/traza_fichero.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   final ApiService api;
@@ -290,6 +291,13 @@ double? _rumboParaFlecha() {
   @override
   void initState() {
     super.initState();
+
+    // Traza de navegacion a fichero. Se abre aqui y no mas tarde porque el
+    // problema que se diagnostica (rumbo, rotacion de camara) aparece en los
+    // primeros segundos de un viaje, y si el fichero se abriera al empezar la
+    // ruta se perderia justo el arranque.
+    TrazaFichero.forzado = true;
+    TrazaFichero.instancia.abrir();
 
     // Se crea aqui porque necesita el `TickerProvider` del State.
     _nav = NavigationModeService(vsync: this);

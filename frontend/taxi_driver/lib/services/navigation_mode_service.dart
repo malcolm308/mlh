@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
@@ -10,6 +10,7 @@ import '../api_config.dart';
 import '../models/geo_fix.dart';
 import 'heading_filter.dart';
 import 'location_service.dart';
+import 'traza_fichero.dart';
 
 /// Estado de la camara de navegacion.
 enum ModoNavegacion {
@@ -61,10 +62,16 @@ class NavigationModeService {
   /// Distancia minima entre dos fixes para deducir el rumbo por
   /// desplazamiento (course-over-ground) cuando no hay sensor.
   ///
-  /// 8 m. Por debajo, el error de posicion GPS hace que el rumbo sea ruido puro:
-  /// con 50 m de precision y dos fixes separados 3 m, la direccion medida puede
-  /// ser cualquiera.
-  static const double _distanciaMinimaCourseOverGround = 8.0;
+  /// Subida de 8 m a 20 m. Con 8 m el error de posicion del GPS es del mismo
+  /// orden que el desplazamiento, y el rumbo medido sale con mucho ruido: en el
+  /// viaje medido, un 40 % de las muestras se apartaban mas de 15 grados y un 25 %
+  /// se iba de 90 a 150. Con 20 m de base el angulo se calcula sobre un recorrido
+  /// que domina el error de posicion.
+  ///
+  /// El coste es un retardo de un ciclo mas: a 30 km/h son 2,4 s entre muestras
+  /// de rumbo. La camara ya suaviza con ~470 ms, y un giro de calle dura bastante
+  /// mas que eso, asi que no se nota.
+  static const double _distanciaMinimaCourseOverGround = 20.0;
 
   /// Metros por grado de latitud. Suficiente para dead-reckoning a escala de
   /// calle; no hace falta mas precision.
@@ -96,8 +103,21 @@ class NavigationModeService {
 
   /// Cuanto se acerca la camara a su objetivo por frame (a 60 Hz).
   ///
-  /// 0.16: llega al 90 % del camino en unos 14 frames, ~230 ms.
-  static const double _respuesta = 0.16;
+  /// Estaba en 0.16: llega al 90 % del camino en unos 14 frames, ~230 ms. Con el
+  /// sensor a 50 Hz eso no se notaba, porque el sensor es continuo. Pero ahora,
+  /// por encima de [ApiConfig.velocidadRumboGps] manda el rumbo del GPS, que va a
+  /// 1 Hz y es ruidoso.
+  ///
+  /// Medido en un viaje real: el rumbo del GPS se aparta mas de 15 grados del
+  /// sensor en el 76 % de las muestras en marcha, y se va de 90 a 150 grados en
+  /// el 25 %. Con una constante de 230 ms la camara seguia cada muestra casi sin
+  /// filtrar, de ahi que el mapa se orientara de golpe y la flecha pareciera
+  /// apuntar en sentido contrario al de la marcha.
+  ///
+  /// 0.035 son ~470 ms de constante de tiempo: deja pasar los saltos de un
+  /// instante y sigue las curvas, que duran segundos. Es el punto de equilibrio:
+  /// filtrar ruido de 1 Hz y no retrasar una maniobra.
+  static const double _respuesta = 0.035;
 
   final Ticker _ticker;
 
@@ -137,6 +157,13 @@ class NavigationModeService {
   /// GPS y ver cual de los dos se sale. No debe usarse para mover nada.
   double? _rumboSensor;
   double? get rumboSensor => _rumboSensor;
+
+  /// Momento del fix anterior, para medir cuantos segundos han pasado entre dos
+  /// posiciones y descartar los saltos imposibles del GPS.
+  int? _ultimoFixMs;
+
+  /// `true` si el ultimo fix dio un salto que no puede ser movimiento real.
+  bool _fixConSalto = false;
 
   /// Ultimo rumbo deducido de dos fixes del GPS.
   double? _rumboGpsBruto;
@@ -477,13 +504,33 @@ void activar(String? status, {LatLng? posicionConocida}) {
     _fixAnterior = _fixAnterior ?? fix.position;
 
     // Rumbo deducido de dos fixes, como respaldo del sensor.
-    if (_fixAnterior != null) {
-      final d = LocationService.distanceBetween(_fixAnterior!, fix.position);
-      if (d >= _distanciaMinimaCourseOverGround) {
-        _rumboGps = LocationService.bearingBetween(_fixAnterior!, fix.position);
+    //
+    // Se descarta el fix si entre los dos se ha movido mas de lo que un coche
+    // puede hacer en el intervalo. Medido en el backend: a las 05:19:51 la
+    // posicion salto de 23.1391 a 23.1277, un 1,2 km entre dos fixes seguidos. Un
+    // salto asi no es movimiento, es un fix malo; si se acepta, el rumbo que sale
+    // de ahi es la direccion hacia el punto equivocado y el mapa gira como si el
+    // conductor se hubiera teletransportado.
+    final anterior = _fixAnterior;
+    if (anterior != null) {
+      final d = LocationService.distanceBetween(anterior, fix.position);
+      final dt = _ultimoFixMs == null
+          ? null
+          : (_ahoraMs - _ultimoFixMs!) / 1000.0;
+      final velocidadImplicita =
+          (dt == null || dt <= 0.2) ? null : d / dt;
+      final saltoImposible = velocidadImplicita != null &&
+          velocidadImplicita > ApiConfig.velocidadMaximaGps;
+      if (d >= _distanciaMinimaCourseOverGround && !saltoImposible) {
+        _rumboGps = LocationService.bearingBetween(anterior, fix.position);
+      } else if (saltoImposible) {
+        // El fix no se usa para el rumbo, pero tampoco se descarta: la posicion
+        // es real aunque el salto no lo sea. Solo se marca para la traza.
+        _fixConSalto = true;
       }
     }
     _fixAnterior = fix.position;
+    _ultimoFixMs = _ahoraMs;
 
     if (_haySensor && fix.rumbo != null) {
       _buffer.add(
@@ -739,14 +786,18 @@ final v = _buffer.velocidadFiltrada();
     final clave = '${_rotacionObjetivo?.toStringAsFixed(0)}|'
         '${_rotacionActual?.toStringAsFixed(0)}|'
         '${sensor?.toStringAsFixed(0)}|'
+        '$_contadorTics|${_ticker.isActive}|'
         '${_tiltActual.toStringAsFixed(0)}|${z.toStringAsFixed(1)}';
     if (clave != _trazaCamara) {
       _trazaCamara = clave;
-      debugPrint('[NAV] rotacion=${_rotacionObjetivo?.toStringAsFixed(0)} '
+      TrazaFichero.instancia.escribir(
+          '[NAV] rotacion=${_rotacionObjetivo?.toStringAsFixed(0)} '
           'actual=${_rotacionActual?.toStringAsFixed(0)} '
           'sensor=${sensor?.toStringAsFixed(0)} '
           'gps=${_rumboGps?.toStringAsFixed(0)} '
           'usa=${r?.toStringAsFixed(0)} '
+          'tics=$_contadorTics act=${_ticker.isActive} '
+          'salto=$_fixConSalto '
           'v=${v.toStringAsFixed(1)} tilt=${_tiltActual.toStringAsFixed(0)} '
           'zoom=$z');
     }
@@ -754,6 +805,15 @@ final v = _buffer.velocidadFiltrada();
 
   /// Ultima combinacion de camara registrada en la traza, para no repetir linea.
   String? _trazaCamara;
+
+  /// Cuantos tics ha corrido el bucle de camara desde que arranco el modo.
+  ///
+  /// Solo diagnostico. La rotacion aplicada solo se interpola en [_alTic], asi
+  /// que si este numero no crece mientras la traza si que cambia, es que las
+  /// lineas vienen de la llegada de fixes y el bucle no esta corriendo: la
+  /// camara se queda con el ultimo valor, o en null, y el mapa no rota.
+  int _contadorTics = 0;
+  int get contadorTics => _contadorTics;
 
   /// Mueve el tilt vigente hacia el objetivo sin pasarse.
   ///
@@ -816,6 +876,7 @@ final v = _buffer.velocidadFiltrada();
       _ticker.stop();
       return;
     }
+    _contadorTics++;
 
     _recalcularObjetivo();
 

@@ -359,15 +359,28 @@ class ApiConfig {
   /// over ground) ya es fiable: por debajo el error de posicion del GPS hace que
   /// dos fixes seguidos den direcciones arbitrarias.
   ///
-  /// Existe porque el sensor de este dispositivo va montado en una posicion
-  /// fija, y su azimut tiene un desfase constante respecto al norte que depende
-  /// de como esta sujeto el telefono. Medido en el movil, el sensor se movia
-  /// siempre entre 0 y 100 grados en horas de datos, sin pasar de 100, mientras
-  /// el rumbo real de calle llegaba a 258 y 341: no era un desfase de 90, sino un
-  /// azimut que no describe la circunferencia. Con el vehiculo en marcha, el GPS
-  /// dice hacia donde va de verdad; parado no hay nada que seguir y da igual que
-  /// el sensor falle, porque el mapa congela la orientacion.
-  static const double velocidadRumboGps = 3.5;
+  /// **Medido y bajada a 2.2 m/s.** Con 3.5 el umbral casi no se alcanzaba en el
+  /// trafico de La Habana (en el viaje 22b00b2f la velocidad maxima que saw el
+  /// GPS fue de 1.3 m/s), asi que mandaba casi siempre la brújula, que en este
+  /// movil va desviada unos 85 grados. Sacando el rumbo real del propio
+  /// recorrido del backend, el coche iba al este (113 grados de media) mientras
+  /// el sensor decia 28. Con 2.2 m/s (~8 km/h) el GPS ya discrimina de sobra:
+  /// entre fixes hay 8 m de separacion minima, y a 2.2 m/s se recorren en 3,6 s.
+  ///
+  /// Por debajo de ese valor manda el sensor. Da igual que vaya desviado: parado
+  /// o casi parado el mapa congela la orientacion, asi que no se nota, y cuando
+  /// arranca el coche ya ha superado el umbral.
+  static const double velocidadRumboGps = 2.2;
+
+  /// Velocidad (m/s) por encima de la cual un salto entre dos fixes se considera
+  /// GPS malo y no movimiento.
+  ///
+  /// 55 m/s son 200 km/h, mas que el tope de cualquier calle y que el maximo del
+  /// coche en Cuba. Medido en el backend: entre dos consultas seguidas la
+  /// posicion salto 1,2 km (de 23.1391 a 23.1277, a las 05:19:51). A 1 Hz son
+  /// 1200 m/s, muy por encima de este techo, asi que el filtro lo descarta sin
+  /// tocar nada de lo que se mueve de verdad.
+  static const double velocidadMaximaGps = 55.0;
 
 
   /// Velocidad (m/s) que reactiva el modo follow si el usuario lo habia
