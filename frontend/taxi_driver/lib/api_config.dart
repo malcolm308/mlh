@@ -353,6 +353,22 @@ class ApiConfig {
   /// que el mapa no se ponga a girar en un semaforo.
   static const double velocidadMinimaHeading = 0.7;
 
+  /// Velocidad (m/s) a partir de la cual el rumbo sale del GPS y no del sensor.
+  ///
+  /// 3.5 m/s son ~12 km/h. Es el punto en el que el rumbo sobre el suelo (course
+  /// over ground) ya es fiable: por debajo el error de posicion del GPS hace que
+  /// dos fixes seguidos den direcciones arbitrarias.
+  ///
+  /// Existe porque el sensor de este dispositivo va montado en una posicion
+  /// fija, y su azimut tiene un desfase constante respecto al norte que depende
+  /// de como esta sujeto el telefono. Medido en el movil, el sensor se movia
+  /// siempre entre 0 y 100 grados en horas de datos, sin pasar de 100, mientras
+  /// el rumbo real de calle llegaba a 258 y 341: no era un desfase de 90, sino un
+  /// azimut que no describe la circunferencia. Con el vehiculo en marcha, el GPS
+  /// dice hacia donde va de verdad; parado no hay nada que seguir y da igual que
+  /// el sensor falle, porque el mapa congela la orientacion.
+  static const double velocidadRumboGps = 3.5;
+
 
   /// Velocidad (m/s) que reactiva el modo follow si el usuario lo habia
   /// interrumpido moviendo el mapa.

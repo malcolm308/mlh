@@ -131,6 +131,17 @@ class NavigationModeService {
   double? _rumbo;
   double? get rumbo => _rumbo;
 
+  /// Rumbo crudo que da el sensor, sin la preferencia del GPS por delante.
+  ///
+  /// Es solo de diagnostico: existe para comparar en la traza el sensor y el
+  /// GPS y ver cual de los dos se sale. No debe usarse para mover nada.
+  double? _rumboSensor;
+  double? get rumboSensor => _rumboSensor;
+
+  /// Ultimo rumbo deducido de dos fixes del GPS.
+  double? _rumboGpsBruto;
+  double? get rumboGpsBruto => _rumboGpsBruto;
+
   /// Velocidad suavizada en km/h.
   double _velocidadKmh = 0;
   double get velocidadKmh => _velocidadKmh;
@@ -658,8 +669,16 @@ final v = _buffer.velocidadFiltrada();
       _notificarCambioTilt();
     }
 
-    // Rumbo: primero el buffer (sensor + GPS filtrados), luego el respaldo.
-    final r = _buffer.rumboFiltrado() ?? _rumboGps;
+    // Rumbo. Se guardan las tres cosas por separado: lo que dice el sensor, lo que
+    // dice el GPS y cual se esta usando. Sin el sensor a la vista no hay forma
+    // de saber cual de los dos esta equivocado, que es justo lo que hace falta
+    // para orientar bien.
+    final sensor = _buffer.rumboFiltrado();
+    _rumboSensor = sensor;
+    _rumboGpsBruto = _rumboGps;
+    final r = v >= ApiConfig.velocidadRumboGps && _rumboGps != null
+        ? _rumboGps
+        : (sensor ?? _rumboGps);
     _rumbo = r;
 
 // Zoom de la fase. Al ir a 30 km/h o mas se ALEJA un nivel (zoom out),
@@ -719,13 +738,15 @@ final v = _buffer.velocidadFiltrada();
     // mudo justo en la transicion que habia que mirar.
     final clave = '${_rotacionObjetivo?.toStringAsFixed(0)}|'
         '${_rotacionActual?.toStringAsFixed(0)}|'
+        '${sensor?.toStringAsFixed(0)}|'
         '${_tiltActual.toStringAsFixed(0)}|${z.toStringAsFixed(1)}';
     if (clave != _trazaCamara) {
       _trazaCamara = clave;
       debugPrint('[NAV] rotacion=${_rotacionObjetivo?.toStringAsFixed(0)} '
           'actual=${_rotacionActual?.toStringAsFixed(0)} '
-          'rumbo=${r?.toStringAsFixed(0)} '
-          'rumboGps=${_rumboGps?.toStringAsFixed(0)} '
+          'sensor=${sensor?.toStringAsFixed(0)} '
+          'gps=${_rumboGps?.toStringAsFixed(0)} '
+          'usa=${r?.toStringAsFixed(0)} '
           'v=${v.toStringAsFixed(1)} tilt=${_tiltActual.toStringAsFixed(0)} '
           'zoom=$z');
     }

@@ -213,29 +213,32 @@ int _routeReq = 0;
   String? _trayectoEncuadre;
 
 /// Rumbo con el que se dibuja la flecha de ubicacion.
-  ///
-  /// Con el mapa en heading-up tiene que ser SIEMPRE el mismo que usa la camara,
-  /// o la flecha y el mapa apuntan en direcciones distintas y el conjunto parece
-  /// invertido. La camara gira con el sensor, asi que la flecha sale de ahi.
-  ///
-  /// Que antes, con el vehiculo parado, mandara el primer tramo de la ruta era
-  /// un error de partida: el mapa seguia orientado por el sensor y la flecha por
-  /// la ruta, con lo que en un semaforo la flecha senalaba una calle en la que
-  /// no se va a entrar mientras el mapa estaba en otro sitio. Parado el sensor
-  /// no da un rumbo fiable, pero hay que ser coherente con la camara: eso es lo
-  /// que se pide, mapa y flecha en la misma direccion.
-  ///
-  /// Fuera del modo navegacion (mapa norte-arriba, sin seguimiento) la camara no
-  /// manda y si tiene sentido la ruta.
-  double? _rumboParaFlecha() {
-    if (_nav.debeSeguir) {
-      final sensor = _nav.rumbo;
-      if (sensor != null) return sensor;
-      // Sin sensor se usa el ultimo valor por el que va la camara, para que
-      // no se separen.
-      final camara = _nav.rotacionActual;
-      if (camara != null) return camara;
-    }
+///
+/// Con el mapa en heading-up tiene que ser SIEMPRE el mismo que usa la camara,
+/// o la flecha y el mapa apuntan en direcciones distintas y el conjunto parece
+/// invertido. La camara gira con el sensor, asi que la flecha sale de ahi.
+///
+/// Que antes, con el vehiculo parado, mandara el primer tramo de la ruta era
+/// un error de partida: el mapa seguia orientado por el sensor y la flecha por
+/// la ruta, con lo que en un semaforo la flecha senalaba una calle en la que
+/// no se va a entrar mientras el mapa estaba en otro sitio. Parado el sensor
+/// no da un rumbo fiable, pero hay que ser coherente con la camara: eso es lo
+/// que se pide, mapa y flecha en la misma direccion.
+///
+/// Fuera del modo navegacion (mapa norte-arriba, sin seguimiento) la camara no
+/// manda y si tiene sentido la ruta.
+double? _rumboParaFlecha() {
+  // El rumbo de la camara manda siempre que haya uno: [_nav.rumbo] ya lleva el
+  // GPS por delante del sensor en marcha (ver [NavigationModeService]), asi que
+  // tomarlo aqui mantiene flecha y mapa en la misma fuente y no solo en el mismo
+  // valor.
+  final camara = _nav.rotacionActual ?? _nav.rumbo;
+  if (_nav.debeSeguir && camara != null) return camara;
+
+  if (_nav.velocidadMps >= ApiConfig.flechaRumboSensorMps) {
+    final sensor = _nav.rumbo;
+    if (sensor != null) return sensor;
+  }
 
     if (_nav.velocidadMps >= ApiConfig.flechaRumboSensorMps) {
       final sensor = _nav.rumbo;
