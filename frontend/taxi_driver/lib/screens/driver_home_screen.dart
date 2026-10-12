@@ -220,11 +220,11 @@ int _routeReq = 0;
   /// primer tramo de OSRM es por donde se sale de verdad.
   ///
   /// En cuanto el vehiculo se mueve, manda el sensor, que es mas fino. El corte
-  /// esta en [ApiConfig.desvioVelocidadCarreteraMps] porque por debajo el GPS
-  /// no da rumbo fiable y el filtro lo habria retardado.
+  /// esta en [ApiConfig.flechaRumboSensorMps] porque por debajo el GPS no da
+  /// rumbo fiable y el filtro lo habria retardado.
   double? _rumboParaFlecha() {
     final vel = _nav.velocidadMps;
-    if (vel >= 2.0) {
+    if (vel >= ApiConfig.flechaRumboSensorMps) {
       final sensor = _nav.rumbo;
       if (sensor != null) return sensor;
     }

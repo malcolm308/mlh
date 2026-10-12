@@ -222,6 +222,21 @@ class ApiConfig {
   /// quitarla: por debajo el mapa conserva el angulo que ya tenia.
   static const double velocidadMinimaTilt = 1.4;
 
+  /// Velocidad a partir de la cual la flecha de ubicacion sigue al SENSOR, en
+  /// m/s (2 m/s son 7 km/h).
+  ///
+  /// Por debajo, la flecha apunta por el primer tramo de la ruta en vez de por
+  /// donde mira el capo. La razon: parado en un semaforo con el coche girado al
+  /// cruce, el sensor dice "mira a la derecha" y la flecha se pondria en una
+  /// calle por la que no se va a entrar. En marcha manda el sensor, que es mas
+  /// fino y es lo que hace girar la flecha en las curvas.
+  ///
+  /// El salto entre los dos regimenes es visible: alzar y arrancar el vehiculo,
+  /// la flecha da un tiron de golpe al pasar de uno a otro. Con este valor el
+  /// cambio llega al primer metro de marcha, que es justo cuando deja de verse
+  /// parado.
+  static const double flechaRumboSensorMps = 2.0;
+
   /// Umbral alto del tramo "ciudad", en m/s (45 km/h).
   static const double velocidadTiltCiudad = 12.5;
 
