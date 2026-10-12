@@ -81,9 +81,18 @@ class ApiConfig {
   /// - [recogida] yendo al pasajero: hay que buscar la puerta, se acerca.
   /// - [esperando] ya en el punto: la calle esta justo debajo.
   /// - [traslado] con pasajero a bordo: maximo detalle de calle.
-  static const double zoomIdle = 15;
-  static const double zoomRecogida = 16;
-  static const double zoomEsperando = 16;
+  ///
+  /// Estaban en 15/16/16/17 y se veia el vehiculo muy alejado: a z15 el mapa
+  /// abarca casi un kilómetro y el chofer conduce mirando un plano general. Se
+  /// sube un nivel toda la escala menos la fase de traslado, que ya estaba en el
+  /// maximo util.
+  ///
+  /// El techo real es 17: el origen de teselas declara `maxzoom: 16`, asi que z17
+  /// ya es un estiramiento de 2x y z18 seria de 4x, que se ve borroso. No se
+  /// sube mas aunque [maxZoom] lo permita.
+  static const double zoomIdle = 16;
+  static const double zoomRecogida = 17;
+  static const double zoomEsperando = 17;
   static const double zoomTraslado = 17;
 
   /// Suelo de zoom del modo navegacion: 14.
