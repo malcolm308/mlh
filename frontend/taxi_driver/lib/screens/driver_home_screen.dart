@@ -212,19 +212,32 @@ int _routeReq = 0;
   /// Si no cambia, no se vuelve a mover la camara.
   String? _trayectoEncuadre;
 
-  /// Rumbo con el que se dibuja la flecha de ubicacion.
+/// Rumbo con el que se dibuja la flecha de ubicacion.
   ///
-  /// Al arrancar un viaje manda el primer tramo de la ruta, no el sensor: con
-  /// el coche parado apuntando a otro lado, el sensor dice otra cosa y la
-  /// flecha saldria girada hacia una calle en la que no se va a entrar. El
-  /// primer tramo de OSRM es por donde se sale de verdad.
+  /// Con el mapa en heading-up tiene que ser SIEMPRE el mismo que usa la camara,
+  /// o la flecha y el mapa apuntan en direcciones distintas y el conjunto parece
+  /// invertido. La camara gira con el sensor, asi que la flecha sale de ahi.
   ///
-  /// En cuanto el vehiculo se mueve, manda el sensor, que es mas fino. El corte
-  /// esta en [ApiConfig.flechaRumboSensorMps] porque por debajo el GPS no da
-  /// rumbo fiable y el filtro lo habria retardado.
+  /// Que antes, con el vehiculo parado, mandara el primer tramo de la ruta era
+  /// un error de partida: el mapa seguia orientado por el sensor y la flecha por
+  /// la ruta, con lo que en un semaforo la flecha senalaba una calle en la que
+  /// no se va a entrar mientras el mapa estaba en otro sitio. Parado el sensor
+  /// no da un rumbo fiable, pero hay que ser coherente con la camara: eso es lo
+  /// que se pide, mapa y flecha en la misma direccion.
+  ///
+  /// Fuera del modo navegacion (mapa norte-arriba, sin seguimiento) la camara no
+  /// manda y si tiene sentido la ruta.
   double? _rumboParaFlecha() {
-    final vel = _nav.velocidadMps;
-    if (vel >= ApiConfig.flechaRumboSensorMps) {
+    if (_nav.debeSeguir) {
+      final sensor = _nav.rumbo;
+      if (sensor != null) return sensor;
+      // Sin sensor se usa el ultimo valor por el que va la camara, para que
+      // no se separen.
+      final camara = _nav.rotacionActual;
+      if (camara != null) return camara;
+    }
+
+    if (_nav.velocidadMps >= ApiConfig.flechaRumboSensorMps) {
       final sensor = _nav.rumbo;
       if (sensor != null) return sensor;
     }

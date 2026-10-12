@@ -227,9 +227,15 @@ _aplicarCamara();
   /// restante y se uso `top`, con lo que el vehiculo acababa en el tercio
   /// superior, justo al reves de lo pedido.
   ///
-  /// El destino es el 64 %: el tercio inferior, pero con margen antes del panel
-  /// del viaje, que empieza hacia el 70 %. A mas bajo, la flecha queda detras
-  /// del panel.
+  /// El destino es el 65 % medido: el tercio inferior. El panel del viaje empieza
+  /// hacia el78 %, asi que queda sitio de sobra sin que la flecha se meta
+  /// debajo.
+  ///
+  /// Calibrado midiendo el centroide del azul de la flecha por pixeles en el
+  /// movil, no de memoria: con `top: 0.28` salio al 60.4 %, y el modelo
+  /// (centro del rectangulo libre) predecía 64 %. Los 3.6 puntos de diferencia
+  /// son la distancia entre el ancla de la camara y el centroide del poligono,
+  /// que por la inclinacion no coincide. De ahi el 0.36.
   void _aplicarPaddingConduccion() {
     final ctl = _controlador;
     if (ctl == null) return;
@@ -240,7 +246,7 @@ _aplicarCamara();
     // es la misma.
     final alto = MediaQuery.sizeOf(context).height;
     if (alto <= 0) return;
-    ctl.setPadding(top: alto * 0.28);
+    ctl.setPadding(top: alto * 0.36);
   }
 
   /// `true` cuando el padding de conduccion ya se aplico una vez.
