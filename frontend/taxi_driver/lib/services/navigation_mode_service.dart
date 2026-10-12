@@ -289,7 +289,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
     // en movimiento, la rampa lo lleva igual al valor de velocidad en ~2 s.
     if (estabaApagado) {
       _tiltActual = _tiltDegradado
-          ? _tiltActual
+          ? ApiConfig.tiltReducidoPorRendimiento
           : ApiConfig.tiltEntradaNavegacion;
       _notificarCambioTilt();
     }
@@ -422,7 +422,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
   /// inclinado siempre.
   double get tiltObjetivo {
     if (_modo != ModoNavegacion.siguiendo) return ApiConfig.tiltDegradado;
-    if (_tiltDegradado) return ApiConfig.tiltDegradado;
+    if (_tiltDegradado) return ApiConfig.tiltReducidoPorRendimiento;
     return ApiConfig.tiltNavegacion;
   }
 
@@ -478,20 +478,21 @@ void activar(String? status, {LatLng? posicionConocida}) {
       _buffer.add(
         rumbo: fix.rumbo!,
         velocidadMps: fix.speedMps ?? 0.0,
-        // Reloj monotono del fix. Nunca `DateTime.now()`: un cambio de hora del
-        // dispositivo daria intervalos negativos y el filtro de aceleracion
-        // descartaria todo.
-        tiempoMs: fix.elapsedRealtimeMs ?? _ahoraMs,
+        tiempoMs: _ahoraMs,
       );
     } else if (fix.bearing != null) {
       _buffer.add(
         rumbo: fix.bearing!,
         velocidadMps: fix.speedMps ?? 0.0,
-        tiempoMs: fix.elapsedRealtimeMs ?? _ahoraMs,
+        tiempoMs: _ahoraMs,
       );
     }
 
     // El fix real es el punto de partida de la extrapolacion.
+    // Aqui si se guarda el reloj del propio fix (`elapsedRealtimeMs`), porque
+    // la extrapolacion compara siempre fix contra fix y las dos referencias
+    // tienen que ser del mismo reloj. El buffer de rumbo NO usa este valor:
+    // ver el comentario de [_alRecibirRumbo].
     _ultimoMonotonoMs = fix.elapsedRealtimeMs ?? _ultimoMonotonoMs;
 
     // Sin viaje se decide si el modo navegacion debe estar activo por
@@ -511,12 +512,17 @@ void activar(String? status, {LatLng? posicionConocida}) {
     // velocidad que se conoce del ultimo fix, de modo que el filtro de
     // aceleracion sigue teniendo sentido.
     //
-    // El sello de tiempo es el del propio reloj del servicio, NO el del ultimo
-    // fix GPS. Reusar el del fix metia las ~50 muestras de un mismo segundo con
-    // la misma hora, y el filtro, que ordena y compara por deltas, perdia la
-    // cronologia: al girar se mezclaban rumbos viejos con los nuevos y la
-    // media circular no convergia, que es justo cuando mas falta es que el mapa
-    // gire con el coche.
+    // El sello de tiempo de TODO lo que entra al buffer es el reloj propio del
+    // servicio ([_ahoraMs]), nunca el del fix GPS.
+    //
+    // Son dos bases distintas y mezclarlas rompe el filtro: `elapsedRealtimeMs`
+    // cuenta desde que arranco el movil (cientos de miles de ms) y el reloj del
+    // servicio cuenta desde que se creo (decenas de miles). Con las dos en el
+    // mismo buffer, al ordenar por tiempo todas las muestras del GPS quedaban
+    // "en el futuro" frente a las del sensor, y los deltas de la comprobacion
+    // de aceleracion salian de bases distintas. El resultado era que el mapa
+    // se quedaba con un rumbo viejo y no giraba en los cruces, que es
+    // justamente cuando mas hace falta que gire.
     _buffer.add(
       rumbo: grados,
       velocidadMps: (_fix?.speedMps ?? 0.0),
@@ -595,7 +601,9 @@ void _activarModoIdle() {
         debugPrint('[NAV] modo navegacion ACTIVADO por movimiento en idle '
             'v=${(_fix?.speedMps ?? 0.0).toStringAsFixed(1)} m/s');
     if (estabaApagado) {
-      _tiltActual = ApiConfig.tiltNavegacion;
+      _tiltActual = _tiltDegradado
+          ? ApiConfig.tiltReducidoPorRendimiento
+          : ApiConfig.tiltNavegacion;
       _notificarCambioTilt();
     }
     _iniciarTicker();

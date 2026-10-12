@@ -92,4 +92,34 @@ void main() {
       expect(siguiente, closeTo(ApiConfig.tiltEntradaNavegacion, 0.001));
     });
   });
+
+  // Regresion del fallo que mas se notaba en la calle: con el movil por debajo
+  // de 30 FPS la degradacion ponia el tilt a 0 y el mapa se aplanaba y se
+  // ponia norte-arriba de golpe, sin que el rumbo tuviera nada que ver.
+  group('degradacion por rendimiento', () {
+    test('bajar de FPS no aplana el mapa', () {
+      expect(ApiConfig.tiltReducidoPorRendimiento, greaterThan(0));
+    });
+
+    test('la degradacion es mas suave que la perspectiva normal', () {
+      expect(
+        ApiConfig.tiltReducidoPorRendimiento,
+        lessThan(ApiConfig.tiltNavegacion),
+      );
+    });
+
+    test('la degradacion conserva la lectura en profundidad', () {
+      // Por debajo de esto el mapa se lee como un plano 2D y el chofer pierde la
+      // sensacion de hacia donde viene la calle.
+      expect(ApiConfig.tiltReducidoPorRendimiento, greaterThanOrEqualTo(30));
+    });
+
+    test('la perspectiva normal es la de ciudad, no la de carretera', () {
+      // A 65 grados las esquinas de las calles de La Habana quedan escondidas.
+      expect(
+        ApiConfig.tiltNavegacion,
+        closeTo(ApiConfig.tiltCiudad, 0.001),
+      );
+    });
+  });
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -308,6 +309,42 @@ void main() {
         servicio.informarPosicion(lejos, 0.1);
       }
       expect(servicio.estado, RouteRecalcState.idle);
+    });
+
+    // Regresion del exceso de POST /api/routing/recalculate: el sondeo del GPS
+    // llegaba cada segundo mientras la peticion anterior seguia en vuelo, y cada
+    // respuesta reemplazaba la ruta anterior. El candado [_enVuelo] lo corta.
+    test('no lanza un recalculo encima de otro en vuelo', () async {
+      var peticiones = 0;
+      final gate = Completer<void>();
+      final servicio = RouteRecalculationService(
+        postJson: (path, body) async {
+          peticiones++;
+          await gate.future; // el backend tarda mas que el sondeo del GPS
+          return jsonDecode(_geoJsonRespuesta());
+        },
+      );
+      servicio.iniciar(
+        ruta: const [LatLng(23.10, -82.36), LatLng(23.12, -82.36)],
+        destino: const LatLng(23.14, -82.35),
+      );
+
+      // El primer fijo fuera de ruta dispara la peticion.
+      for (var i = 0; i < 10; i++) {
+        servicio.informarPosicion(const LatLng(23.10, -82.38), 12.0);
+      }
+      expect(peticiones, 1);
+
+      // Mientras sigue en vuelo, muchos mas fijes fuera de ruta no deben
+      // generar ni una peticion mas.
+      for (var i = 0; i < 40; i++) {
+        servicio.informarPosicion(const LatLng(23.10, -82.38), 12.0);
+      }
+      expect(peticiones, 1, reason: 'se encadenaron recalculos en vuelo');
+
+      gate.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(peticiones, 1);
     });
   });
 

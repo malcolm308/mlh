@@ -135,7 +135,19 @@ class ApiConfig {
   /// ve mal en los dos extremos: a 40 km/h en ciudad una perspectiva de 58
   /// degrees esconde las esquinas, y a 100 km/h un plano de 30 se siente un
   /// mapa plano. Ver [tiltObjetivoParaVelocidad].
-  static const double tiltNavegacion = 45.0;
+  static const double tiltNavegacion = 55.0;
+
+  /// Tilt al que baja la perspectiva cuando el dispositivo va JUSTO de FPS.
+  ///
+  /// Antes,[ApiConfig.tiltDegradado] (0) aplanaba el mapa entero. En la calle
+  /// un Galaxy S10 baja de 30 FPS con facilidad y entonces el mapa, que hasta
+  /// un segundo antes estaba inclinado y orientado, se ponia plano y norte-arriba
+  /// sin avisar. Era el fallo que mas se notaba: no era que el rumbo llegase mal,
+  /// era que el motor se comia la inclinacion por rendimiento.
+  ///
+  /// Bajar a 38 mantiene la lectura de profundidad y el heading-up; lo que se
+  /// sacrifica es el efecto de paralaje, que es la parte cara.
+  static const double tiltReducidoPorRendimiento = 38.0;
 
   /// Tilt con el vehiculo inmovil.
   ///

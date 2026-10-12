@@ -212,23 +212,33 @@ _aplicarCamara();
     );
   }
 
-  /// Coloca el vehiculo en el tercio inferior de la pantalla.
+/// Coloca el vehiculo en el tercio inferior de la pantalla.
   ///
-  /// Sin esto el punto queda en el centro geométrico y, con el mapa inclinado,
-  /// el chofer ve mas suelo delante que calle por la que va: justo lo contrario
-  /// de lo que sirve para conducir. El margen de abajo deja sitio al panel del
-  /// viaje, que ocupa la parte baja.
+  /// MapLibre ancla el objetivo de la camara en el CENTRO del rectangulo que
+  /// queda tras descontar el padding. O sea:
+  ///
+  ///   - `padding.bottom` deja un rectangulo [0, H - bottom] y su centro queda
+  ///     en la mitad de eso, es decir ARRIBA. Con `bottom: 33 %` el vehiculo
+  ///     aparecia al 33 % de la pantalla, justo en el tercio SUPERIOR: se veia
+  ///     mucho mapa detras y casi ninguno por delante, al reves de lo que hace
+  ///     falta conduciendo.
+  ///   - `padding.top` deja [top, H] y su centro queda ABAJO. Es lo que mueve el
+  ///     vehiculo al tercio inferior y deja la calle por la que se avanza por
+  ///     encima, que es como se ve en las apps de navegacion.
+  ///
+  /// Con `top: 36 %` el centro del rectangulo util cae al 68 % del alto: la misma
+  /// proporcion de la referencia, y con margen de sobra para el panel del viaje.
   void _aplicarPaddingConduccion() {
     final ctl = _controlador;
     if (ctl == null) return;
     if (_paddingAplicado) return;
     _paddingAplicado = true;
-    // Un tercio del alto, medido con el tamano real de la pantalla y no con un
+    // Proporcion del alto, medida con el tamano real de la pantalla y no con un
     // literal: en un movil pequeno y en una tablet la proporcion que se busca
     // es la misma.
     final alto = MediaQuery.sizeOf(context).height;
     if (alto <= 0) return;
-    ctl.setPadding(bottom: alto * 0.33);
+    ctl.setPadding(top: alto * 0.36);
   }
 
   /// `true` cuando el padding de conduccion ya se aplico una vez.
@@ -334,39 +344,62 @@ _aplicarCamara();
       );
       await ctl.addCircleLayer(
         _idVehiculo,
-        _capaVehiculo,
+        _capaVehiculoHalo,
         CircleLayerProperties(
-          // Punto azul ~24 dp: el radio crece con el zoom para mantener el
-          // tamaño visible sin distorsionar. Reducido un 25 % (era 8/14/20)
-          // porque tapaba demasiado vehiculo y calle alrededor.
+          // Halo blanco detras de la flecha: la separa del asfalto y de la
+          // ruta azul, que si no se pierde cuando ambas coinciden.
           circleRadius: [
             'interpolate',
             ['exponential', 1.6],
             ['zoom'],
             14,
-            6.0,
+            9.0,
             16,
-            10.5,
+            13.0,
             18,
-            15.0,
+            18.0,
           ],
-          // Relleno azul (#1E88E5)
-          circleColor: '#1E88E5',
-          // Borde blanco de 2 dp, tambien escalado con el zoom (era 2/2.5/3).
-          circleStrokeWidth: [
+          circleColor: '#ffffff',
+          circleOpacity: 0.92,
+        ),
+        belowLayerId: 'nombres-carretera',
+      );
+
+      await ctl.addSymbolLayer(
+        _idVehiculo,
+        _capaVehiculo,
+        SymbolLayerProperties(
+          // Glifo de triangulo relleno, apuntando al norte por defecto.
+          // Un `text-field` no necesita asset ni registro de imagen: el motor lo
+          // resuelve con la fuente por defecto del estilo, asi que no hay nada
+          // que sincronizar con el servidor de tiles.
+          textField: '▲',
+          textSize: [
             'interpolate',
             ['exponential', 1.6],
             ['zoom'],
             14,
-            1.5,
+            14.0,
             16,
-            2.0,
+            21.0,
             18,
-            2.5,
+            29.0,
           ],
-          circleStrokeColor: '#ffffff',
-          circleOpacity: 0.95,
-          circleStrokeOpacity: 1.0,
+          textColor: '#1A73E8',
+          // `map` = el glifo se inclina con el mapa. Con `viewport` la flecha
+          // queda siempre plana en pantalla y en un mapa en 3D parece un
+          // recorte pegado encima, que es justo lo que no queremos.
+          textRotationAlignment: 'map',
+          textPitchAlignment: 'map',
+          // El rumbo va como propiedad del Feature ([_vehiculoGeoJson]), asi que
+          // girar la flecha cuesta lo mismo que moverla.
+          textRotate: ['get', 'bearing'],
+          // El glifo se dibuja desde su linea base, no desde su centro. Sin este
+          // desplazamiento la punta queda a la altura del vehiculo y la flecha
+          // parece caida hacia atras.
+          textOffset: [0, 0.28],
+          textAllowOverlap: true,
+          textIgnorePlacement: true,
         ),
         belowLayerId: 'nombres-carretera',
       );
@@ -474,6 +507,11 @@ void _aplicarVehiculo() {
   static const String _capaRuta = 'taxi-ruta-linea';
   static const String _idVehiculo = 'taxi-vehiculo';
   static const String _capaVehiculo = 'taxi-vehiculo-capa';
+
+  /// Halo blanco bajo la flecha. Va en una capa aparte porque un `CircleLayer` y
+  /// un `SymbolLayer` no pueden compartir nombre aunque vinieran del mismo
+  /// source.
+  static const String _capaVehiculoHalo = 'taxi-vehiculo-halo';
 
 
   @override

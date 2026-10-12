@@ -152,6 +152,13 @@ class RouteRecalculationService extends ChangeNotifier {
   /// Intentos seguidos con fallo. Se reinicia al exito.
   int _intentos = 0;
 
+  /// `true` mientras hay una peticion de recalculo en vuelo.
+  ///
+  /// Impide que dos POST al backend se pisen: sin el, el sondeo del GPS pedia
+  /// uno cada segundo mientras el anterior tardaba mas de eso en volver, y cada
+  /// respuesta reemplazaba la ruta anterior. Ver [_pedirRecalculo].
+  bool _enVuelo = false;
+
   /// Cronometro del reintento con backoff.
   Timer? _temporizadorReintento;
 
@@ -174,6 +181,7 @@ class RouteRecalculationService extends ChangeNotifier {
     _pausadoPorParado = false;
     _intentos = 0;
     _descartado = false;
+    _enVuelo = false;
     _temporizadorReintento?.cancel();
     _temporizadorEnfriamiento?.cancel();
     _temporizadorReintento = null;
@@ -198,6 +206,7 @@ class RouteRecalculationService extends ChangeNotifier {
     _muestrasParado = 0;
     _pausadoPorParado = false;
     _descartado = true;
+    _enVuelo = false;
     _setEstado(RouteRecalcState.idle);
   }
 
@@ -287,11 +296,22 @@ class RouteRecalculationService extends ChangeNotifier {
     if (destino == null) return;
     if (_descartado) return;
 
+    // Candado de una peticion en vuelo. Sin esto se encadenaban varias: el
+    // sondeo del GPS llegaba cada segundo, la primera peticion todavia no habia
+    // vuelto y se lanzaba otra encima. `_ultimoRecalculoMs` solo se escribe al
+    // pedir, asi que la pausa no cubria la ventana entre pedir y recibir, que es
+    // justo la que dura el POST al backend. Con varias en vuelo, cada respuesta
+    //idia reiniciando la ruta y la anterior, y el mapa no terminaba de fijarse
+    // en ninguna: de ahi que se veía "el mapa no orienta".
+    if (_enVuelo) return;
+    _enVuelo = true;
+
     _ultimoRecalculoMs = _reloj.elapsedMilliseconds;
     _setEstado(RouteRecalcState.calculating);
 
     final origen = _ultimaPosicionConocida;
     if (origen == null) {
+      _enVuelo = false;
       _setEstado(RouteRecalcState.error);
       return;
     }
@@ -302,6 +322,10 @@ class RouteRecalculationService extends ChangeNotifier {
         'destination': {'lat': destino.latitude, 'lng': destino.longitude},
         'profile': 'driving',
       });
+      // El candado se suelta en cuanto llega la respuesta, antes de decidir que
+      // hacer con ella: si se quedara puesto durante el enfriamiento, un fallo
+      // bloquearia los reintentos del backoff.
+      _enVuelo = false;
       if (_descartado) return;
 
       final ruta = _rutaDesdeJson(json);
@@ -315,7 +339,7 @@ class RouteRecalculationService extends ChangeNotifier {
       _setEstado(RouteRecalcState.success);
       _rutaCambiada.add(ruta);
 
-      // Enfriamiento: si elChofer sigue fuera de la nueva ruta, se necesita un
+      // Enfriamiento: si el chofer sigue fuera de la nueva ruta, se necesita un
       // margen antes de volver a intentarlo. Sin esto se encadena un recalculo
       // cada tres segundos si el destino no es alcanzable.
       _temporizadorEnfriamiento?.cancel();
@@ -327,6 +351,7 @@ class RouteRecalculationService extends ChangeNotifier {
         },
       );
     } catch (_) {
+      _enVuelo = false;
       if (_descartado) return;
       _fallarYReintentar();
     }

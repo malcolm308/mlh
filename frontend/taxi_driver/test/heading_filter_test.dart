@@ -238,6 +238,28 @@ void main() {
       // No puede quedarse pegado al norte: ha de moverse hacia el sur.
       expect(r, greaterThan(90.0));
     });
+
+    // Regresion del desfase real: el GPS sellaba con `elapsedRealtimeMs`
+    // (ms desde el arranque del movil) y el sensor con el reloj del servicio
+    // (ms desde que se creo el servicio). Son bases distintas: al ordenar,
+    // las muestras del GPS quedaban siempre despues de las del sensor.
+    test('muestras de relojes distintos se ordenan mal (regresion)', () {
+      final b = BufferCircularRumbo();
+      // GPS: base grande, rumbo viejo (norte).
+      b.add(rumbo: 0.0, velocidadMps: 12.0, tiempoMs: 500000);
+      // Sensor: base pequena, rumbo nuevo (este) y mas recientes en su reloj.
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 20000);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 20020);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 20040);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 20060);
+      b.add(rumbo: 90.0, velocidadMps: 12.0, tiempoMs: 500000);
+
+      // Con el orden por tiempo, la muestra del GPS (500000) queda al final
+      // aunque sea la MAS ANTIGUA en la realidad, y arrastra el rumbo viejo.
+      final tiempos = b.muestras.map((m) => m.tiempoMs).toList();
+      // El ultimo debe ser el mayor (500000), no el rumbo nuevo del sensor.
+      expect(tiempos.last, 500000);
+    });
   });
 
   group('Rumbo retenido con vehiculo parado', () {
