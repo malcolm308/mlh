@@ -8,9 +8,22 @@ import 'package:taxi_driver/services/osrm_service.dart';
 import 'package:taxi_driver/services/route_recalculation_service.dart';
 
 /// GeoJSON minimo que devuelve el backend, en el formato propio del endpoint.
+///
+/// La polilinea empieza en (-82.35, 23.11) porque es donde se coloca el
+/// conductor en las pruebas de recalculo: OSRM devuelve una ruta que arranca en
+/// el origen que se le pidio, y el servicio descarta las que llegan lejos. Un
+/// fixture que empezara a 2 km del origen no seria una respuesta posible.
 String _geoJsonRespuesta() {
   return '{"geometry":{"type":"LineString","coordinates":'
-      '[[-82.37,23.11],[-82.36,23.11],[-82.35,23.12]]},'
+      '[[-82.35,23.11],[-82.36,23.11],[-82.37,23.12]]},'
+      '"distance_meters":1800,"duration_seconds":200}';
+}
+
+/// Ruta que empieza lejos del origen: simula la respuesta cacheada del viaje
+/// original cuando el conductor ya se ha salido de ella.
+String _geoJsonRespuestaLejana() {
+  return '{"geometry":{"type":"LineString","coordinates":'
+      '[[-82.37,23.13],[-82.36,23.13],[-82.35,23.14]]},'
       '"distance_meters":1800,"duration_seconds":200}';
 }
 
@@ -218,6 +231,31 @@ void main() {
       }
       await Future<void>.delayed(Duration.zero);
       expect(peticiones, 1, reason: 'la pausa de 5 s debe impedir el segundo');
+    });
+
+    test('descarta una ruta que vuelve a la del viaje original', () async {
+      // Regresion de la queja: al corregir el desvio y cogerse la secundaria, el
+      // mapa volvia a la ruta de siempre. Encaja con que el backend tenga la
+      // respuesta cacheada por el par origen/destino y devuelva el trazado
+      // inicial, que a estas alturas ya esta a cientos de metros.
+      final srv = RouteRecalculationService(
+        postJson: (path, body) async =>
+            jsonDecode(_geoJsonRespuestaLejana()),
+      );
+      addTearDown(srv.dispose);
+      srv.iniciar(
+        ruta: const [LatLng(23.1000, -82.3600), LatLng(23.1200, -82.3600)],
+        destino: const LatLng(23.1400, -82.3500),
+      );
+
+      final lejos = const LatLng(23.1100, -82.3500);
+      for (var i = 0; i < 5; i++) {
+        srv.informarPosicion(lejos, 10.0);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      // No se aplica: el punto mas cercano de esa polilinea esta a ~1,1 km.
+      expect(srv.estado, isNot(RouteRecalcState.success));
     });
 
     test('el estado pasa por calculating y luego success', () async {

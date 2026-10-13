@@ -60,18 +60,16 @@ class NavigationModeService {
   final BufferCircularRumbo _buffer = BufferCircularRumbo();
 
   /// Distancia minima entre dos fixes para deducir el rumbo por
-  /// desplazamiento (course-over-ground) cuando no hay sensor.
+  /// desplazamiento (course-over-ground). Solo se usa si no hay sensor.
   ///
-  /// Subida de 8 m a 20 m. Con 8 m el error de posicion del GPS es del mismo
-  /// orden que el desplazamiento, y el rumbo medido sale con mucho ruido: en el
-  /// viaje medido, un 40 % de las muestras se apartaban mas de 15 grados y un 25 %
-  /// se iba de 90 a 150. Con 20 m de base el angulo se calcula sobre un recorrido
-  /// que domina el error de posicion.
+  /// Bajada de 20 m a 6 m, a peticion del conductor y con razon: 20 m a 5 km/h
+  /// son 14 s esperando para tener un dato, con lo que el rumbo arrive cuando ya
+  /// se ha doblado otra vez. Con 6 m son 4,3 s en esa misma velocidad.
   ///
-  /// El coste es un retardo de un ciclo mas: a 30 km/h son 2,4 s entre muestras
-  /// de rumbo. La camara ya suaviza con ~470 ms, y un giro de calle dura bastante
-  /// mas que eso, asi que no se nota.
-  static const double _distanciaMinimaCourseOverGround = 20.0;
+  /// Como la brújula es la que manda (ver [_recalcularObjetivo]), esta base ya no
+  /// afecta a la orientacion en un movil con sensor: solo cuenta si el telefono
+  /// se queda sin brújula.
+  static const double _distanciaMinimaCourseOverGround = 6.0;
 
   /// Metros por grado de latitud. Suficiente para dead-reckoning a escala de
   /// calle; no hace falta mas precision.
@@ -716,16 +714,26 @@ final v = _buffer.velocidadFiltrada();
       _notificarCambioTilt();
     }
 
-    // Rumbo. Se guardan las tres cosas por separado: lo que dice el sensor, lo que
-    // dice el GPS y cual se esta usando. Sin el sensor a la vista no hay forma
-    // de saber cual de los dos esta equivocado, que es justo lo que hace falta
-    // para orientar bien.
+    // Rumbo. La BRUJULA manda, y el GPS queda solo de respaldo.
+    //
+    // Estuvo al reves durante un viaje entero y fue un error. Medido en la banda
+    // de 5 a 20 km/h, que es donde mas se quejaba el conductor:
+    //
+    //   brújula: 48.121 saltos entre muestras seguidas, maximo 2 grados
+    //   GPS:     27.778 saltos, maximo 158 grados
+    //
+    // La brújula va sobrada de estable. El GPS a 1 Hz, deducido del
+    // desplazamiento entre fixes, es el que pega los saltos, y al dejar que
+    // mandara por encima de 2,2 m/s eran justo esos saltos los que llegaban al
+    // mapa. Por eso en esa banda la orientacion iba peor.
+    //
+    // El GPS se queda como respaldo para cuando no hay sensor. Si lo hay, manda
+    // el sensor aunque el vehiculo vaya rapido, que es lo natural: la brújula
+    // reacciona en el acto y no depende de que el GPS haya recorrido nada.
     final sensor = _buffer.rumboFiltrado();
     _rumboSensor = sensor;
     _rumboGpsBruto = _rumboGps;
-    final r = v >= ApiConfig.velocidadRumboGps && _rumboGps != null
-        ? _rumboGps
-        : (sensor ?? _rumboGps);
+    final r = sensor ?? _rumboGps;
     _rumbo = r;
 
 // Zoom de la fase. Al ir a 30 km/h o mas se ALEJA un nivel (zoom out),

@@ -317,7 +317,7 @@ class RouteRecalculationService extends ChangeNotifier {
     }
 
     try {
-      final json = await _postJson(_rutaEndpoint, {
+      final json = await _postJson('$_rutaEndpoint?_=${_reloj.elapsedMilliseconds}', {
         'origin': {'lat': origen.latitude, 'lng': origen.longitude},
         'destination': {'lat': destino.latitude, 'lng': destino.longitude},
         'profile': 'driving',
@@ -330,6 +330,27 @@ class RouteRecalculationService extends ChangeNotifier {
 
       final ruta = _rutaDesdeJson(json);
       if (ruta == null || ruta.points.length < 2) {
+        _fallarYReintentar();
+        return;
+      }
+
+      // La ruta devuelta tiene que ser NUESTRA, no la del viaje original.
+      //
+      // Queja del conductor: al corregir el desvio y cogerse la secundaria, el
+      // mapa volvia a la ruta de antes, ya estando lejos. Lo que encaja es que el
+      // backend tenga el resultado cacheado por el par origen/destino, y como el
+      // origen se manda redondeado, una peticion desde la nueva posicionCaen en
+      // la entrada vieja y devuelve el trazado inicial.
+      //
+      // Una ruta de verdad empieza donde estamos, a pocos metros. Si el punto de
+      // la polilinea mas cercano esta lejos, lo que ha llegado no es la ruta que
+      // se pidio y no se aplica: se cuenta como fallo y se reintenta con el
+      // candado de espera que ya hay.
+      final aqui = _ultimaPosicionConocida;
+      if (aqui != null && !_empiezaCercaDe(aqui, ruta.points)) {
+        final d = _distanciaMinima(aqui, ruta.points);
+        debugPrint('[RECALC] ruta descartada: su punto mas cercano esta a '
+            '${d.toStringAsFixed(0)} m (parece la cache del viaje original)');
         _fallarYReintentar();
         return;
       }
@@ -451,6 +472,35 @@ class RouteRecalculationService extends ChangeNotifier {
 
   /// Endpoint del backend para el recalculo.
   static const String _rutaEndpoint = '/api/routing/recalculate';
+
+  /// Distancia maxima a la que puede estar la ruta nueva respecto de donde
+  /// estamos para darla por buena.
+  ///
+  /// 200 m. Una ruta calculada ahora mismo arranca en el origen, a unos metros.
+  /// Este margen Absorbe el error del GPS y que el backend parta el origen con
+  /// precision propia, y aun asi deja fuera el caso de la ruta cacheada: cuando
+  /// ha vuelto a la inicial, el punto mas cercano estaba a cientos de metros,
+  /// porque el conductor ya habia salido de ella.
+  static const double _distanciaRutaValidaM = 200.0;
+
+  /// `true` si algun punto de la polilinea esta lo bastante cerca de [origen].
+  static bool _empiezaCercaDe(LatLng origen, List<LatLng> puntos) {
+    return _distanciaMinima(origen, puntos) <= _distanciaRutaValidaM;
+  }
+
+  /// Distancia en metros de [origen] al vertice mas proximo de [puntos].
+  static double _distanciaMinima(LatLng origen, List<LatLng> puntos) {
+    if (puntos.isEmpty) return double.infinity;
+    var min = double.infinity;
+    for (final p in puntos) {
+      final dx = (p.longitude - origen.longitude) * 111320.0 *
+          math.cos(origen.latitude * math.pi / 180.0);
+      final dy = (p.latitude - origen.latitude) * 110574.0;
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d < min) min = d;
+    }
+    return min;
+  }
 
   /// Distancia perpendicular del punto [p] a la polilinea [linea], en metros.
   ///
