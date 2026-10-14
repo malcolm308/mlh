@@ -501,9 +501,14 @@ void main() {
     // El margen crece con la velocidad: en ciudad el GPS es ruidoso y recalcular
     // de mas sale caro, y en carretera hace falta un margen mayor porque el
     // error del GPS pesa menos frente a lo lejos que se puede llegar.
-    test('los cuatro tramos dan 100 / 150 / 250 / 400 m', () {
-      expect(UmbralPorVelocidad.paraVelocidadKmh(0), 100.0);
-      expect(UmbralPorVelocidad.paraVelocidadKmh(19.9), 100.0);
+    test('los cuatro tramos dan 60 / 150 / 250 / 400 m', () {
+      // El tramo de baja velocidad baje de 100 a 60 m el 14/10: en un recorrido
+      // real el coche se vio 84 m fuera de la ruta durante minuto y medio sin
+      // que se disparara nada, con el mapa marcando un trayecto por el que no se
+      // iba. Los otros tres no se tocan: a 40 km/h, 60 m son cinco segundos de
+      // margen y un salto asi sale mas de un fix malo que de un conductor.
+      expect(UmbralPorVelocidad.paraVelocidadKmh(0), 60.0);
+      expect(UmbralPorVelocidad.paraVelocidadKmh(19.9), 60.0);
       expect(UmbralPorVelocidad.paraVelocidadKmh(20), 150.0);
       expect(UmbralPorVelocidad.paraVelocidadKmh(39.9), 150.0);
       expect(UmbralPorVelocidad.paraVelocidadKmh(40), 250.0);

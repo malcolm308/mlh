@@ -45,12 +45,28 @@ enum ZonaRuta { ciudad, carretera }
 /// velocidad, que es justo cuando mas costly sale recalcular de mas (mas
 /// bateria, mas trafico, mas esperas) y cuando el GPS mas tiende a la deriva.
 ///
-///   < 20 km/h  -> 100 m: calles estrechas y GPS muy ruidoso
+///   < 20 km/h  ->  60 m: calles estrechas y GPS muy ruidoso
 ///   20-40 km/h -> 150 m: ciudad normal
 ///   40-60 km/h -> 250 m: avenidas
 ///   > 60 km/h  -> 400 m: carretera
+///
+/// Los tres primeros tramos estaban medidos en un recorrido real del 14/10.
+/// El de baja velocidad bajaba de 100 m a 60 m porque se vio al coche 84 m
+/// fuera de la ruta durante minuto y medio sin que se disparara nada: el mapa
+/// seguia marcando un trayecto por el que no se iba y no habia manera de que
+/// el conductor recuperara la ruta.
+///
+/// 60 m y no menos por dos razones. La primera es que el filtro de tres
+/// muestras consecutivas del GPS a 1 Hz ya se come el ruido de una lectura
+/// suelta, que es el grueso de los falsos positivos. La segunda es que por
+/// debajo de 100 m el margen deja de distinguir "se ha salido a la paralela" de
+/// "ha entrado por un descampado o ha cruzado un puente".
+///
+/// A partir de 20 km/h no se toca nada. A 40 km/h son 11 m por segundo, y 60 m
+/// serian cinco segundos de margen: un salto de esas magnitudes en una avenida
+/// sale mas probablemente de un fix malo que de un conductor.
 extension UmbralPorVelocidad on ZonaRuta {
-  static const double _baja = 100;
+  static const double _baja = 60;
   static const double _media = 150;
   static const double _alta = 250;
   static const double _autopista = 400;

@@ -1,10 +1,10 @@
 
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
-/// ConfiguraciÃƒÆ’Ã‚Â³n central de la app de chofer.
+/// Configuracion central de la app de chofer.
 ///
 /// Por defecto apunta a los servicios desplegados en Render (backend FastAPI
-/// y servidor de tiles Martin). Se puede sobreescribir por lÃƒÆ’Ã‚Â­nea de comandos
+/// y servidor de tiles Martin). Se puede sobreescribir por l├¡nea de comandos
 /// con --dart-define, por ejemplo para desarrollo local:
 ///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=MARTIN_URL=http://localhost:8010
 class ApiConfig {
@@ -44,7 +44,7 @@ class ApiConfig {
   /// recta. Es el mismo canal fiable que ya usa el recalculo de desvios.
   static String recalculate() => '$baseUrl/api/routing/recalculate';
 
-  /// CancelaciÃƒÆ’Ã‚Â³n de un viaje por el pasajero.
+  /// Cancelacion de un viaje por el pasajero.
   static String cancelTrip(String tripId) => '$baseUrl/trips/$tripId/cancel';
 
   /// Cambio de estado (online/offline) de un chofer.
@@ -54,7 +54,7 @@ class ApiConfig {
   /// Health check del backend.
   static String health() => '$baseUrl/health';
 
-  /// PosiciÃƒÆ’Ã‚Â³n inicial/por defecto del chofer (Centro de La Habana).
+  /// Posicion inicial/por defecto del chofer (Centro de La Habana).
   static const LatLng defaultDriverLocation = LatLng(23.1136, -82.3666);
 
   static const double defaultZoom = 14;
@@ -74,7 +74,7 @@ class ApiConfig {
   /// de zooms de navegacion; con 18 las teselas salian muy pixeladas.
   static const int maxZoom = 17;
 
-  /// Zooms del "modo navegaciÃƒÆ’Ã‚Â³n": cada fase del viaje acerca el mapa lo justo
+  /// Zooms del "modo navegacion": cada fase del viaje acerca el mapa lo justo
   /// para que el chofer vea la calle por la que va sin perder el contexto.
   ///
   /// - [idle] sin viaje: vista general para ver las ofertas de la zona.
@@ -83,7 +83,7 @@ class ApiConfig {
   /// - [traslado] con pasajero a bordo: maximo detalle de calle.
   ///
   /// Estaban en 15/16/16/17 y se veia el vehiculo muy alejado: a z15 el mapa
-  /// abarca casi un kilÃƒÆ’Ã‚Â³metro y el chofer conduce mirando un plano general. Se
+  /// abarca casi un kilometro y el chofer conduce mirando un plano general. Se
   /// sube un nivel toda la escala menos la fase de traslado, que ya estaba en el
   /// maximo util.
   ///
@@ -217,7 +217,7 @@ class ApiConfig {
   ///
   /// 55, el angulo de ciudad. Antes el mapa arrancaba plano y se inclinaba
   /// solo al primer fix con velocidad, de modo que al recoger un viaje
-  /// parado se veÃƒÆ’Ã‚Â­a un salto de 0 a 55 grados en plena calle. Entrar ya
+  /// parado se veia un salto de 0 a 55 grados en plena calle. Entrar ya
   /// inclinado es lo que hace una app de navegacion y ademas es cuando mas
   /// hace falta: quieto en un sitio desconocido, mirando alrededor.
   ///
@@ -236,7 +236,7 @@ class ApiConfig {
 
   /// Cambio maximo de tilt por segundo, en grados.
   ///
-  /// 30 grados/s. Un cambio mas rapido se ve como un tirÃƒÆ’Ã‚Â³n, sobre todo al salir
+  /// 30 grados/s. Un cambio mas rapido se ve como un tir├│n, sobre todo al salir
   /// de un semaforo. El objetivo de [tiltObjetivoParaVelocidad] se persigue con
   /// esta rampa en lugar de saltar.
   static const double rampaTiltGradosPorSegundo = 30.0;
@@ -251,7 +251,7 @@ class ApiConfig {
 
   /// Tiempo que hay que estar por debajo de [fpsMinimoTilt] para degradar.
   ///
-  /// 2 s. Evita que un tirÃƒÆ’Ã‚Â³n puntual (una llamada, la apertura de otra app)
+  /// 2 s. Evita que un tiron puntual (una llamada, la apertura de otra app)
   /// apague la perspectiva y la vuelva a encender.
   static const Duration antiguedadDegradacion = Duration(seconds: 2);
 
@@ -348,7 +348,7 @@ class ApiConfig {
   ///
   /// **Medido y bajada a 2.2 m/s.** Con 3.5 el umbral casi no se alcanzaba en el
   /// trafico de La Habana (en el viaje 22b00b2f la velocidad maxima que saw el
-  /// GPS fue de 1.3 m/s), asi que mandaba casi siempre la brÃƒÆ’Ã‚Âºjula, que en este
+  /// GPS fue de 1.3 m/s), asi que mandaba casi siempre la br├║jula, que en este
   /// movil va desviada unos 85 grados. Sacando el rumbo real del propio
   /// recorrido del backend, el coche iba al este (113 grados de media) mientras
   /// el sensor decia 28. Con 2.2 m/s (~8 km/h) el GPS ya discrimina de sobra:
@@ -398,7 +398,7 @@ class ApiConfig {
     return 13;
   }
 
-  /// Zoom de la fase actual del viaje, para establishes el modo navegaciÃƒÆ’Ã‚Â³n.
+  /// Zoom de la fase actual del viaje, para establishes el modo navegaci├│n.
   ///
   /// Devuelve [zoomIdle] si no hay viaje en curso.
   static double zoomParaFase({String? status}) {
@@ -414,8 +414,8 @@ class ApiConfig {
     }
   }
 
-  /// ÃƒÆ’Ã‚Ârea cubierta por los tiles locales del mapa (La Habana, Artemisa,
-  /// Mayabeque y Pinar del RÃƒÆ’Ã‚Â­o).
+  /// Area cubierta por los tiles locales del mapa (La Habana, Artemisa,
+  /// Mayabeque y Pinar del Rio).
   ///
   /// Solo se muestran direcciones de calles que caen dentro de esta zona,
   /// es decir, las que existen en el mapa de la app.
@@ -424,7 +424,7 @@ class ApiConfig {
   static const double mapWest = -84.30;
   static const double mapEast = -81.80;
 
-  /// `true` si el punto estÃƒÆ’Ã‚Â¡ dentro del ÃƒÆ’Ã‚Â¡rea cartografiada del mapa.
+  /// `true` si el punto esta dentro del area cartografiada del mapa.
   static bool inMapArea(LatLng p) =>
       p.latitude >= mapSouth &&
       p.latitude <= mapNorth &&

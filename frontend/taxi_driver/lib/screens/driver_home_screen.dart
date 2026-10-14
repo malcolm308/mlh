@@ -51,19 +51,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const int _offerLimitSecs = 20;
   static const int _lostCloseSecs = 5;
 
-  /// MÃ¡ximo de antigÃ¼edad de un viaje 'accepted' para restaurarlo al abrir.
+  /// M├íximo de antig├╝edad de un viaje 'accepted' para restaurarlo al abrir.
   ///
-  /// En Cuba la red se cae y los mÃ³viles se apagan a media carrera. Un
-  /// 'accepted' reciente (menos de este tiempo) es una carrera legÃ­tima que
-  /// el chofer estaba siguiendo y se restaura tal cual. Uno mÃ¡s viejo es un
-  /// viaje huÃ©rfano (el pasajero se fue, la app de cliente se quedÃ³ sin red,
-  /// el chofer cerrÃ³ la suya...): se libera solo para que no quede atascado
+  /// En Cuba la red se cae y los m├│viles se apagan a media carrera. Un
+  /// 'accepted' reciente (menos de este tiempo) es una carrera leg├¡tima que
+  /// el chofer estaba siguiendo y se restaura tal cual. Uno m├ís viejo es un
+  /// viaje hu├®rfano (el pasajero se fue, la app de cliente se qued├│ sin red,
+  /// el chofer cerr├│ la suya...): se libera solo para que no quede atascado
   /// con un fantasma que no puede completar ni cancelar.
   static const int _maxAcceptedAgeMinutes = 15;
 
   /// Marcador del viaje activo en `SharedPreferences`. No guarda el viaje
   /// entero (la fuente de verdad es el backend), solo el par id + timestamp
-  /// con el que medir la antigÃ¼edad de un 'accepted' cuando el backend no
+  /// con el que medir la antig├╝edad de un 'accepted' cuando el backend no
   /// manda `requested_at`.
   static const String _prefViajeTrip = 'viaje_activo_trip';
   static const String _prefViajeTs = 'viaje_activo_ts';
@@ -167,7 +167,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// Mientras este marcado, el sondeo no debe tratar ese viaje como perdido:
   /// al aceptar, el viaje deja de salir en `requested-nearby` antes de que la
   /// respuesta asigne [_activeTrip], y en esa ventana el poller veia "ya no
-  /// estÃ¡" y mostraba la carta de "Otro conductor aceptÃ³ el viaje" sobre el
+  /// est├í" y mostraba la carta de "Otro conductor acept├│ el viaje" sobre el
   /// viaje que acababa de ganar el propio chofer.
   String? _aceptandoTripId;
 
@@ -204,10 +204,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// Mientras lo sea, `_refreshRoutes` no puede sobrescribir `_route` con la
   /// ruta original del viaje.
   ///
-  /// Antes no existia esta distincion y el pisÃ³n era constante. Medido en el
+  /// Antes no existia esta distincion y el pison era constante. Medido en el
   /// recorrido del 14/10: una ruta recalculada de 98 puntos se aplico a las
   /// 08:31:34 y a las 08:31:34 ya estaba la original de 80 puntos. Con el
-  /// detector rearmandose a cada pisÃ³n, ademas, media un desvio que no existia y
+  /// detector rearmandose a cada pison, ademas, media un desvio que no existia y
   /// volvia a pedir ruta: un bucle de recalculos encadenados.
   ///
   /// Se limpia al cambiar de viaje o de fase, que es cuando la ruta original
@@ -291,7 +291,7 @@ double? _rumboParaFlecha() {
         _ => status.toUpperCase(),
       };
 
-  /// Fase de recogida: el chofer aÃºn va hacia el punto de recogida.
+  /// Fase de recogida: el chofer a├║n va hacia el punto de recogida.
   bool get _pickupPhase =>
       _activeTrip != null &&
       (_activeTrip!.status == 'accepted' ||
@@ -422,7 +422,7 @@ double? _rumboParaFlecha() {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(const SnackBar(
-            content: Text('Recalculando rutaâ€¦'),
+            content: Text('Recalculando rutaÔÇª'),
             duration: Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
           ));
@@ -436,8 +436,8 @@ double? _rumboParaFlecha() {
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(
             content: Text(agotado
-                ? 'Sin conexiÃ³n. Se mantiene la ruta anterior.'
-                : 'Sin conexiÃ³n, ruta no actualizada. Reintentandoâ€¦'),
+                ? 'Sin conexi├│n. Se mantiene la ruta anterior.'
+                : 'Sin conexi├│n, ruta no actualizada. ReintentandoÔÇª'),
             duration: const Duration(seconds: 4),
             behavior: SnackBarBehavior.floating,
           ));
@@ -501,7 +501,7 @@ double? _rumboParaFlecha() {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(
-        content: Text('Vista 3D desactivada para ahorrar baterÃ­a'),
+        content: Text('Vista 3D desactivada para ahorrar bater├¡a'),
         duration: Duration(seconds: 3),
         behavior: SnackBarBehavior.floating,
       ));
@@ -638,7 +638,7 @@ double? _rumboParaFlecha() {
       return;
     }
     _markOfferLost(offer);
-    _mostrarAviso('Otro conductor aceptÃ³ el viaje a ${_destino(offer)}');
+    _mostrarAviso('Otro conductor acept├│ el viaje a ${_destino(offer)}');
   }
 
   /// Una oferta dejo de venir en el sondeo. Se consulta su estado para no
@@ -648,7 +648,7 @@ double? _rumboParaFlecha() {
   /// veredicto que no se puede sostener seria peor que no decir nada.
   Future<void> _retirarAvisoSiDesaparecio(String tripId) async {
     // Si el viaje es nuestro (aceptacion en vuelo o ya en curso), que haya
-    // dejado de salir en el sondeo NO es que "otro conductor lo tomÃ³" (es
+    // dejado de salir en el sondeo NO es que "otro conductor lo tom├│" (es
     // justo lo contrario). Sin este guardado, el chofer que ganaba el viaje
     // recibia la carta de "Aceptado por otro chofer" sobre su propia carrera.
     if (tripId == _aceptandoTripId || tripId == _activeTrip?.tripId) {
@@ -1314,15 +1314,15 @@ if (!mounted || req != _routeReq) return;
   /// Restaura el viaje en curso tras un reinicio de la app.
   ///
   /// [_activeTrip] vive solo en memoria: se asignaba al aceptar la oferta y
-  /// en el sondeo, de modo que si el proceso muriÃ³ (reinicio del telÃ©fono,
-  /// cierre del sistema, actualizaciÃ³n) el panel de "VIAJE EN CURSO"
-  /// desaparecÃ­a aunque el viaje siguiera vivo en el backend, y el chofer no
-  /// tenÃ­a manera de recuperarlo. Se consulta el historial del chofer y se
-  /// recoge el viaje vivo mÃ¡s reciente; si existe, arranca el mismo circuito
-  /// que al aceptar: sondeo, lÃ­mite de cancelaciones y rutas.
+  /// en el sondeo, de modo que si el proceso muri├│ (reinicio del tel├®fono,
+  /// cierre del sistema, actualizaci├│n) el panel de "VIAJE EN CURSO"
+  /// desaparec├¡a aunque el viaje siguiera vivo en el backend, y el chofer no
+  /// ten├¡a manera de recuperarlo. Se consulta el historial del chofer y se
+  /// recoge el viaje vivo m├ís reciente; si existe, arranca el mismo circuito
+  /// que al aceptar: sondeo, l├¡mite de cancelaciones y rutas.
   ///
   /// Cualquier fallo se traga en silencio: sin red no hay nada que
-  /// restaurar y el resto de la pantalla sigue siendo usable; al prÃ³ximo
+  /// restaurar y el resto de la pantalla sigue siendo usable; al pr├│ximo
   /// arranque se reintenta.
   Future<void> _restaurarViajeActivo() async {
     if (_panelDemo || _activeTrip != null) return;
@@ -1336,29 +1336,29 @@ if (!mounted || req != _routeReq) return;
         return;
       }
       // El historial puede venir sin orden garantizado: el vivo que importa
-      // es el mÃ¡s reciente.
+      // es el m├ís reciente.
       vivos.sort(
           (a, b) => (b.requestedAt ?? '').compareTo(a.requestedAt ?? ''));
       final viaje = await widget.api.getTrip(vivos.first.tripId);
       if (!mounted || _activeTrip != null) return;
-      // Entre consultas el viaje pudo terminar: si ya no estÃ¡ vivo, no se
+      // Entre consultas el viaje pudo terminar: si ya no est├í vivo, no se
       // monta el panel de un viaje que el backend dio por cerrado.
       if (!estadosViajeVivos.contains(viaje.status)) {
         await _limpiarMarcadorViaje();
         return;
       }
-      // Un 'accepted' que no avanzÃ³ en demasiado tiempo es un viaje huÃ©rfano
-      // (el pasajero se fue, la app de cliente se quedÃ³ sin red...): se
+      // Un 'accepted' que no avanz├│ en demasiado tiempo es un viaje hu├®rfano
+      // (el pasajero se fue, la app de cliente se qued├│ sin red...): se
       // libera solo, sin tocar las cancelaciones del chofer, y no se
       // restaura. Los estados ya encaminados (`driver_arrived`,
-      // `in_progress`) se restauran SIEMPRE: el chofer estÃ¡ en la carrera y
+      // `in_progress`) se restauran SIEMPRE: el chofer est├í en la carrera y
       // esa carrera no debe expirar.
       if (viaje.status == 'accepted' && await _esViajeObsoleto(viaje)) {
         try {
           await widget.api.releaseTrip(viaje.tripId);
         } catch (_) {
           // Si el release falla (el viaje ya no existe y el backend responde
-          // 400, o la red se cortÃ³) igual se limpia el marcador: aquÃ­ no hay
+          // 400, o la red se cort├│) igual se limpia el marcador: aqu├¡ no hay
           // nada accionable que restaurar. El chofer vuelve a quedar libre
           // para recibir ofertas.
         }
@@ -1381,16 +1381,16 @@ if (!mounted || req != _routeReq) return;
       _cancelacion.cargar(driverId: widget.driverId);
       _refreshRoutes();
     } catch (_) {
-      // Silencioso: ver doc del mÃ©todo. Sin red no hay nada que restaurar; el
-      // marcador se conserva para reintentar en el prÃ³ximo arranque y el
-      // chofer queda disponible (idle), que es la consecuencia mÃ¡s segura.
+      // Silencioso: ver doc del m├®todo. Sin red no hay nada que restaurar; el
+      // marcador se conserva para reintentar en el pr├│ximo arranque y el
+      // chofer queda disponible (idle), que es la consecuencia m├ís segura.
     }
   }
 
   /// Guarda el par id + timestamp del viaje en curso.
   ///
   /// No es una copia del viaje (el backend es la fuente de verdad): solo se
-  /// usa como regla de intendencia para medir la antigÃ¼edad de un 'accepted'
+  /// usa como regla de intendencia para medir la antig├╝edad de un 'accepted'
   /// cuando el viaje no trae `requested_at`.
   Future<void> _guardarMarcadorViaje(TripOffer viaje) async {
     final prefs = await SharedPreferences.getInstance();
@@ -1405,12 +1405,12 @@ if (!mounted || req != _routeReq) return;
     await prefs.remove(_prefViajeTs);
   }
 
-  /// Dice si un viaje 'accepted' es obsoleto: lleva mÃ¡s de
+  /// Dice si un viaje 'accepted' es obsoleto: lleva m├ís de
   /// [_maxAcceptedAgeMinutes] sin avanzar.
   ///
   /// Se prefiere el `requested_at` del backend (reloj del servidor) a fiarse
-  /// del reloj del mÃ³vil; si el viaje no lo trae, se usa el timestamp que se
-  /// guardÃ³ al aceptar o restaurar el viaje.
+  /// del reloj del m├│vil; si el viaje no lo trae, se usa el timestamp que se
+  /// guard├│ al aceptar o restaurar el viaje.
   Future<bool> _esViajeObsoleto(TripOffer viaje) async {
     final ahora = DateTime.now().toUtc();
     DateTime? base = _parseTimestampUtc(viaje.requestedAt);
@@ -1427,9 +1427,9 @@ if (!mounted || req != _routeReq) return;
   /// Convierte un timestamp del backend a UTC.
   ///
   /// `requested_at` sale de Postgres como TIMESTAMP en UTC; el JSON puede
-  /// traerlo con sufijo de zona ("...Z" o "+00:00") o sin Ã©l. Sin sufijo, Dart
-  /// lo interpretarÃ­a como hora LOCAL del mÃ³vil y la antigÃ¼edad se
-  /// calcularÃ­a mal, asÃ­ que se fuerza a UTC con el mismo reloj de pared.
+  /// traerlo con sufijo de zona ("...Z" o "+00:00") o sin ├®l. Sin sufijo, Dart
+  /// lo interpretar├¡a como hora LOCAL del m├│vil y la antig├╝edad se
+  /// calcular├¡a mal, as├¡ que se fuerza a UTC con el mismo reloj de pared.
   static DateTime? _parseTimestampUtc(String? s) {
     if (s == null) return null;
     final t = DateTime.tryParse(s);
@@ -1466,8 +1466,8 @@ if (!mounted || req != _routeReq) return;
       // Viaje nuevo: la ruta guardada es del trayecto anterior y no debe
       // reutilizarse (el destino nuevo puede estar a menos de 150 m del viejo).
       OsrmService.olvidarCache();
-      // Al aceptar se guarda el marcador (id + ts) con el que medir despuÃ©s
-      // la antigÃ¼edad de un 'accepted' al reabrir la app.
+      // Al aceptar se guarda el marcador (id + ts) con el que medir despu├®s
+      // la antig├╝edad de un 'accepted' al reabrir la app.
       await _guardarMarcadorViaje(trip);
       _startTripPoller();
       // El limite de cancelaciones se consulta al empezar un viaje: es
@@ -1517,7 +1517,7 @@ if (!mounted || req != _routeReq) return;
     try {
       switch (trip.status) {
         case 'accepted':
-          // Marca la ubicaciÃ³n real de recogida: desde aquÃ­ se cuentan los kilÃ³metros.
+          // Marca la ubicaci├│n real de recogida: desde aqu├¡ se cuentan los kil├│metros.
           await widget.api.setPickup(trip.tripId, _driverPos.latitude,
               _driverPos.longitude);
           await widget.api.updateTripStatus(trip.tripId, 'driver_arrived');
@@ -1592,7 +1592,7 @@ _route = [];
       _toPickupKm = null;
       _toPickupMin = null;
     });
-    // Sin viaje en curso ya no hace falta el marcador de antigÃ¼edad.
+    // Sin viaje en curso ya no hace falta el marcador de antig├╝edad.
     await _limpiarMarcadorViaje();
 
     // El chofer vuelve a estar disponible para recibir ofertas. Si esto fallara
@@ -1667,7 +1667,7 @@ void _startTripPoller() {
     final trip = _activeTrip;
     final numero = trip?.clientPhone;
     if (numero == null || numero.trim().isEmpty) {
-      _showError('No hay un nÃºmero de telÃ©fono del pasajero para este viaje.');
+      _showError('No hay un n├║mero de tel├®fono del pasajero para este viaje.');
       return;
     }
     try {
@@ -1686,7 +1686,7 @@ void _startTripPoller() {
     final trip = _activeTrip;
     final numero = trip?.clientPhone;
     if (numero == null || numero.trim().isEmpty) {
-      _showError('No hay un nÃºmero de telÃ©fono del pasajero para este viaje.');
+      _showError('No hay un n├║mero de tel├®fono del pasajero para este viaje.');
       return;
     }
     try {
@@ -1702,7 +1702,7 @@ void _startTripPoller() {
     final trip = _activeTrip;
     if (trip == null) return;
     try {
-      // Reporta la posiciÃ³n al backend (que la reenvÃ­a a Traccar) mientras el viaje estÃ¡ activo.
+      // Reporta la posici├│n al backend (que la reenv├¡a a Traccar) mientras el viaje est├í activo.
       await widget.api.setDriverLocation(
           widget.driverId, _driverPos.latitude, _driverPos.longitude);
 
@@ -1716,8 +1716,8 @@ void _startTripPoller() {
       if (!estadosViajeVivos.contains(actual.status)) {
         await _alPerderElViaje(
           actual.status == 'cancelled'
-              ? 'El pasajero cancelÃ³ el viaje'
-              : 'El viaje ya no estÃ¡ activo',
+              ? 'El pasajero cancel├│ el viaje'
+              : 'El viaje ya no est├í activo',
         );
         return;
       }
@@ -1745,11 +1745,11 @@ void _startTripPoller() {
       });
       await _refreshRoutes();
     } catch (_) {
-      // Silencioso: la ruta sigue disponible en el prÃ³ximo tick.
+      // Silencioso: la ruta sigue disponible en el pr├│ximo tick.
     }
   }
 
-  // ---------------- DIÃLOGOS ----------------
+  // ---------------- DI├üLOGOS ----------------
 
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1766,22 +1766,22 @@ void _startTripPoller() {
           mainAxisSize: MainAxisSize.min,
           children: [
             _row('Distancia', '${t.distanceKm} km'),
-            _row('DuraciÃ³n', _fmtDuration(t.durationSecs)),
+            _row('Duraci├│n', _fmtDuration(t.durationSecs)),
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Tiempo', '${t.timeFare.toStringAsFixed(2)} ${t.currency}'),
-            _row('ComisiÃ³n ${t.commissionLabel}',
+            _row('Comisi├│n ${t.commissionLabel}',
                 '-${t.commission.toStringAsFixed(2)} ${t.currency}'),
             if (t.commissionDiscount)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'Descuento aplicado: 3er viaje del dÃ­a con comisiÃ³n reducida.',
+                  'Descuento aplicado: 3er viaje del d├¡a con comisi├│n reducida.',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
               ),
             const Divider(),
-            // El total es el precio final del viaje. La comisiÃ³n ya se
+            // El total es el precio final del viaje. La comisi├│n ya se
             // desconto del Fondo del chofer, no se resta de aqui.
             _row('Total del viaje',
                 '${t.totalFare.toStringAsFixed(2)} ${t.currency}',
@@ -1912,7 +1912,7 @@ void _startTripPoller() {
                 const SizedBox(height: 4),
                 _circularButton(
                   Icons.menu,
-                  tooltip: 'MenÃº',
+                  tooltip: 'Men├║',
                   onTap: () => _scaffoldKey.currentState?.openDrawer(),
                 ),
               ],
@@ -1934,7 +1934,7 @@ void _startTripPoller() {
                       ? (Icons.gps_fixed)
                       : (Icons.gps_off),
                   tooltip: _gpsState == LocationPermissionState.granted
-                      ? 'Recentrar en mi posiciÃ³n'
+                      ? 'Recentrar en mi posici├│n'
                       : 'Activar GPS',
                   onTap: _gpsState == LocationPermissionState.granted
                       ? _followGpsAgain
@@ -2030,7 +2030,7 @@ void _startTripPoller() {
     final toPickupKm = _toPickupKm ?? o.distanciaChoferKm;
     final toPickupTxt = toPickupKm != null
         ? '${toPickupKm.toStringAsFixed(1)} km'
-            '${_toPickupMin != null ? ' Â· ${_toPickupMin!.ceil()} min' : ''}'
+            '${_toPickupMin != null ? ' ┬À ${_toPickupMin!.ceil()} min' : ''}'
         : '-';
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -2264,8 +2264,8 @@ if (o.pickup != null) ...[
     );
   }
 
-  /// LÃ­nea con la direcciÃ³n en calles del punto, con coordenadas como
-  /// referencia secundaria (o como texto principal si no hay direcciÃ³n).
+  /// L├¡nea con la direcci├│n en calles del punto, con coordenadas como
+  /// referencia secundaria (o como texto principal si no hay direcci├│n).
   Widget _addressLine(TripOffer o, {required bool pickup}) {
     const muted = Color(0xFF6B7280);
     const text = Color(0xFF1F2937);
@@ -2294,10 +2294,10 @@ String _fmtCoord(LatLng p) =>
   String _addrKey(LatLng p) =>
       '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
 
-  /// DirecciÃ³n legible (nombres de calle) de la recogida o del destino.
+  /// Direcci├│n legible (nombres de calle) de la recogida o del destino.
   ///
-  /// Prioriza la direcciÃ³n que enviÃ³ el pasajero al crear el viaje; si el
-  /// viaje se creÃ³ con un pin en el mapa (sin direcciÃ³n), geocodifica en
+  /// Prioriza la direcci├│n que envi├│ el pasajero al crear el viaje; si el
+  /// viaje se cre├│ con un pin en el mapa (sin direcci├│n), geocodifica en
   /// segundo plano y actualiza la pantalla cuando responde.
   String? _addressOf(TripOffer o, {required bool pickup}) {
     final provided = pickup ? o.requestAddress : o.dropoffAddress;
@@ -2352,7 +2352,7 @@ String _fmtCoord(LatLng p) =>
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Se borrarÃ¡ en: $_lostCountdown s',
+                      'Se borrar├í en: $_lostCountdown s',
                       style: const TextStyle(color: muted, fontSize: 13),
                     ),
                   ],
@@ -2374,7 +2374,7 @@ String _fmtCoord(LatLng p) =>
                       color: text, fontSize: 14, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 2),
-                Text('${o.numPasajes} pasajero(s) Â· Efectivo',
+                Text('${o.numPasajes} pasajero(s) ┬À Efectivo',
                     style: const TextStyle(color: muted, fontSize: 12)),
               ],
             ),
@@ -2516,7 +2516,7 @@ String _fmtCoord(LatLng p) =>
     const secondaryText = Color(0xFF888888);
     final vehicleLabel = widget.profile.vehicleModel.isNotEmpty
         ? widget.profile.vehicleModel
-        : (widget.profile.vehicleType ?? 'VehÃ­culo');
+        : (widget.profile.vehicleType ?? 'Veh├¡culo');
     return _PanelCard(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2528,7 +2528,7 @@ String _fmtCoord(LatLng p) =>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Mi vehÃ­culo',
+                    const Text('Mi veh├¡culo',
                         style: TextStyle(color: secondaryText, fontSize: 13)),
                     const SizedBox(height: 4),
                     Row(
@@ -2598,7 +2598,7 @@ String _fmtCoord(LatLng p) =>
                       Text(
                         _online
                             ? 'Listo para recibir solicitudes'
-                            : 'No recibirÃ¡s nuevas solicitudes',
+                            : 'No recibir├ís nuevas solicitudes',
                         style: const TextStyle(
                             color: secondaryText, fontSize: 12),
                       ),
@@ -2634,7 +2634,7 @@ String _fmtCoord(LatLng p) =>
                     ),
                     const SizedBox(height: 2),
                     const Text(
-                      'Al activar esta opciÃ³n se te mostrarÃ¡n en pantalla las solicitudes de viajes.',
+                      'Al activar esta opci├│n se te mostrar├ín en pantalla las solicitudes de viajes.',
                       style: TextStyle(color: secondaryText, fontSize: 12, height: 1.4),
                     ),
                   ],
@@ -2659,7 +2659,7 @@ String _fmtCoord(LatLng p) =>
     final trip = _activeTrip!;
     final pickup = trip.pickup;
     final nextStep = switch (trip.status) {
-      'accepted' => 'LleguÃ© al punto de recogida',
+      'accepted' => 'Llegu├® al punto de recogida',
       'driver_arrived' => 'Iniciar viaje',
       'in_progress' => 'Completar viaje',
       _ => null,
@@ -2674,7 +2674,7 @@ String _fmtCoord(LatLng p) =>
             children: [
               const Icon(Icons.route, color: Colors.orangeAccent),
               const SizedBox(width: 8),
-              Text('VIAJE EN CURSO Â· ${estadoViaje(trip.status)}',
+              Text('VIAJE EN CURSO ┬À ${estadoViaje(trip.status)}',
                   style: const TextStyle(
                       fontWeight: FontWeight.bold, color: Colors.orangeAccent)),
             ],
@@ -2811,7 +2811,7 @@ if (pickup != null)
         const SizedBox(width: 6),
         Flexible(
           child: Text(
-            'No puedes cancelar: lÃ­mite diario alcanzado '
+            'No puedes cancelar: l├¡mite diario alcanzado '
             '(${CancellationService.maximoPorDia}/${CancellationService.maximoPorDia})',
             style: TextStyle(
               fontSize: 12,
@@ -2825,7 +2825,7 @@ if (pickup != null)
 
   /// Flujo completo de cancelar: confirmar, pedir motivo, llamar al backend.
   ///
-  /// El orden importa. Primero la confirmacion, porque cancelar sinæƒ³é—® no debe
+  /// El orden importa. Primero la confirmacion, porque cancelar sin preguntar no debe
   /// pasar; despues el motivo, que es opcional; y solo entonces se gasta una de
   /// las tres oportunidades del dia.
   Future<void> _cancelarViaje(TripOffer t) async {
@@ -2852,7 +2852,7 @@ if (pickup != null)
         _alPerderElViaje('Viaje cancelado');
       case ResultadoCancelacion.limiteAlcanzado:
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Llegaste al lÃ­mite de 3 cancelaciones de hoy'),
+          content: Text('Llegaste al l├¡mite de 3 cancelaciones de hoy'),
         ));
       case ResultadoCancelacion.viajeNoCancelable:
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -2980,7 +2980,7 @@ if (pickup != null)
             ),
             ListTile(
               leading: const Icon(Icons.settings_outlined, color: Color(0xFF333333)),
-              title: const Text('ConfiguraciÃ³n'),
+              title: const Text('Configuraci├│n'),
               onTap: () {
                 Navigator.of(context).pop();
                 Navigator.of(context).push(MaterialPageRoute(
@@ -3005,7 +3005,7 @@ if (pickup != null)
             ListTile(
               leading: const Icon(Icons.logout, color: Color(0xFF333333)),
               title: const Text(
-                'Cerrar sesiÃ³n',
+                'Cerrar sesi├│n',
                 style: TextStyle(color: Color(0xFFB3261E)),
               ),
               onTap: _logout,

@@ -401,7 +401,7 @@ class MainActivity : FlutterActivity() {
      *
      * Es un camino separado de [startUpdates] a proposito: el modo flota
      * (10 s / 20 m) sirve para refrescar la posicion que ve el backend y no
-     * debe cambiar de comportamiento al aÃ±adir navegacion.
+     * debe cambiar de comportamiento al a├▒adir navegacion.
      *
      * [usarSensor] en `false` deja el sensor sin registrar. La app lo pide asi
      * porque el heading-up sale de la ruta, no del sensor: en este movil el

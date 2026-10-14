@@ -199,7 +199,7 @@ class NavigationModeService {
   ///
   /// Se mueve con una rampa de [ApiConfig.rampaTiltGradosPorSegundo] y nunca
   /// de golpe: el objetivo sale de la velocidad, pero el camino se recorre
-  /// despacio para que no se vea como un tirÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n al salir de un semaforo.
+  /// despacio para que no se vea como un tirón al salir de un semaforo.
 double _tiltActual = ApiConfig.tiltDegradado;
 
   /// Tilt y zoom que impone el recentrar, o `null` cuando manda la velocidad.
@@ -229,7 +229,7 @@ double _tiltActual = ApiConfig.tiltDegradado;
     // Se pide el GPS a 1 Hz SIN sensor de rumbo.
     //
     // El heading-up sale solo de la ruta (ver [_rumboDesdeRuta]), asi que la
-    // brÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºjula no hace falta para nada. Se apagÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ del todo y no solo de dejar de
+    // brujula no hace falta para nada. Se apago del todo y no solo de dejar de
     // leerla: [LocationService.watchNavegacion] avisa al nativo con
     // `sensor: false`, de modo que Android no registra el listener y no llegan
     // ~50 eventos por segundo por el canal. En un taxi durante un viaje son
@@ -433,7 +433,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
   ///
   /// Es lo que aplica la perspectiva. NUNCA se asigna de golpe: [_rampearTilt]
   /// lo acerca al objetivo como mucho [ApiConfig.rampaTiltGradosPorSegundo]
-  /// grados por segundo, de modo que acelerar o frenar no produce un tirÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n.
+  /// grados por segundo, de modo que acelerar o frenar no produce un tirón.
   double get tiltActual => _tiltActual;
 
   /// Tilt objetivo en grados. Lo consume la transicion de entrada al modo.
@@ -462,7 +462,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
   ///
   /// Sin esto el servicio no tiene forma de saber por donde se va a salir de un
   /// cruce, que es justo lo que hace falta cuando se va despacio y ni el GPS ni
-  /// la brÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºjula sirven. Lo llama la pantalla cada vez que cambia la ruta (la
+  /// la brujula sirven. Lo llama la pantalla cada vez que cambia la ruta (la
   /// inicial, la del recalculo por desvio y la de recogida).
   void informarRuta(List<LatLng> ruta) {
     if (ruta.length == _ruta.length &&
@@ -614,8 +614,8 @@ final v = _buffer.velocidadFiltrada();
 
     // Rumbo. Sale SOLO de la ruta.
     //
-    // Se elimino el uso de la brÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºjula y del rumbo del GPS. Los dos se peleaban
-    // entre si y los dos fallaban: la brÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºjula daba el mismo valor en 48.121
+    // Se elimino el uso de la brujula y del rumbo del GPS. Los dos se peleaban
+    // entre si y los dos fallaban: la brujula daba el mismo valor en 48.121
     // muestras seguidas (2 grados de recorrido total, o sea clavada) y el rumbo
     // deducido del GPS a 1 Hz pegaba saltos de hasta 158 grados, ademas de no
     // servir por debajo de 20 km/h porque el error de posicion es mayor que el
@@ -808,7 +808,7 @@ final v = _buffer.velocidadFiltrada();
   ///
   /// Con viaje pero sin ruta utilizable, se conserva el ultimo rumbo valido en
   /// vez de saltar al norte: mientras OSRM responde, ese caso no se ve, pero si
-  /// la ruta llega vacia o se agota el trazado el mapa no debe dar un tirÃƒÆ’Ã‚Â³n de
+  /// la ruta llega vacia o se agota el trazado el mapa no debe dar un tiron de
   /// 180 grados.
   void _aplicarOrientacion() {
     if (!_hayViajeActivo) {
