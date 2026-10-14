@@ -793,8 +793,38 @@ double? _rumboParaFlecha() {
           .setDriverLocation(widget.driverId, p.latitude, p.longitude)
           .catchError((_) {});
     }
+
+    // Cadencia minima entre refrescos de ruta.
+    //
+    // El modo flota entrega cada 10 s o cada 20 m, lo que llegue antes. A 30 km/h
+    // son 20 m en 2,4 s, y `_refreshRoutes` se llevaba por delante una peticion
+    // a OSRM cada dos segundos y medio sin que la ruta cambiase: el destino no
+    // se mueve y el trazado tampoco.
+    //
+    // El detector de desvios no se resiente: va por su propio canal a 1 Hz, con
+    // la posicion y la velocidad ya filtradas. 10 s es ademas el intervalo que el
+    // modo flota ya usaba para el latido al backend, con lo que la ruta queda
+    // sincronizada con el.
+    final ahora = DateTime.now();
+    final ultimo = _ultimoRefreshRuta;
+    if (ultimo != null &&
+        ahora.difference(ultimo).inMilliseconds <
+            _intervaloRefreshRuta.inMilliseconds) {
+      return;
+    }
+    _ultimoRefreshRuta = ahora;
     _refreshRoutes();
   }
+
+  /// Minimo entre dos `_refreshRoutes` lanzados desde [_setDriverPos].
+  static const Duration _intervaloRefreshRuta = Duration(seconds: 10);
+
+  /// Cuando se lanzo el ultimo `_refreshRoutes` desde [_setDriverPos].
+  ///
+  /// Reloj de pared y no monotono a proposito: compara dos instantes de la misma
+  /// serie, y un salto de hora del movil solo hace que se refresque antes o
+  /// despues, nunca que se bloquee el refresco para siempre.
+  DateTime? _ultimoRefreshRuta;
 
   // ---------------- GPS ----------------
 
@@ -1003,7 +1033,33 @@ double? _rumboParaFlecha() {
     // curso:
     //   - fase de recogida ('accepted'/'driver_arrived') ? ruta de recogida.
     //   - fase de traslado ('in_progress') ? ruta hacia el destino.
-    final inTripPhase = active != null && active.status == 'in_progress';
+final inTripPhase = active != null && active.status == 'in_progress';
+
+    // Si la ruta buena es una recalculada por un desvio, no se pregunta nada.
+    //
+    // La comprobacion va ANTES del await, no despues. Preguntar y luego
+    // descartar tiraba el trabajo: `_refreshRoutes` entra por cada fix del modo
+    // flota (cada 10 s o cada 20 m, lo que llegue antes: a 30 km/h, 2,4 s) y por
+    // el sondeo del viaje cada 4 s. En la fase de recogida el origen es la
+    // posicion en vivo del coche, con lo que la cache exacta de `OsrmService`
+    // nunca acierta y cada llamada es una peticion real al backend. Medido: 180
+    // rechazos en 5 min 30, todos de peticiones cuyo resultado se iba a la
+    // basura.
+    //
+    // Aqui solo queda pendiente mantener al dia el encuadre y el detector, que
+    // van por su cuenta y no necesitan la ruta de OSRM.
+    if (inTripPhase ? _rutaEsRecalculada : _rutaRecogidaEsRecalculada) {
+      _vecesRutaProtegida++;
+      if (_vecesRutaProtegida == 1 || _vecesRutaProtegida % 60 == 0) {
+        TrazaFichero.instancia.escribir('[RUTA] recalculada vigente: no se '
+            'pregunta a OSRM ($_vecesRutaProtegida veces)');
+      }
+      _encuadrarTrayecto(pickup: pickup, dropoff: inTripPhase ? dropoff : null);
+      _arrancarRecalc(inTripPhase ? dropoff : pickup, inTripPhase);
+      _publicarRuta();
+      return;
+    }
+
     final OsrmRoute? toPickup;
     final OsrmRoute? toDropoff;
     if (inTripPhase) {
@@ -1015,43 +1071,17 @@ double? _rumboParaFlecha() {
       toPickup = await OsrmService.route(_driverPos, pickup);
       toDropoff = null;
     }
-if (!mounted || req != _routeReq) return;
+    if (!mounted || req != _routeReq) return;
     setState(() {
-      // Ni `_route` (traslado) ni `_routeToPickup` (recogida) pueden volver a
-      // llenarse con la ruta de OSRM mientras la buena sea una recalculada por
-      // desvio.
-      //
-      // Da igual la fase: la ruta recalculada manda hasta que haya un desvio
-      // nuevo que la reemplace. Antes solo se protegia `_route`, y en la fase
-      // de recogida `_routeToPickup` seguia reescribiendose con
-      // `OsrmService.route(_driverPos, pickup)`, que parte de la posicion
-      // actual. Medido: 53 recalculos seguidos, cada uno aguantaba 1-2 s y
-      // luego volvia la original, y el detector media el desvio contra la ruta
-      // equivocada.
+      // Sin ruta recalculada, la de OSRM es la buena y se aplica entera.
       if (inTripPhase) {
-        _enfocarRuta(
-          recalculada: _rutaEsRecalculada,
-          nueva: toDropoff?.points ?? const [],
-          km: toDropoff?.distanceKm,
-          min: toDropoff?.durationMinutes,
-          escribir: (pts, km, min) {
-            _route = pts;
-            _tripKm = km;
-            _tripMin = min;
-          },
-        );
+        _route = toDropoff?.points ?? const [];
+        _tripKm = toDropoff?.distanceKm;
+        _tripMin = toDropoff?.durationMinutes;
       } else {
-        _enfocarRuta(
-          recalculada: _rutaRecogidaEsRecalculada,
-          nueva: toPickup?.points ?? const [],
-          km: toPickup?.distanceKm,
-          min: toPickup?.durationMinutes,
-          escribir: (pts, km, min) {
-            _routeToPickup = pts;
-            _toPickupKm = km;
-            _toPickupMin = min;
-          },
-        );
+        _routeToPickup = toPickup?.points ?? const [];
+        _toPickupKm = toPickup?.distanceKm;
+        _toPickupMin = toPickup?.durationMinutes;
       }
     });
     // Si OSRM fallo, `_rutaVisible` se cae a la linea recta entre extremos:
@@ -1071,40 +1101,17 @@ if (!mounted || req != _routeReq) return;
     _publicarRuta();
   }
 
-  /// Escribe la ruta de OSRM solo si la buena no es una recalculada por desvio.
+  /// Veces que se ha ahorrado la peticion a OSRM por tener ruta recalculada.
   ///
-  /// Si [recalculada] es `true`, no se escribe nada: la ruta del detector de
-  /// desvios manda hasta que un desvio nuevo la reemplace. Perderla seria peor
-  /// que dibujarla, asi que ni siquiera cuando [nueva] viene vacia.
-  ///
-  /// El aviso va a la traza de forma espaciada porque [_refreshRoutes] se llama
-  /// cada pocos segundos: si esta comprobacion falla, el sintoma desde fuera es
-  /// "recalcula y a los dos segundos vuelve la original", y sin esta linea no
-  /// hay forma de verlo en el log.
-  void _enfocarRuta({
-    required bool recalculada,
-    required List<LatLng> nueva,
-    required double? km,
-    required double? min,
-    required void Function(List<LatLng>, double?, double?) escribir,
-  }) {
-    if (recalculada) {
-      _vecesRutaProtegida++;
-      if (_vecesRutaProtegida == 1 || _vecesRutaProtegida % 60 == 0) {
-        TrazaFichero.instancia.escribir('[RUTA] recalculada protegida '
-            '($_vecesRutaProtegida veces): OSRModia $nueva.length pts '
-            '${km?.toStringAsFixed(2)} km, NO se aplica');
-      }
-      return;
-    }
-    _vecesRutaProtegida = 0;
-    escribir(nueva, km, min);
-  }
+  /// El arreglo esta dentro de [_refreshRoutes], antes del `await`: por eso ya
+  /// no hace falta comparar con lo que traia OSRM, porque ya no se le pregunta.
+  /// Antes este numero contaba los rechazos, que era una forma indirecta de
+  /// contar las peticiones desperdiciadas; ahora cuenta directamente las
+  /// evitadas. Antes hubo 180 rechazos en 5 min 30: si tras el arreglo el
+  /// numero crece tambien, lo que se cuenta son las veces que se ha saltado la
+  /// peticion, no las perdidas.
+  int get vecesRutaProtegida => _vecesRutaProtegida;
 
-  /// Contador de veces que la ruta recalculada ha resistido a OSRM.
-  ///
-  /// Solo para espaciar el aviso de la traza. Que sea mayor que cero al final de
-  /// un viaje es la prueba de que el arreglo funciona.
   int _vecesRutaProtegida = 0;
 
   /// Le pasa al servicio de navegacion el trazado que se esta siguiendo.
@@ -1722,27 +1729,19 @@ void _startTripPoller() {
         return;
       }
 
-      final pts = await widget.api.getTripRoute(trip.tripId);
+final pts = await widget.api.getTripRoute(trip.tripId);
       if (!mounted) return;
       // Esta es la ruta que el backend tiene GUARDADA para el viaje: la original
       // de la recogida al destino, no la que el conductor lleva deambulando. Es
-      // un segundo escritor de `_route` distinto de `_refreshRoutes`, y durante
-      // un tiempo se le olvidó la protección: con el sondeo cada 4 s pisaba la
-      // ruta recalculada a los 4 segundos de aplicarse, que es exactamente el
-      // sintoma de "recalcula y vuelve la original" en la fase de destino.
-      setState(() {
-        _enfocarRuta(
-          recalculada: _rutaEsRecalculada,
-          nueva: pts.map((p) => p.point).toList(),
-          km: null,
-          min: null,
-          escribir: (ruta, km, min) {
-            _route = ruta;
-            if (km != null) _tripKm = km;
-            if (min != null) _tripMin = min;
-          },
-        );
-      });
+      // un segundo escritor de `_route` distinto de `_refreshRoutes`, y con el
+      // sondeo cada 4 s pisaba la ruta recalculada a los cuatro segundos de
+      // aplicarse: el sintoma de "recalcula y vuelve la original" en la fase de
+      // destino.
+      if (!_rutaEsRecalculada) {
+        setState(() {
+          _route = pts.map((p) => p.point).toList();
+        });
+      }
       await _refreshRoutes();
     } catch (_) {
       // Silencioso: la ruta sigue disponible en el pr├│ximo tick.
