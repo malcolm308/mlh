@@ -1,10 +1,10 @@
 
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
-/// Configuración central de la app de chofer.
+/// ConfiguraciÃƒÆ’Ã‚Â³n central de la app de chofer.
 ///
 /// Por defecto apunta a los servicios desplegados en Render (backend FastAPI
-/// y servidor de tiles Martin). Se puede sobreescribir por línea de comandos
+/// y servidor de tiles Martin). Se puede sobreescribir por lÃƒÆ’Ã‚Â­nea de comandos
 /// con --dart-define, por ejemplo para desarrollo local:
 ///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=MARTIN_URL=http://localhost:8010
 class ApiConfig {
@@ -44,7 +44,7 @@ class ApiConfig {
   /// recta. Es el mismo canal fiable que ya usa el recalculo de desvios.
   static String recalculate() => '$baseUrl/api/routing/recalculate';
 
-  /// Cancelación de un viaje por el pasajero.
+  /// CancelaciÃƒÆ’Ã‚Â³n de un viaje por el pasajero.
   static String cancelTrip(String tripId) => '$baseUrl/trips/$tripId/cancel';
 
   /// Cambio de estado (online/offline) de un chofer.
@@ -54,7 +54,7 @@ class ApiConfig {
   /// Health check del backend.
   static String health() => '$baseUrl/health';
 
-  /// Posición inicial/por defecto del chofer (Centro de La Habana).
+  /// PosiciÃƒÆ’Ã‚Â³n inicial/por defecto del chofer (Centro de La Habana).
   static const LatLng defaultDriverLocation = LatLng(23.1136, -82.3666);
 
   static const double defaultZoom = 14;
@@ -74,7 +74,7 @@ class ApiConfig {
   /// de zooms de navegacion; con 18 las teselas salian muy pixeladas.
   static const int maxZoom = 17;
 
-  /// Zooms del "modo navegación": cada fase del viaje acerca el mapa lo justo
+  /// Zooms del "modo navegaciÃƒÆ’Ã‚Â³n": cada fase del viaje acerca el mapa lo justo
   /// para que el chofer vea la calle por la que va sin perder el contexto.
   ///
   /// - [idle] sin viaje: vista general para ver las ofertas de la zona.
@@ -83,7 +83,7 @@ class ApiConfig {
   /// - [traslado] con pasajero a bordo: maximo detalle de calle.
   ///
   /// Estaban en 15/16/16/17 y se veia el vehiculo muy alejado: a z15 el mapa
-  /// abarca casi un kilómetro y el chofer conduce mirando un plano general. Se
+  /// abarca casi un kilÃƒÆ’Ã‚Â³metro y el chofer conduce mirando un plano general. Se
   /// sube un nivel toda la escala menos la fase de traslado, que ya estaba en el
   /// maximo util.
   ///
@@ -217,7 +217,7 @@ class ApiConfig {
   ///
   /// 55, el angulo de ciudad. Antes el mapa arrancaba plano y se inclinaba
   /// solo al primer fix con velocidad, de modo que al recoger un viaje
-  /// parado se veía un salto de 0 a 55 grados en plena calle. Entrar ya
+  /// parado se veÃƒÆ’Ã‚Â­a un salto de 0 a 55 grados en plena calle. Entrar ya
   /// inclinado es lo que hace una app de navegacion y ademas es cuando mas
   /// hace falta: quieto en un sitio desconocido, mirando alrededor.
   ///
@@ -231,27 +231,12 @@ class ApiConfig {
   /// quitarla: por debajo el mapa conserva el angulo que ya tenia.
   static const double velocidadMinimaTilt = 1.4;
 
-  /// Velocidad a partir de la cual la flecha de ubicacion sigue al SENSOR, en
-  /// m/s (2 m/s son 7 km/h).
-  ///
-  /// Por debajo, la flecha apunta por el primer tramo de la ruta en vez de por
-  /// donde mira el capo. La razon: parado en un semaforo con el coche girado al
-  /// cruce, el sensor dice "mira a la derecha" y la flecha se pondria en una
-  /// calle por la que no se va a entrar. En marcha manda el sensor, que es mas
-  /// fino y es lo que hace girar la flecha en las curvas.
-  ///
-  /// El salto entre los dos regimenes es visible: alzar y arrancar el vehiculo,
-  /// la flecha da un tiron de golpe al pasar de uno a otro. Con este valor el
-  /// cambio llega al primer metro de marcha, que es justo cuando deja de verse
-  /// parado.
-  static const double flechaRumboSensorMps = 2.0;
-
   /// Umbral alto del tramo "ciudad", en m/s (45 km/h).
   static const double velocidadTiltCiudad = 12.5;
 
   /// Cambio maximo de tilt por segundo, en grados.
   ///
-  /// 30 grados/s. Un cambio mas rapido se ve como un tirón, sobre todo al salir
+  /// 30 grados/s. Un cambio mas rapido se ve como un tirÃƒÆ’Ã‚Â³n, sobre todo al salir
   /// de un semaforo. El objetivo de [tiltObjetivoParaVelocidad] se persigue con
   /// esta rampa en lugar de saltar.
   static const double rampaTiltGradosPorSegundo = 30.0;
@@ -266,7 +251,7 @@ class ApiConfig {
 
   /// Tiempo que hay que estar por debajo de [fpsMinimoTilt] para degradar.
   ///
-  /// 2 s. Evita que un tirón puntual (una llamada, la apertura de otra app)
+  /// 2 s. Evita que un tirÃƒÆ’Ã‚Â³n puntual (una llamada, la apertura de otra app)
   /// apague la perspectiva y la vuelva a encender.
   static const Duration antiguedadDegradacion = Duration(seconds: 2);
 
@@ -343,9 +328,11 @@ class ApiConfig {
 
   /// Duracion de las transiciones de camara.
   ///
-  /// 400 ms queda dentro del rango pedido de 300-500 ms y se siente suelto sin
-  /// quedarse a medio camino en un cruce.
-  static const Duration duracionTransicion = Duration(milliseconds: 400);
+  /// 500 ms. Es la transicion entre norte arriba y heading-up: al aceptar un
+  /// viaje el mapa se inclina y gira hacia la ruta, y al terminar vuelve a
+  /// norte. Con 400 ms el giro se notaba como un tirón; a 500 el mapa llega a su
+  /// sitio sin que se vea el cambio de un tiron.
+  static const Duration duracionTransicion = Duration(milliseconds: 500);
 
   /// Velocidad (m/s) por debajo de la cual se vuelve al norte arriba.
   ///
@@ -361,7 +348,7 @@ class ApiConfig {
   ///
   /// **Medido y bajada a 2.2 m/s.** Con 3.5 el umbral casi no se alcanzaba en el
   /// trafico de La Habana (en el viaje 22b00b2f la velocidad maxima que saw el
-  /// GPS fue de 1.3 m/s), asi que mandaba casi siempre la brújula, que en este
+  /// GPS fue de 1.3 m/s), asi que mandaba casi siempre la brÃƒÆ’Ã‚Âºjula, que en este
   /// movil va desviada unos 85 grados. Sacando el rumbo real del propio
   /// recorrido del backend, el coche iba al este (113 grados de media) mientras
   /// el sensor decia 28. Con 2.2 m/s (~8 km/h) el GPS ya discrimina de sobra:
@@ -371,7 +358,6 @@ class ApiConfig {
   /// o casi parado el mapa congela la orientacion, asi que no se nota, y cuando
   /// arranca el coche ya ha superado el umbral.
   static const double velocidadRumboGps = 2.2;
-
   /// Velocidad (m/s) por encima de la cual un salto entre dos fixes se considera
   /// GPS malo y no movimiento.
   ///
@@ -382,6 +368,12 @@ class ApiConfig {
   /// tocar nada de lo que se mueve de verdad.
   static const double velocidadMaximaGps = 55.0;
 
+  /// Longitud minima de un tramo de ruta para que su direccion valga, en metros.
+  ///
+  /// 1 m. OSRM devuelve a veces el punto de origen duplicado, y un tramo de
+  /// longitud cero tiene una direccion que es ruido puro. Con este minimo ese
+  /// tramo se descarta y el rumbo lo pone el siguiente tramo real.
+  static const double rumboRutaTramoMinimoM = 1.0;
 
   /// Velocidad (m/s) que reactiva el modo follow si el usuario lo habia
   /// interrumpido moviendo el mapa.
@@ -406,7 +398,7 @@ class ApiConfig {
     return 13;
   }
 
-  /// Zoom de la fase actual del viaje, para establishes el modo navegación.
+  /// Zoom de la fase actual del viaje, para establishes el modo navegaciÃƒÆ’Ã‚Â³n.
   ///
   /// Devuelve [zoomIdle] si no hay viaje en curso.
   static double zoomParaFase({String? status}) {
@@ -422,8 +414,8 @@ class ApiConfig {
     }
   }
 
-  /// Área cubierta por los tiles locales del mapa (La Habana, Artemisa,
-  /// Mayabeque y Pinar del Río).
+  /// ÃƒÆ’Ã‚Ârea cubierta por los tiles locales del mapa (La Habana, Artemisa,
+  /// Mayabeque y Pinar del RÃƒÆ’Ã‚Â­o).
   ///
   /// Solo se muestran direcciones de calles que caen dentro de esta zona,
   /// es decir, las que existen en el mapa de la app.
@@ -432,7 +424,7 @@ class ApiConfig {
   static const double mapWest = -84.30;
   static const double mapEast = -81.80;
 
-  /// `true` si el punto está dentro del área cartografiada del mapa.
+  /// `true` si el punto estÃƒÆ’Ã‚Â¡ dentro del ÃƒÆ’Ã‚Â¡rea cartografiada del mapa.
   static bool inMapArea(LatLng p) =>
       p.latitude >= mapSouth &&
       p.latitude <= mapNorth &&

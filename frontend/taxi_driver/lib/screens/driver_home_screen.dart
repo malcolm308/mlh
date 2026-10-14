@@ -51,19 +51,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   static const int _offerLimitSecs = 20;
   static const int _lostCloseSecs = 5;
 
-  /// Máximo de antigüedad de un viaje 'accepted' para restaurarlo al abrir.
+  /// MÃ¡ximo de antigÃ¼edad de un viaje 'accepted' para restaurarlo al abrir.
   ///
-  /// En Cuba la red se cae y los móviles se apagan a media carrera. Un
-  /// 'accepted' reciente (menos de este tiempo) es una carrera legítima que
-  /// el chofer estaba siguiendo y se restaura tal cual. Uno más viejo es un
-  /// viaje huérfano (el pasajero se fue, la app de cliente se quedó sin red,
-  /// el chofer cerró la suya...): se libera solo para que no quede atascado
+  /// En Cuba la red se cae y los mÃ³viles se apagan a media carrera. Un
+  /// 'accepted' reciente (menos de este tiempo) es una carrera legÃ­tima que
+  /// el chofer estaba siguiendo y se restaura tal cual. Uno mÃ¡s viejo es un
+  /// viaje huÃ©rfano (el pasajero se fue, la app de cliente se quedÃ³ sin red,
+  /// el chofer cerrÃ³ la suya...): se libera solo para que no quede atascado
   /// con un fantasma que no puede completar ni cancelar.
   static const int _maxAcceptedAgeMinutes = 15;
 
   /// Marcador del viaje activo en `SharedPreferences`. No guarda el viaje
   /// entero (la fuente de verdad es el backend), solo el par id + timestamp
-  /// con el que medir la antigüedad de un 'accepted' cuando el backend no
+  /// con el que medir la antigÃ¼edad de un 'accepted' cuando el backend no
   /// manda `requested_at`.
   static const String _prefViajeTrip = 'viaje_activo_trip';
   static const String _prefViajeTs = 'viaje_activo_ts';
@@ -167,7 +167,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// Mientras este marcado, el sondeo no debe tratar ese viaje como perdido:
   /// al aceptar, el viaje deja de salir en `requested-nearby` antes de que la
   /// respuesta asigne [_activeTrip], y en esa ventana el poller veia "ya no
-  /// está" y mostraba la carta de "Otro conductor aceptó el viaje" sobre el
+  /// estÃ¡" y mostraba la carta de "Otro conductor aceptÃ³ el viaje" sobre el
   /// viaje que acababa de ganar el propio chofer.
   String? _aceptandoTripId;
 
@@ -198,6 +198,30 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   final Set<String> _declinedTripIds = <String>{};
   List<LatLng> _route = [];
   List<LatLng> _routeToPickup = [];
+
+  /// `true` si `_route` viene de un recalculo de desvio, no de OSRM.
+  ///
+  /// Mientras lo sea, `_refreshRoutes` no puede sobrescribir `_route` con la
+  /// ruta original del viaje.
+  ///
+  /// Antes no existia esta distincion y el pisÃ³n era constante. Medido en el
+  /// recorrido del 14/10: una ruta recalculada de 98 puntos se aplico a las
+  /// 08:31:34 y a las 08:31:34 ya estaba la original de 80 puntos. Con el
+  /// detector rearmandose a cada pisÃ³n, ademas, media un desvio que no existia y
+  /// volvia a pedir ruta: un bucle de recalculos encadenados.
+  ///
+  /// Se limpia al cambiar de viaje o de fase, que es cuando la ruta original
+  /// vuelve a ser la buena.
+  bool _rutaEsRecalculada = false;
+  /// `true` si `_routeToPickup` viene de un recalculo de desvio.
+  ///
+  /// Es la gemela de [_rutaEsRecalculada] para la fase de recogida. Hace falta
+  /// porque en esa fase `_refreshRoutes` pide la ruta DESDE la posicion actual
+  /// del coche, no desde un origen fijo, asi que devuelve una ruta distinta en
+  /// cada llamada y pisaba la recalculada cada 1-2 s. Medido el 14/10: 53
+  /// recalculos seguidos, todos revertidos.
+  bool _rutaRecogidaEsRecalculada = false;
+
   double? _toPickupKm;
   double? _toPickupMin;
   double? _tripKm;
@@ -229,39 +253,28 @@ int _routeReq = 0;
 /// Fuera del modo navegacion (mapa norte-arriba, sin seguimiento) la camara no
 /// manda y si tiene sentido la ruta.
 double? _rumboParaFlecha() {
-  // El rumbo de la camara manda siempre que haya uno: [_nav.rumbo] ya lleva el
-  // GPS por delante del sensor en marcha (ver [NavigationModeService]), asi que
-  // tomarlo aqui mantiene flecha y mapa en la misma fuente y no solo en el mismo
-  // valor.
+  // El rumbo de la camara manda siempre que haya uno: [_nav.rumbo] sale de la
+  // ruta (ver [NavigationModeService]), asi que tomarlo aqui mantiene flecha y
+  // mapa en la misma fuente y no solo en el mismo valor.
   final camara = _nav.rotacionActual ?? _nav.rumbo;
   if (_nav.debeSeguir && camara != null) return camara;
 
-  if (_nav.velocidadMps >= ApiConfig.flechaRumboSensorMps) {
-    final sensor = _nav.rumbo;
-    if (sensor != null) return sensor;
+  final trazados = _tripPhase ? _route : _routeToPickup;
+  if (trazados.length < 2) return null;
+
+  // Primer tramo con dos puntos de verdad consecutivos: la ruta puede venir
+  // con puntos repetidos en el origen.
+  for (var i = 0; i < trazados.length - 1; i++) {
+    final a = trazados[i];
+    final b = trazados[i + 1];
+    if (a.latitude == b.latitude && a.longitude == b.longitude) continue;
+    return NavigationMapView.bearingEntre(
+      _nav.debeSeguir ? _nav.posicion : _driverPos,
+      b,
+    );
   }
-
-    if (_nav.velocidadMps >= ApiConfig.flechaRumboSensorMps) {
-      final sensor = _nav.rumbo;
-      if (sensor != null) return sensor;
-    }
-
-    final trazados = _tripPhase ? _route : _routeToPickup;
-    if (trazados.length < 2) return null;
-
-    // Primer tramo con dos puntos de verdad consecutivos: la ruta puede venir
-    // con puntos repetidos en el origen.
-    for (var i = 0; i < trazados.length - 1; i++) {
-      final a = trazados[i];
-      final b = trazados[i + 1];
-      if (a.latitude == b.latitude && a.longitude == b.longitude) continue;
-      return NavigationMapView.bearingEntre(
-        _nav.debeSeguir ? _nav.posicion : _driverPos,
-        b,
-      );
-    }
-    return null;
-  }
+  return null;
+}
 
   /// Estado del viaje en castellano, para el titulo del panel.
   ///
@@ -278,7 +291,7 @@ double? _rumboParaFlecha() {
         _ => status.toUpperCase(),
       };
 
-  /// Fase de recogida: el chofer aún va hacia el punto de recogida.
+  /// Fase de recogida: el chofer aÃºn va hacia el punto de recogida.
   bool get _pickupPhase =>
       _activeTrip != null &&
       (_activeTrip!.status == 'accepted' ||
@@ -326,6 +339,9 @@ double? _rumboParaFlecha() {
     _nav.alCambiarTilt(_alCambiarTilt);
     // Aviso unico de degradacion por rendimiento.
     _nav.alDegradar(_alDegradarTilt);
+    // El detector de desvios cuenta muestras del GPS, asi que se engancha al
+    // ritmo del GPS (1 Hz) y no al bucle de camara. Ver [_alFixGps].
+    _nav.alFix(_alFixGps);
 
     // Vista previa del panel: viaje ficticio para verlo sin oferta real.
     if (_panelDemo) _activeTrip = _viajeDemo();
@@ -366,14 +382,26 @@ double? _rumboParaFlecha() {
   /// el `tilt` nativo hace que el motor situe el punto focal en el tercio
   /// inferior, sin desplazar la camara a mano.
   void _alCambiarCamara() {
-    // Se alimenta el detector de desvios con la posicion y velocidad YA
-    // filtradas del servicio de navegacion, no con las del GPS crudo. Medir la
-    // distancia contra un fix con 30 m de error daria desvios falsos en cada
-    // esquina, que es justo lo que el detector debe evitar.
-    if (_nav.debeSeguir) {
-      _recalc.informarPosicion(_nav.posicion, _nav.velocidadMps);
-    }
     if (mounted) setState(() {});
+  }
+
+  /// Llega una posicion nueva del GPS (1 Hz) y se la pasa al detector de desvios.
+  ///
+  /// Va enganchado a [NavigationModeService.alFix] y no a `alCambiar` a
+  /// proposito. El detector cuenta "muestras" del GPS para no disparar con un
+  /// solo fix malo: tres seguidas fuera de ruta y diez seguido parado. Si se
+  /// alimentara desde el bucle de camara, que corre a ~60 Hz, esas tres muestras
+  /// se cumplirian en 50 ms y las diez de parado en 170 ms: cualquier ruido del
+  /// GPS en una esquina buscaria ruta nueva al backend, y la pausa de los
+  /// semaforos no pausaria nada.
+  ///
+  /// Se le pasan la posicion y la velocidad YA filtradas del servicio de
+  /// navegacion, no las del GPS crudo. Medir la distancia contra un fix con 30 m
+  /// de error daria desvios falsos en cada esquina, que es justo lo que el
+  /// detector debe evitar.
+  void _alFixGps() {
+    if (!_nav.debeSeguir) return;
+    _recalc.informarPosicion(_nav.posicion, _nav.velocidadMps);
   }
 
   // ---------------- RECALCULO DE RUTA ----------------
@@ -394,7 +422,7 @@ double? _rumboParaFlecha() {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(const SnackBar(
-            content: Text('Recalculando ruta…'),
+            content: Text('Recalculando rutaâ€¦'),
             duration: Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
           ));
@@ -408,8 +436,8 @@ double? _rumboParaFlecha() {
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(
             content: Text(agotado
-                ? 'Sin conexión. Se mantiene la ruta anterior.'
-                : 'Sin conexión, ruta no actualizada. Reintentando…'),
+                ? 'Sin conexiÃ³n. Se mantiene la ruta anterior.'
+                : 'Sin conexiÃ³n, ruta no actualizada. Reintentandoâ€¦'),
             duration: const Duration(seconds: 4),
             behavior: SnackBarBehavior.floating,
           ));
@@ -432,15 +460,22 @@ double? _rumboParaFlecha() {
     setState(() {
       if (_tripPhase) {
         _route = ruta.points;
+        // A partir de aqui `_route` es la ruta buena y OSRM ya no puede
+        // sobrescribirla. Ver [_rutaEsRecalculada].
+        _rutaEsRecalculada = true;
         _tripKm = ruta.distanceKm;
         _tripMin = ruta.durationMinutes;
       } else {
         _routeToPickup = ruta.points;
+        // A partir de aqui OSRM no puede sobrescribirla. Ver
+        // [_rutaRecogidaEsRecalculada].
+        _rutaRecogidaEsRecalculada = true;
         _toPickupKm = ruta.distanceKm;
         _toPickupMin = ruta.durationMinutes;
       }
     });
     // El servicio ya tiene la ruta nueva, asi que no vuelve a pedirla.
+    _publicarRuta();
   }
 
   void _alCambiarTilt(double objetivo) {
@@ -466,7 +501,7 @@ double? _rumboParaFlecha() {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(
-        content: Text('Vista 3D desactivada para ahorrar batería'),
+        content: Text('Vista 3D desactivada para ahorrar baterÃ­a'),
         duration: Duration(seconds: 3),
         behavior: SnackBarBehavior.floating,
       ));
@@ -603,7 +638,7 @@ double? _rumboParaFlecha() {
       return;
     }
     _markOfferLost(offer);
-    _mostrarAviso('Otro conductor aceptó el viaje a ${_destino(offer)}');
+    _mostrarAviso('Otro conductor aceptÃ³ el viaje a ${_destino(offer)}');
   }
 
   /// Una oferta dejo de venir en el sondeo. Se consulta su estado para no
@@ -613,7 +648,7 @@ double? _rumboParaFlecha() {
   /// veredicto que no se puede sostener seria peor que no decir nada.
   Future<void> _retirarAvisoSiDesaparecio(String tripId) async {
     // Si el viaje es nuestro (aceptacion en vuelo o ya en curso), que haya
-    // dejado de salir en el sondeo NO es que "otro conductor lo tomó" (es
+    // dejado de salir en el sondeo NO es que "otro conductor lo tomÃ³" (es
     // justo lo contrario). Sin este guardado, el chofer que ganaba el viaje
     // recibia la carta de "Aceptado por otro chofer" sobre su propia carrera.
     if (tripId == _aceptandoTripId || tripId == _activeTrip?.tripId) {
@@ -752,6 +787,7 @@ double? _rumboParaFlecha() {
 
   void _setDriverPos(LatLng p) {
     setState(() => _driverPos = p);
+    _publicarRuta();
     if (_online) {
       widget.api
           .setDriverLocation(widget.driverId, p.latitude, p.longitude)
@@ -818,20 +854,15 @@ double? _rumboParaFlecha() {
 
   /// Pone la camara en el modo que toca segun la fase del viaje.
   ///
-  /// Sin viaje: norte arriba, sin tilt (comportamiento de siempre). Con viaje:
-  /// el servicio de navegacion toma el relevo con heading-up y tilt. La
-  /// excepcion es el movimiento en idle: si el chofer se desplaza sin carrera,
-  /// el modo de conduccion ya esta activo por [NavigationModeService.idleEnMovimiento]
-  /// y no se apaga aqui; se apaga solo cuando el vehiculo se queda parado
-  /// mas de 5 s.
+  /// Sin viaje: norte arriba, sin tilt, sin heading-up. Se apaga siempre, sin
+  /// excepciones por desplazamiento: el heading-up sale de la ruta y sin viaje no
+  /// hay ruta, asi que no hay nada que orientar aunque el coche se mueva.
   void _activarCamaraDeFase() {
     final fase = _faseCamara;
     if (fase == null) {
-      if (!_nav.idleEnMovimiento) {
-        _nav.apagar();
-        final ctl = _controlador;
-        if (ctl != null) NavCamera.aplicarFase(ctl, _driverPos, status: null);
-      }
+      _nav.apagar();
+      final ctl = _controlador;
+      if (ctl != null) NavCamera.aplicarFase(ctl, _driverPos, status: null);
       _recalc.detener();
       return;
     }
@@ -963,6 +994,7 @@ double? _rumboParaFlecha() {
         _tripKm = null;
         _tripMin = null;
       });
+      _publicarRuta();
       return;
     }
 
@@ -983,18 +1015,44 @@ double? _rumboParaFlecha() {
       toPickup = await OsrmService.route(_driverPos, pickup);
       toDropoff = null;
     }
-    if (!mounted || req != _routeReq) return;
+if (!mounted || req != _routeReq) return;
     setState(() {
-      _routeToPickup = toPickup?.points ?? const [];
-      _toPickupKm = toPickup?.distanceKm;
-      _toPickupMin = toPickup?.durationMinutes;
-      // La ruta del tramo en curso va en `_route`: durante el traslado es la
-      // unica que se dibuja. Sin esta asignacion `_route` se quedaba vacia y
-      // `_rutaVisible` caia al fallback en linea recta, aunque OSRM devolviera
-      // la ruta por calles.
-      _route = toDropoff?.points ?? const [];
-      _tripKm = toDropoff?.distanceKm;
-      _tripMin = toDropoff?.durationMinutes;
+      // Ni `_route` (traslado) ni `_routeToPickup` (recogida) pueden volver a
+      // llenarse con la ruta de OSRM mientras la buena sea una recalculada por
+      // desvio.
+      //
+      // Da igual la fase: la ruta recalculada manda hasta que haya un desvio
+      // nuevo que la reemplace. Antes solo se protegia `_route`, y en la fase
+      // de recogida `_routeToPickup` seguia reescribiendose con
+      // `OsrmService.route(_driverPos, pickup)`, que parte de la posicion
+      // actual. Medido: 53 recalculos seguidos, cada uno aguantaba 1-2 s y
+      // luego volvia la original, y el detector media el desvio contra la ruta
+      // equivocada.
+      if (inTripPhase) {
+        _enfocarRuta(
+          recalculada: _rutaEsRecalculada,
+          nueva: toDropoff?.points ?? const [],
+          km: toDropoff?.distanceKm,
+          min: toDropoff?.durationMinutes,
+          escribir: (pts, km, min) {
+            _route = pts;
+            _tripKm = km;
+            _tripMin = min;
+          },
+        );
+      } else {
+        _enfocarRuta(
+          recalculada: _rutaRecogidaEsRecalculada,
+          nueva: toPickup?.points ?? const [],
+          km: toPickup?.distanceKm,
+          min: toPickup?.durationMinutes,
+          escribir: (pts, km, min) {
+            _routeToPickup = pts;
+            _toPickupKm = km;
+            _toPickupMin = min;
+          },
+        );
+      }
     });
     // Si OSRM fallo, `_rutaVisible` se cae a la linea recta entre extremos:
     // se deja constancia para no confundir un fallo de calculo con una ruta
@@ -1010,7 +1068,56 @@ double? _rumboParaFlecha() {
     // destino. Se arranca DESPUES de fijar `_route`, porque el servicio toma la
     // polilinea tal cual para medir la distancia perpendicular.
     _arrancarRecalc(inTripPhase ? dropoff : pickup, inTripPhase);
+    _publicarRuta();
   }
+
+  /// Escribe la ruta de OSRM solo si la buena no es una recalculada por desvio.
+  ///
+  /// Si [recalculada] es `true`, no se escribe nada: la ruta del detector de
+  /// desvios manda hasta que un desvio nuevo la reemplace. Perderla seria peor
+  /// que dibujarla, asi que ni siquiera cuando [nueva] viene vacia.
+  ///
+  /// El aviso va a la traza de forma espaciada porque [_refreshRoutes] se llama
+  /// cada pocos segundos: si esta comprobacion falla, el sintoma desde fuera es
+  /// "recalcula y a los dos segundos vuelve la original", y sin esta linea no
+  /// hay forma de verlo en el log.
+  void _enfocarRuta({
+    required bool recalculada,
+    required List<LatLng> nueva,
+    required double? km,
+    required double? min,
+    required void Function(List<LatLng>, double?, double?) escribir,
+  }) {
+    if (recalculada) {
+      _vecesRutaProtegida++;
+      if (_vecesRutaProtegida == 1 || _vecesRutaProtegida % 60 == 0) {
+        TrazaFichero.instancia.escribir('[RUTA] recalculada protegida '
+            '($_vecesRutaProtegida veces): OSRModia $nueva.length pts '
+            '${km?.toStringAsFixed(2)} km, NO se aplica');
+      }
+      return;
+    }
+    _vecesRutaProtegida = 0;
+    escribir(nueva, km, min);
+  }
+
+  /// Contador de veces que la ruta recalculada ha resistido a OSRM.
+  ///
+  /// Solo para espaciar el aviso de la traza. Que sea mayor que cero al final de
+  /// un viaje es la prueba de que el arreglo funciona.
+  int _vecesRutaProtegida = 0;
+
+  /// Le pasa al servicio de navegacion el trazado que se esta siguiendo.
+  ///
+  /// El servicio lo necesita para orientar el mapa con la DIRECCION DE LA RUTA
+  /// cuando se va despacio: por debajo de 20 km/h ni el GPS sirve (su error de
+  /// posicion es mayor que el desplazamiento) ni la brújula (que en este movil va
+  /// clavada), y la ruta si dice por donde se sale del cruce.
+  ///
+  /// Se llama cuando cambia la ruta o la posicion, no en cada repintado: el
+  /// servicio ya recibe la posicion viva por su propio canal, de [_rutaVisible]
+  /// solo le interesa el trazado.
+  void _publicarRuta() => _nav.informarRuta(_rutaVisible);
 
   /// Arranca (o reinicia) la deteccion de desvio para el tramo en curso.
   void _arrancarRecalc(LatLng? destino, bool enTraslado) {
@@ -1207,15 +1314,15 @@ double? _rumboParaFlecha() {
   /// Restaura el viaje en curso tras un reinicio de la app.
   ///
   /// [_activeTrip] vive solo en memoria: se asignaba al aceptar la oferta y
-  /// en el sondeo, de modo que si el proceso murió (reinicio del teléfono,
-  /// cierre del sistema, actualización) el panel de "VIAJE EN CURSO"
-  /// desaparecía aunque el viaje siguiera vivo en el backend, y el chofer no
-  /// tenía manera de recuperarlo. Se consulta el historial del chofer y se
-  /// recoge el viaje vivo más reciente; si existe, arranca el mismo circuito
-  /// que al aceptar: sondeo, límite de cancelaciones y rutas.
+  /// en el sondeo, de modo que si el proceso muriÃ³ (reinicio del telÃ©fono,
+  /// cierre del sistema, actualizaciÃ³n) el panel de "VIAJE EN CURSO"
+  /// desaparecÃ­a aunque el viaje siguiera vivo en el backend, y el chofer no
+  /// tenÃ­a manera de recuperarlo. Se consulta el historial del chofer y se
+  /// recoge el viaje vivo mÃ¡s reciente; si existe, arranca el mismo circuito
+  /// que al aceptar: sondeo, lÃ­mite de cancelaciones y rutas.
   ///
   /// Cualquier fallo se traga en silencio: sin red no hay nada que
-  /// restaurar y el resto de la pantalla sigue siendo usable; al próximo
+  /// restaurar y el resto de la pantalla sigue siendo usable; al prÃ³ximo
   /// arranque se reintenta.
   Future<void> _restaurarViajeActivo() async {
     if (_panelDemo || _activeTrip != null) return;
@@ -1229,29 +1336,29 @@ double? _rumboParaFlecha() {
         return;
       }
       // El historial puede venir sin orden garantizado: el vivo que importa
-      // es el más reciente.
+      // es el mÃ¡s reciente.
       vivos.sort(
           (a, b) => (b.requestedAt ?? '').compareTo(a.requestedAt ?? ''));
       final viaje = await widget.api.getTrip(vivos.first.tripId);
       if (!mounted || _activeTrip != null) return;
-      // Entre consultas el viaje pudo terminar: si ya no está vivo, no se
+      // Entre consultas el viaje pudo terminar: si ya no estÃ¡ vivo, no se
       // monta el panel de un viaje que el backend dio por cerrado.
       if (!estadosViajeVivos.contains(viaje.status)) {
         await _limpiarMarcadorViaje();
         return;
       }
-      // Un 'accepted' que no avanzó en demasiado tiempo es un viaje huérfano
-      // (el pasajero se fue, la app de cliente se quedó sin red...): se
+      // Un 'accepted' que no avanzÃ³ en demasiado tiempo es un viaje huÃ©rfano
+      // (el pasajero se fue, la app de cliente se quedÃ³ sin red...): se
       // libera solo, sin tocar las cancelaciones del chofer, y no se
       // restaura. Los estados ya encaminados (`driver_arrived`,
-      // `in_progress`) se restauran SIEMPRE: el chofer está en la carrera y
+      // `in_progress`) se restauran SIEMPRE: el chofer estÃ¡ en la carrera y
       // esa carrera no debe expirar.
       if (viaje.status == 'accepted' && await _esViajeObsoleto(viaje)) {
         try {
           await widget.api.releaseTrip(viaje.tripId);
         } catch (_) {
           // Si el release falla (el viaje ya no existe y el backend responde
-          // 400, o la red se cortó) igual se limpia el marcador: aquí no hay
+          // 400, o la red se cortÃ³) igual se limpia el marcador: aquÃ­ no hay
           // nada accionable que restaurar. El chofer vuelve a quedar libre
           // para recibir ofertas.
         }
@@ -1266,22 +1373,24 @@ double? _rumboParaFlecha() {
       setState(() {
         _activeTrip = viaje;
         _route = [];
+        _rutaEsRecalculada = false;
+        _rutaRecogidaEsRecalculada = false;
       });
       await _guardarMarcadorViaje(viaje);
       _startTripPoller();
       _cancelacion.cargar(driverId: widget.driverId);
       _refreshRoutes();
     } catch (_) {
-      // Silencioso: ver doc del método. Sin red no hay nada que restaurar; el
-      // marcador se conserva para reintentar en el próximo arranque y el
-      // chofer queda disponible (idle), que es la consecuencia más segura.
+      // Silencioso: ver doc del mÃ©todo. Sin red no hay nada que restaurar; el
+      // marcador se conserva para reintentar en el prÃ³ximo arranque y el
+      // chofer queda disponible (idle), que es la consecuencia mÃ¡s segura.
     }
   }
 
   /// Guarda el par id + timestamp del viaje en curso.
   ///
   /// No es una copia del viaje (el backend es la fuente de verdad): solo se
-  /// usa como regla de intendencia para medir la antigüedad de un 'accepted'
+  /// usa como regla de intendencia para medir la antigÃ¼edad de un 'accepted'
   /// cuando el viaje no trae `requested_at`.
   Future<void> _guardarMarcadorViaje(TripOffer viaje) async {
     final prefs = await SharedPreferences.getInstance();
@@ -1296,12 +1405,12 @@ double? _rumboParaFlecha() {
     await prefs.remove(_prefViajeTs);
   }
 
-  /// Dice si un viaje 'accepted' es obsoleto: lleva más de
+  /// Dice si un viaje 'accepted' es obsoleto: lleva mÃ¡s de
   /// [_maxAcceptedAgeMinutes] sin avanzar.
   ///
   /// Se prefiere el `requested_at` del backend (reloj del servidor) a fiarse
-  /// del reloj del móvil; si el viaje no lo trae, se usa el timestamp que se
-  /// guardó al aceptar o restaurar el viaje.
+  /// del reloj del mÃ³vil; si el viaje no lo trae, se usa el timestamp que se
+  /// guardÃ³ al aceptar o restaurar el viaje.
   Future<bool> _esViajeObsoleto(TripOffer viaje) async {
     final ahora = DateTime.now().toUtc();
     DateTime? base = _parseTimestampUtc(viaje.requestedAt);
@@ -1318,9 +1427,9 @@ double? _rumboParaFlecha() {
   /// Convierte un timestamp del backend a UTC.
   ///
   /// `requested_at` sale de Postgres como TIMESTAMP en UTC; el JSON puede
-  /// traerlo con sufijo de zona ("...Z" o "+00:00") o sin él. Sin sufijo, Dart
-  /// lo interpretaría como hora LOCAL del móvil y la antigüedad se
-  /// calcularía mal, así que se fuerza a UTC con el mismo reloj de pared.
+  /// traerlo con sufijo de zona ("...Z" o "+00:00") o sin Ã©l. Sin sufijo, Dart
+  /// lo interpretarÃ­a como hora LOCAL del mÃ³vil y la antigÃ¼edad se
+  /// calcularÃ­a mal, asÃ­ que se fuerza a UTC con el mismo reloj de pared.
   static DateTime? _parseTimestampUtc(String? s) {
     if (s == null) return null;
     final t = DateTime.tryParse(s);
@@ -1349,13 +1458,16 @@ double? _rumboParaFlecha() {
         _activeTrip = trip;
         _loading = false;
         _route = [];
+        // Viaje nuevo: cualquier ruta recalculada era del trayecto anterior.
+        _rutaEsRecalculada = false;
+        _rutaRecogidaEsRecalculada = false;
       });
       _aceptandoTripId = null;
       // Viaje nuevo: la ruta guardada es del trayecto anterior y no debe
       // reutilizarse (el destino nuevo puede estar a menos de 150 m del viejo).
       OsrmService.olvidarCache();
-      // Al aceptar se guarda el marcador (id + ts) con el que medir después
-      // la antigüedad de un 'accepted' al reabrir la app.
+      // Al aceptar se guarda el marcador (id + ts) con el que medir despuÃ©s
+      // la antigÃ¼edad de un 'accepted' al reabrir la app.
       await _guardarMarcadorViaje(trip);
       _startTripPoller();
       // El limite de cancelaciones se consulta al empezar un viaje: es
@@ -1405,7 +1517,7 @@ double? _rumboParaFlecha() {
     try {
       switch (trip.status) {
         case 'accepted':
-          // Marca la ubicación real de recogida: desde aquí se cuentan los kilómetros.
+          // Marca la ubicaciÃ³n real de recogida: desde aquÃ­ se cuentan los kilÃ³metros.
           await widget.api.setPickup(trip.tripId, _driverPos.latitude,
               _driverPos.longitude);
           await widget.api.updateTripStatus(trip.tripId, 'driver_arrived');
@@ -1470,14 +1582,17 @@ final updated = await widget.api.getTrip(trip.tripId);
       _loading = false;
       // La ruta se vacia para que el mapa no siga pintando el trayecto de un
       // viaje que ya no existe.
-      _route = [];
+_route = [];
+      // La ruta recalculada era de este viaje: la siguiente vuelve a venir de OSRM.
+      _rutaEsRecalculada = false;
+      _rutaRecogidaEsRecalculada = false;
       _routeToPickup = [];
       _tripKm = null;
       _tripMin = null;
       _toPickupKm = null;
       _toPickupMin = null;
     });
-    // Sin viaje en curso ya no hace falta el marcador de antigüedad.
+    // Sin viaje en curso ya no hace falta el marcador de antigÃ¼edad.
     await _limpiarMarcadorViaje();
 
     // El chofer vuelve a estar disponible para recibir ofertas. Si esto fallara
@@ -1552,7 +1667,7 @@ void _startTripPoller() {
     final trip = _activeTrip;
     final numero = trip?.clientPhone;
     if (numero == null || numero.trim().isEmpty) {
-      _showError('No hay un número de teléfono del pasajero para este viaje.');
+      _showError('No hay un nÃºmero de telÃ©fono del pasajero para este viaje.');
       return;
     }
     try {
@@ -1571,7 +1686,7 @@ void _startTripPoller() {
     final trip = _activeTrip;
     final numero = trip?.clientPhone;
     if (numero == null || numero.trim().isEmpty) {
-      _showError('No hay un número de teléfono del pasajero para este viaje.');
+      _showError('No hay un nÃºmero de telÃ©fono del pasajero para este viaje.');
       return;
     }
     try {
@@ -1587,7 +1702,7 @@ void _startTripPoller() {
     final trip = _activeTrip;
     if (trip == null) return;
     try {
-      // Reporta la posición al backend (que la reenvía a Traccar) mientras el viaje está activo.
+      // Reporta la posiciÃ³n al backend (que la reenvÃ­a a Traccar) mientras el viaje estÃ¡ activo.
       await widget.api.setDriverLocation(
           widget.driverId, _driverPos.latitude, _driverPos.longitude);
 
@@ -1601,24 +1716,40 @@ void _startTripPoller() {
       if (!estadosViajeVivos.contains(actual.status)) {
         await _alPerderElViaje(
           actual.status == 'cancelled'
-              ? 'El pasajero canceló el viaje'
-              : 'El viaje ya no está activo',
+              ? 'El pasajero cancelÃ³ el viaje'
+              : 'El viaje ya no estÃ¡ activo',
         );
         return;
       }
 
       final pts = await widget.api.getTripRoute(trip.tripId);
       if (!mounted) return;
+      // Esta es la ruta que el backend tiene GUARDADA para el viaje: la original
+      // de la recogida al destino, no la que el conductor lleva deambulando. Es
+      // un segundo escritor de `_route` distinto de `_refreshRoutes`, y durante
+      // un tiempo se le olvidó la protección: con el sondeo cada 4 s pisaba la
+      // ruta recalculada a los 4 segundos de aplicarse, que es exactamente el
+      // sintoma de "recalcula y vuelve la original" en la fase de destino.
       setState(() {
-        _route = pts.map((p) => p.point).toList();
+        _enfocarRuta(
+          recalculada: _rutaEsRecalculada,
+          nueva: pts.map((p) => p.point).toList(),
+          km: null,
+          min: null,
+          escribir: (ruta, km, min) {
+            _route = ruta;
+            if (km != null) _tripKm = km;
+            if (min != null) _tripMin = min;
+          },
+        );
       });
       await _refreshRoutes();
     } catch (_) {
-      // Silencioso: la ruta sigue disponible en el próximo tick.
+      // Silencioso: la ruta sigue disponible en el prÃ³ximo tick.
     }
   }
 
-  // ---------------- DIÁLOGOS ----------------
+  // ---------------- DIÃLOGOS ----------------
 
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1635,22 +1766,22 @@ void _startTripPoller() {
           mainAxisSize: MainAxisSize.min,
           children: [
             _row('Distancia', '${t.distanceKm} km'),
-            _row('Duración', _fmtDuration(t.durationSecs)),
+            _row('DuraciÃ³n', _fmtDuration(t.durationSecs)),
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Tiempo', '${t.timeFare.toStringAsFixed(2)} ${t.currency}'),
-            _row('Comisión ${t.commissionLabel}',
+            _row('ComisiÃ³n ${t.commissionLabel}',
                 '-${t.commission.toStringAsFixed(2)} ${t.currency}'),
             if (t.commissionDiscount)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'Descuento aplicado: 3er viaje del día con comisión reducida.',
+                  'Descuento aplicado: 3er viaje del dÃ­a con comisiÃ³n reducida.',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
               ),
             const Divider(),
-            // El total es el precio final del viaje. La comisión ya se
+            // El total es el precio final del viaje. La comisiÃ³n ya se
             // desconto del Fondo del chofer, no se resta de aqui.
             _row('Total del viaje',
                 '${t.totalFare.toStringAsFixed(2)} ${t.currency}',
@@ -1781,7 +1912,7 @@ void _startTripPoller() {
                 const SizedBox(height: 4),
                 _circularButton(
                   Icons.menu,
-                  tooltip: 'Menú',
+                  tooltip: 'MenÃº',
                   onTap: () => _scaffoldKey.currentState?.openDrawer(),
                 ),
               ],
@@ -1803,7 +1934,7 @@ void _startTripPoller() {
                       ? (Icons.gps_fixed)
                       : (Icons.gps_off),
                   tooltip: _gpsState == LocationPermissionState.granted
-                      ? 'Recentrar en mi posición'
+                      ? 'Recentrar en mi posiciÃ³n'
                       : 'Activar GPS',
                   onTap: _gpsState == LocationPermissionState.granted
                       ? _followGpsAgain
@@ -1899,7 +2030,7 @@ void _startTripPoller() {
     final toPickupKm = _toPickupKm ?? o.distanciaChoferKm;
     final toPickupTxt = toPickupKm != null
         ? '${toPickupKm.toStringAsFixed(1)} km'
-            '${_toPickupMin != null ? ' · ${_toPickupMin!.ceil()} min' : ''}'
+            '${_toPickupMin != null ? ' Â· ${_toPickupMin!.ceil()} min' : ''}'
         : '-';
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -2133,8 +2264,8 @@ if (o.pickup != null) ...[
     );
   }
 
-  /// Línea con la dirección en calles del punto, con coordenadas como
-  /// referencia secundaria (o como texto principal si no hay dirección).
+  /// LÃ­nea con la direcciÃ³n en calles del punto, con coordenadas como
+  /// referencia secundaria (o como texto principal si no hay direcciÃ³n).
   Widget _addressLine(TripOffer o, {required bool pickup}) {
     const muted = Color(0xFF6B7280);
     const text = Color(0xFF1F2937);
@@ -2163,10 +2294,10 @@ String _fmtCoord(LatLng p) =>
   String _addrKey(LatLng p) =>
       '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
 
-  /// Dirección legible (nombres de calle) de la recogida o del destino.
+  /// DirecciÃ³n legible (nombres de calle) de la recogida o del destino.
   ///
-  /// Prioriza la dirección que envió el pasajero al crear el viaje; si el
-  /// viaje se creó con un pin en el mapa (sin dirección), geocodifica en
+  /// Prioriza la direcciÃ³n que enviÃ³ el pasajero al crear el viaje; si el
+  /// viaje se creÃ³ con un pin en el mapa (sin direcciÃ³n), geocodifica en
   /// segundo plano y actualiza la pantalla cuando responde.
   String? _addressOf(TripOffer o, {required bool pickup}) {
     final provided = pickup ? o.requestAddress : o.dropoffAddress;
@@ -2221,7 +2352,7 @@ String _fmtCoord(LatLng p) =>
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Se borrará en: $_lostCountdown s',
+                      'Se borrarÃ¡ en: $_lostCountdown s',
                       style: const TextStyle(color: muted, fontSize: 13),
                     ),
                   ],
@@ -2243,7 +2374,7 @@ String _fmtCoord(LatLng p) =>
                       color: text, fontSize: 14, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 2),
-                Text('${o.numPasajes} pasajero(s) · Efectivo',
+                Text('${o.numPasajes} pasajero(s) Â· Efectivo',
                     style: const TextStyle(color: muted, fontSize: 12)),
               ],
             ),
@@ -2385,7 +2516,7 @@ String _fmtCoord(LatLng p) =>
     const secondaryText = Color(0xFF888888);
     final vehicleLabel = widget.profile.vehicleModel.isNotEmpty
         ? widget.profile.vehicleModel
-        : (widget.profile.vehicleType ?? 'Vehículo');
+        : (widget.profile.vehicleType ?? 'VehÃ­culo');
     return _PanelCard(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2397,7 +2528,7 @@ String _fmtCoord(LatLng p) =>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Mi vehículo',
+                    const Text('Mi vehÃ­culo',
                         style: TextStyle(color: secondaryText, fontSize: 13)),
                     const SizedBox(height: 4),
                     Row(
@@ -2467,7 +2598,7 @@ String _fmtCoord(LatLng p) =>
                       Text(
                         _online
                             ? 'Listo para recibir solicitudes'
-                            : 'No recibirás nuevas solicitudes',
+                            : 'No recibirÃ¡s nuevas solicitudes',
                         style: const TextStyle(
                             color: secondaryText, fontSize: 12),
                       ),
@@ -2503,7 +2634,7 @@ String _fmtCoord(LatLng p) =>
                     ),
                     const SizedBox(height: 2),
                     const Text(
-                      'Al activar esta opción se te mostrarán en pantalla las solicitudes de viajes.',
+                      'Al activar esta opciÃ³n se te mostrarÃ¡n en pantalla las solicitudes de viajes.',
                       style: TextStyle(color: secondaryText, fontSize: 12, height: 1.4),
                     ),
                   ],
@@ -2528,7 +2659,7 @@ String _fmtCoord(LatLng p) =>
     final trip = _activeTrip!;
     final pickup = trip.pickup;
     final nextStep = switch (trip.status) {
-      'accepted' => 'Llegué al punto de recogida',
+      'accepted' => 'LleguÃ© al punto de recogida',
       'driver_arrived' => 'Iniciar viaje',
       'in_progress' => 'Completar viaje',
       _ => null,
@@ -2543,7 +2674,7 @@ String _fmtCoord(LatLng p) =>
             children: [
               const Icon(Icons.route, color: Colors.orangeAccent),
               const SizedBox(width: 8),
-              Text('VIAJE EN CURSO · ${estadoViaje(trip.status)}',
+              Text('VIAJE EN CURSO Â· ${estadoViaje(trip.status)}',
                   style: const TextStyle(
                       fontWeight: FontWeight.bold, color: Colors.orangeAccent)),
             ],
@@ -2680,7 +2811,7 @@ if (pickup != null)
         const SizedBox(width: 6),
         Flexible(
           child: Text(
-            'No puedes cancelar: límite diario alcanzado '
+            'No puedes cancelar: lÃ­mite diario alcanzado '
             '(${CancellationService.maximoPorDia}/${CancellationService.maximoPorDia})',
             style: TextStyle(
               fontSize: 12,
@@ -2694,7 +2825,7 @@ if (pickup != null)
 
   /// Flujo completo de cancelar: confirmar, pedir motivo, llamar al backend.
   ///
-  /// El orden importa. Primero la confirmacion, porque cancelar sin想问 no debe
+  /// El orden importa. Primero la confirmacion, porque cancelar sinæƒ³é—® no debe
   /// pasar; despues el motivo, que es opcional; y solo entonces se gasta una de
   /// las tres oportunidades del dia.
   Future<void> _cancelarViaje(TripOffer t) async {
@@ -2721,7 +2852,7 @@ if (pickup != null)
         _alPerderElViaje('Viaje cancelado');
       case ResultadoCancelacion.limiteAlcanzado:
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Llegaste al límite de 3 cancelaciones de hoy'),
+          content: Text('Llegaste al lÃ­mite de 3 cancelaciones de hoy'),
         ));
       case ResultadoCancelacion.viajeNoCancelable:
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -2849,7 +2980,7 @@ if (pickup != null)
             ),
             ListTile(
               leading: const Icon(Icons.settings_outlined, color: Color(0xFF333333)),
-              title: const Text('Configuración'),
+              title: const Text('ConfiguraciÃ³n'),
               onTap: () {
                 Navigator.of(context).pop();
                 Navigator.of(context).push(MaterialPageRoute(
@@ -2874,7 +3005,7 @@ if (pickup != null)
             ListTile(
               leading: const Icon(Icons.logout, color: Color(0xFF333333)),
               title: const Text(
-                'Cerrar sesión',
+                'Cerrar sesiÃ³n',
                 style: TextStyle(color: Color(0xFFB3261E)),
               ),
               onTap: _logout,
@@ -2972,4 +3103,3 @@ class _CheckeredFlagPainter extends CustomPainter {
   bool shouldRepaint(covariant _CheckeredFlagPainter oldDelegate) =>
       oldDelegate.color != color || oldDelegate.checks != checks;
 }
-

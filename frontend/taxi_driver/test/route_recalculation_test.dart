@@ -176,6 +176,63 @@ void main() {
       expect(peticiones, 1);
     });
 
+    test('reiniciar con la MISMA ruta NO borra la racha en curso', () async {
+      // Este es el bug que hacia inutil el detector en el movil.
+      //
+      // La pantalla pide las rutas en cada posicion y, como el modo flota
+      // compartia stream con el de navegacion, llegaba a hacerlo 63 veces por
+      // minuto. Cada llamada a `iniciar` hacia `_fueraConsecutivas = 0`, con lo
+      // que el contador de 3 muestras nunca llegaba a 3. Medido: 2.243 reinicios
+      // en 35 minutos, `fuera=0/3` en todas las trazas, y 3 recalculos de 2.243
+      // oportunidades.
+      final lejos = const LatLng(23.1100, -82.3500);
+
+      servicio.informarPosicion(lejos, 10.0);
+      // La pantalla vuelve a pedir la misma ruta entre muestras.
+      servicio.iniciar(ruta: ruta, destino: const LatLng(23.1400, -82.3500));
+      servicio.informarPosicion(lejos, 10.0);
+      servicio.iniciar(ruta: ruta, destino: const LatLng(23.1400, -82.3500));
+      // Esta es la tercera: con el reinicio intermedio la racha se perdia.
+      servicio.informarPosicion(lejos, 10.0);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(peticiones, 1,
+          reason: 'la racha debe sobrevivir a los reinicios con la misma ruta');
+    });
+
+    test('reiniciar con OTRA ruta si rearma el contador', () async {
+      // Lo contrario del anterior: si el trayecto cambia de verdad, el contador
+      // empieza de cero, porque la distancia a la nueva ruta no es comparable
+      // con la que se venia midiendo.
+      final lejos = const LatLng(23.1100, -82.3500);
+      final otraRuta = [
+        const LatLng(23.1000, -82.3400),
+        const LatLng(23.1200, -82.3400),
+      ];
+
+      servicio.informarPosicion(lejos, 10.0);
+      servicio.iniciar(ruta: otraRuta, destino: const LatLng(23.1400, -82.3500));
+      // La posicion esta ahora SI sobre la nueva ruta, asi que no cuenta.
+      servicio.informarPosicion(const LatLng(23.1100, -82.3400), 10.0);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(peticiones, 0);
+    });
+
+    test('un destino distinto a 10 m ya es otro trayecto', () async {
+      final lejos = const LatLng(23.1100, -82.3500);
+      // 10 m al este: muy por encima de la tolerancia de 1 cm.
+      final otroDestino = LatLng(23.1400, -82.34990);
+
+      servicio.informarPosicion(lejos, 10.0);
+      servicio.iniciar(ruta: ruta, destino: otroDestino);
+      servicio.informarPosicion(const LatLng(23.1100, -82.3600), 10.0);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(peticiones, 0,
+          reason: 'cambio de destino: el contador vuelve a cero');
+    });
+
     test('dos muestras fuera de umbral NO disparan recalculo', () async {
       final lejos = const LatLng(23.1100, -82.3500);
       servicio.informarPosicion(lejos, 10.0);

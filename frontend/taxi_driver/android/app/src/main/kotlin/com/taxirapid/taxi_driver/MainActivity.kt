@@ -59,6 +59,38 @@ class MainActivity : FlutterActivity() {
          * no de saltos.
          */
         const val NAV_INTERVAL_MS = 1000L
+
+        /**
+         * Tiempo sin variacion de azimut para dar el sensor por clavado.
+         *
+         * 30 s. Medido en este movil: el sensor entrego 48.121 muestras con 2
+         * grados de recorrido total, o sea clavado, mientras el GPS se movia 158
+         * grados en el mismo tramo. Cuando se detecta, se prueba con el siguiente
+         * sensor de la cadena, que suele ser el que si se mueve.
+         */
+        const val SENSOR_CLAVADO_MS = 30000L
+
+        /**
+         * Variacion de azimut minima para considerar que el sensor esta vivo.
+         *
+         * 8 grados. Es el ruido de fondo de un sensor real; por debajo, la
+         * variacion medida es del orden del ruido y no dice nada.
+         */
+        const val SENSOR_MINIMO_VARIACION_GRADOS = 8.0
+
+        /** Cada cuanto se mira si el sensor se ha quedado clavado. */
+        const val SENSOR_VIGILANCIA_PERIODO_MS = 5000L
+
+        /**
+         * Etiqueta de posicion del listener de navegacion (1 Hz).
+         *
+         * Dart la usa para no mezclarla con la del modo flota, que va a 10 s /
+         * 20 m. Ver [toMap].
+         */
+        const val MODO_NAV = "nav"
+
+        /** Etiqueta de posicion del modo flota y de las consultas puntuales. */
+        const val MODO_FLOTA = "flota"
     }
 
     private var channel: MethodChannel? = null
@@ -95,6 +127,26 @@ class MainActivity : FlutterActivity() {
     private var navActivo = false
     private var sensorListener: SensorEventListener? = null
     private var sensorManager: SensorManager? = null
+
+    /** Posicion dentro de [sensoresRumbo] del sensor con el que se esta leyendo. */
+    private var sensorEnUso = 0
+
+    /** Nombre del sensor en uso, que se manda a Dart con cada lectura. */
+    private var sensorNombre: String? = null
+
+    /** Ultimo azimut emitido, para saber si el sensor se mueve. */
+    private var ultimoAzimut = Double.NaN
+
+    /** Recorrido angular acumulado desde la ultima comprobacion del vigilante. */
+    private var recorridoAzimut = 0.0
+
+    /** Instante en el que arranco a vigilarse el sensor actual. */
+    private var vigilarDesdeMs = 0L
+
+    /** Matrices del calculo de orientacion, reutilizadas por cada lectura. */
+    private val matrizRotacion = FloatArray(9)
+    private val matrizRemapeada = FloatArray(9)
+    private val orientacion = FloatArray(3)
 
     /**
      * Ultimo instante (monotono) en el que el vehiculo se vio en marcha.
@@ -175,7 +227,7 @@ class MainActivity : FlutterActivity() {
                 result.success(true)
             }
             // Modo navegacion: GPS a 1 Hz + sensor de rumbo.
-            "startNav" -> startNav(result)
+            "startNav" -> startNav(result, call.argument<Boolean>("sensor") ?: true)
             "stopNav" -> {
                 stopNav()
                 result.success(true)
@@ -277,7 +329,7 @@ class MainActivity : FlutterActivity() {
         )
         // La mas reciente es la que mejor sirve como posicion inicial inmediata.
         val best = candidates.maxByOrNull { it.time } ?: return null
-        return toMap(best)
+        return toMap(best, MODO_FLOTA)
     }
 
     /**
@@ -297,7 +349,7 @@ class MainActivity : FlutterActivity() {
      * "rumbo norte" como para "no tengo dato", y esa ambiguedad haria que el
      * mapa se orientase al norte en un tunel.
      */
-    private fun toMap(location: Location): Map<String, Any?> = mapOf(
+    private fun toMap(location: Location, modo: String): Map<String, Any?> = mapOf(
         "latitude" to location.latitude,
         "longitude" to location.longitude,
         "accuracy" to location.accuracy.toDouble(),
@@ -308,6 +360,14 @@ class MainActivity : FlutterActivity() {
         "hasSpeed" to location.hasSpeed(),
         "speed" to if (location.hasSpeed()) location.speed.toDouble() else null,
         "provider" to location.provider,
+        // De que listener sale la posicion: `flota` (10 s / 20 m) o `nav` (1 Hz).
+        //
+        // Sin esto los dos modos comparten un unico stream en Dart, asi que el
+        // suscriptor del modo flota recibia tambien las posiciones de navegacion
+        // a 1 Hz. Cada una hacia que la pantalla recalculara las rutas, lo que
+        // arrastraba al detector de desvios y lo reiniciaba 63 veces por minuto:
+        // su contador de 3 muestras consecutivas nunca llegaba a 3.
+        "modo" to modo,
         "mocked" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
             location.isFromMockProvider
         } else {
@@ -315,7 +375,13 @@ class MainActivity : FlutterActivity() {
         }
     )
 
-    private fun emit(location: Location) {
+    /**
+     * Publica una posicion.
+     *
+     * [modo] distingue el listener de navegacion (1 Hz) del de flota (10 s /
+     * 20 m). Lo consume Dart para no mezclarlos.
+     */
+    private fun emit(location: Location, modo: String) {
         lastFix.set(location)
 
         // En modo navegacion se lleva la cuenta de si el vehiculo se mueve, para
@@ -325,20 +391,25 @@ class MainActivity : FlutterActivity() {
             ultimoEnMarchaMs = SystemClock.elapsedRealtime()
         }
 
-        channel?.invokeMethod("onLocation", toMap(location))
+        channel?.invokeMethod("onLocation", toMap(location, modo))
     }
 
     // ---------------- MODO NAVEGACION ----------------
 
     /**
-     * Arranca el GPS a 1 Hz y registra el sensor de rumbo.
+     * Arranca el GPS a 1 Hz y, si [usarSensor], el sensor de rumbo.
      *
      * Es un camino separado de [startUpdates] a proposito: el modo flota
      * (10 s / 20 m) sirve para refrescar la posicion que ve el backend y no
-     * debe cambiar de comportamiento al añadir navegacion.
+     * debe cambiar de comportamiento al aÃ±adir navegacion.
+     *
+     * [usarSensor] en `false` deja el sensor sin registrar. La app lo pide asi
+     * porque el heading-up sale de la ruta, no del sensor: en este movil el
+     * `TYPE_GAME_ROTATION_VECTOR` devolvia el mismo azimut en 48.121 muestras
+     * seguidas y ademas costaba ~50 eventos por segundo por el canal.
      */
-    private fun startNav(result: MethodChannel.Result) {
-        android.util.Log.i("RapiTaxi", "startNav: permiso=${hasLocationPermission()} sensor=${mejorSensorRumbo()?.name}")
+    private fun startNav(result: MethodChannel.Result, usarSensor: Boolean = true) {
+        android.util.Log.i("RapiTaxi", "startNav: permiso=${hasLocationPermission()} sensor=$usarSensor")
         if (!hasLocationPermission()) {
             result.error("SIN_PERMISO", "Falta el permiso de ubicacion", null)
             return
@@ -355,11 +426,23 @@ class MainActivity : FlutterActivity() {
 
         // `minTime` a 0 con `minDistance` a 0 haria que Android entregase fixes
         // tan rapido como pudiera. Se deja 1 s de intervalo y 0 m de distancia:
-        // la posicion llega a 1 Hz (suficiente para el mapa) y el sensor de
-        // rumbo, que va a ~50 Hz, es lo que aporta la fluidez.
+        // la posicion llega a 1 Hz (suficiente para el mapa).
         reanudarNavegacion()
 
-        registrarSensorRumbo()
+        mainHandler.removeCallbacks(tareaVigilarSensor)
+        if (usarSensor) {
+            sensorEnUso = 0
+            sensorNombre = null
+            ultimoAzimut = Double.NaN
+            recorridoAzimut = 0.0
+            vigilarDesdeMs = SystemClock.elapsedRealtime()
+            registrarSensorRumbo()
+            mainHandler.postDelayed(tareaVigilarSensor, SENSOR_VIGILANCIA_PERIODO_MS)
+        } else {
+            sensorManager?.unregisterListener(sensorListener)
+            sensorListener = null
+            sensorNombre = null
+        }
 
         mainHandler.removeCallbacks(tareaParado)
         mainHandler.postDelayed(tareaParado, 2000L)
@@ -414,7 +497,7 @@ class MainActivity : FlutterActivity() {
         // respeta: ambos estan activos a la vez y cada uno con su ritmo.
         listenerNav?.let { runCatching { lm.removeUpdates(it) } }
         val l = object : LocationListener {
-            override fun onLocationChanged(location: Location) = emit(location)
+            override fun onLocationChanged(location: Location) = emit(location, MODO_NAV)
             override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
             override fun onProviderEnabled(p: String) {}
             override fun onProviderDisabled(p: String) {}
@@ -428,120 +511,249 @@ class MainActivity : FlutterActivity() {
     private fun stopNav() {
         navActivo = false
         mainHandler.removeCallbacks(tareaParado)
+        mainHandler.removeCallbacks(tareaVigilarSensor)
         listenerNav?.let { runCatching { locationManager?.removeUpdates(it) } }
         listenerNav = null
         detenerDetector()
         sensorManager?.unregisterListener(sensorListener)
         sensorListener = null
+        sensorEnUso = 0
+        sensorNombre = null
+        ultimoAzimut = Double.NaN
+        recorridoAzimut = 0.0
+    }
+
+    /**
+     * Vigila que el sensor de rumbo se mueva de verdad y, si no, prueba otro.
+     *
+     * Es la red de seguridad del MethodChannel: el canal entrega SIEMPRE lo que
+     * el sensor dice, pero hay sensores que dicen siempre lo mismo. En este movil
+     * el `TYPE_GAME_ROTATION_VECTOR` devolvia el mismo azimut en 48.121 muestras
+     * seguidas (2 grados de recorrido total) mientras el coche giraba, y el mapa
+     * se quedaba clavado apuntando al norte durante todo el viaje.
+     *
+     * Con solo mirar el valor no se distingue "el coche va recto" de "el sensor
+     * esta roto", asi que no se declara nada por el silencio: se mide el
+     * recorrido del azimut durante 30 s y, si no llega a 8 grados, se pasa al
+     * siguiente sensor de la cadena. Un sensor que se mueve, aunque sea poco, es
+     * preferible a uno que no se mueve nunca.
+     */
+    private val tareaVigilarSensor = object : Runnable {
+        override fun run() {
+            if (!navActivo) return
+            val ahora = SystemClock.elapsedRealtime()
+
+            if (recorridoAzimut >= SENSOR_MINIMO_VARIACION_GRADOS) {
+                // Se mueve: se reinicia la ventana. Vive, no hay nada que hacer.
+                vigilarDesdeMs = ahora
+                recorridoAzimut = 0.0
+                mainHandler.postDelayed(this, SENSOR_VIGILANCIA_PERIODO_MS)
+                return
+            }
+
+            if (ahora - vigilarDesdeMs < SENSOR_CLAVADO_MS) {
+                mainHandler.postDelayed(this, SENSOR_VIGILANCIA_PERIODO_MS)
+                return
+            }
+
+            android.util.Log.w(
+                "RapiTaxi",
+                "vigilante: $sensorNombre no se ha movido en $SENSOR_CLAVADO_MS ms " +
+                    "(recorrido $recorridoAzimut grados), se pasa al siguiente sensor"
+            )
+            recorridoAzimut = 0.0
+            ultimoAzimut = Double.NaN
+            vigilarDesdeMs = ahora
+            if (sensorEnUso + 1 < sensoresRumbo().size) {
+                sensorEnUso++
+                registrarSensorRumbo()
+            } else {
+                // Se han agotado los sensores: no hay nada mejor. Se deja el
+                // actual y se vuelve a mirar dentro de 30 s, por si se recupera.
+                android.util.Log.w(
+                    "RapiTaxi",
+                    "vigilante: no queda mas sensor de rumbo que probar"
+                )
+            }
+            mainHandler.postDelayed(this, SENSOR_VIGILANCIA_PERIODO_MS)
+        }
     }
 
     // ---------------- SENSOR DE RUMBO ----------------
 
     /**
-     * Elige el mejor sensor de rumbo disponible, en este orden.
+     * Los sensores de rumbo del dispositivo, en orden de preferencia.
      *
      *  1. `TYPE_GAME_ROTATION_VECTOR`: giroscopio + acelerometro, SIN magnetometro.
-     *     Es el unico que sirve en un taxi, porque los imanes de la carroceria
+     *     Es el que mejor viene en un taxi, porque los imanes de la carroceria
      *     desvian la brujula magnetica de forma constante.
      *  2. `TYPE_ROTATION_VECTOR`: idem pero con magnetometro, degrada si el
-     *     magnetometro esta sucio.
+     *     magnetometro esta sucio. Es ademas el plan B cuando el anterior se
+     *     queda clavado: ver [tareaVigilarSensor].
      *  3. `TYPE_MAGNETIC_FIELD` + `TYPE_ACCELEROMETER`: montaje manual de la
      *     matriz. Ultimo recurso.
+     *
+     * Se devuelve la lista y no solo el primero porque el registro puede fallar,
+     * y pasar al siguiente solo es posible si se conocen los candidatos.
      *
      * `location.bearing` del GPS NO se usa como sensor: es dead-reckoning y en
      * conduccion urbana suele devolver 0 o valores que cambian sin rumbo real.
      */
-    private fun mejorSensorRumbo(): Sensor? {
-        val sm = sensorManager ?: return null
-        return sm.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
-            ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-            ?: sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+    private fun sensoresRumbo(): List<Sensor> {
+        val sm = sensorManager ?: return emptyList()
+        return listOfNotNull(
+            sm.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR),
+            sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR),
+            sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD),
+        )
     }
+
+    private fun mejorSensorRumbo(): Sensor? = sensoresRumbo().firstOrNull()
 
     private fun tieneSensorRumbo(): Boolean = mejorSensorRumbo() != null
 
+    /**
+     * Registra el sensor de la cadena que toca en [sensorEnUso].
+     *
+     * Si `registerListener` devuelve `false` se pasa al siguiente. Antes se
+     * ignoraba ese valor de retorno: se daba por bueno un sensor que en realidad
+     * no estaba registrado y nunca iba a emitir, el canal se quedaba mudo y no
+     * habia ni un error ni un aviso por el que enterarse. El fallo tipico es que
+     * otro proceso (una app de navegacion, el juego de grabacion) tenga el
+     * sensor tomado.
+     */
     private fun registrarSensorRumbo() {
         val sm = sensorManager ?: return
         sm.unregisterListener(sensorListener)
 
-        val sensor = mejorSensorRumbo() ?: run {
-            android.util.Log.w("RapiTaxi", "registrarSensorRumbo: el dispositivo NO tiene sensor de rumbo")
+        val candidatos = sensoresRumbo()
+        if (candidatos.isEmpty()) {
+            android.util.Log.w(
+                "RapiTaxi",
+                "registrarSensorRumbo: el dispositivo NO tiene sensor de rumbo"
+            )
+            sensorListener = null
             return
         }
-        val necesitaAcelerometro =
-            sensor.type == Sensor.TYPE_MAGNETIC_FIELD
-
-        val l = object : SensorEventListener {
-            private val matriz = FloatArray(9)
-            private val matrizRemapeada = FloatArray(9)
-            private val orientacion = FloatArray(3)
-
-            override fun onSensorChanged(event: SensorEvent) {
-                if (event.values.size < 3) return
-                SensorManager.getRotationMatrixFromVector(matriz, event.values)
-
-                // El azimut depende de los ejes que se eligen como referencia.
-                //
-                // Sin remapear, `getOrientation` mide el azimut sobre el eje Y del
-                // telefono (la "arriba" de la pantalla), que en vertical apunta al
-                // cielo: el resultado sale 90 grados desviado. La referencia
-                // correcta en vertical es la X del telefono (su ejederecho) y la
-                // Z (la normal de la pantalla, que es la que mira al conductor).
-                //
-                // Antes se pasaba `AXIS_X to AXIS_Z`, que parece un remapeo pero
-                // no lo es: la funcion de Android calcula `Z = Y xor X` y
-                // permuta las filas enteras, asi que con esos dos ejes la
-                // permutacion cae en la identidad y el mapa salia girado justo
-                // los 90 grados de los que se queja.
-                //
-                // El remapeo se hace aqui en vez de con
-                // `SensorManager.remapCoordinateSystem` porque esa funcion
-                // rechaza los ejes negativos (`AXIS_MINUS_X` es -1 y no pasa su
-                // comprobacion `X & 0x7C`), que hacen falta en las rotaciones de
-                // pantalla, y porque deja `outR` intacto cuando devuelve false:
-                // un fallo silencioso que hacia que en horizontal se siguiera
-                // leyendo la matriz del evento anterior.
-                val (ejeX, ejeY, signoX, signoY) = when (remapSegunPantalla()) {
-                    0 -> Ejes(
-                        SensorManager.AXIS_X, SensorManager.AXIS_Y, 1f, 1f)
-                    1 -> Ejes(
-                        SensorManager.AXIS_Y, SensorManager.AXIS_X, 1f, -1f)
-                    2 -> Ejes(
-                        SensorManager.AXIS_X, SensorManager.AXIS_Y, -1f, -1f)
-                    else -> Ejes(
-                        SensorManager.AXIS_Y, SensorManager.AXIS_X, -1f, 1f)
-                }
-                remapParaAzimut(matriz, matrizRemapeada, ejeX, ejeY, signoX, signoY)
-                SensorManager.getOrientation(matrizRemapeada, orientacion)
-
-                // orientacion[0] es el azimut en RADIANES, 0 = norte y growing en
-                // sentido horario, que es justo lo que espera el `bearing` de
-                // MapLibre. Se convierte a grados al mandar.
-                val azimut = Math.toDegrees(orientacion[0].toDouble())
-                channel?.invokeMethod(
-                    "onHeading",
-                    mapOf(
-                        "bearing" to ((azimut % 360.0 + 360.0) % 360.0),
-                        "accuracyRad" to Math.toDegrees(orientacion[2].toDouble()).toFloat(),
-                        "elapsedRealtimeMs" to SystemClock.elapsedRealtime()
-                    )
-                )
-            }
-
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        if (sensorEnUso >= candidatos.size) {
+            android.util.Log.w(
+                "RapiTaxi",
+                "registrarSensorRumbo: se han agotado los sensores de rumbo"
+            )
+            sensorListener = null
+            return
         }
+
+        val sensor = candidatos[sensorEnUso]
+        sensorNombre = sensor.name
+        val listener = oyenteRumbo
 
         // SENSOR_DELAY_GAME son ~50 Hz: suficiente para que el mapa gire sin
         // tirones sin gastar mas de lo necesario en un taxi durante un viaje.
-        sm.registerListener(l, sensor, SensorManager.SENSOR_DELAY_GAME)
-        sensorListener = l
+        val registrado = runCatching {
+            sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        }.getOrDefault(false)
 
-        if (necesitaAcelerometro) {
-            // El montage manual necesita tambien el acelerometro.
+        if (!registrado) {
+            android.util.Log.w(
+                "RapiTaxi",
+                "registrarSensorRumbo: ${sensor.name} no se pudo registrar, se prueba el siguiente"
+            )
+            sensorEnUso++
+            registrarSensorRumbo()
+            return
+        }
+
+        if (sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+            // El montaje manual necesita tambien el acelerometro.
             sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
-                sm.registerListener(l, it, SensorManager.SENSOR_DELAY_GAME)
+                runCatching {
+                    sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
+                }
             }
         }
+
+        sensorListener = listener
+        android.util.Log.i("RapiTaxi", "registrarSensorRumbo: usando ${sensor.name}")
+    }
+
+    /**
+     * Listener de sensor compartido por todos los registros.
+     *
+     * Vive en un campo y no se construyen en [registrarSensorRumbo] para que el
+     * vigilante pueda cambiar de sensor sin rehacerlo, y para que las matrices se
+     * reutilicen en cada lectura en vez de reservar tres arrays nuevos por evento.
+     */
+    private val oyenteRumbo = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.values.size < 3) return
+            SensorManager.getRotationMatrixFromVector(matrizRotacion, event.values)
+
+            // El azimut depende de los ejes que se eligen como referencia.
+            //
+            // Sin remapear, `getOrientation` mide el azimut sobre el eje Y del
+            // telefono (la "arriba" de la pantalla), que en vertical apunta al
+            // cielo: el resultado sale 90 grados desviado. La referencia
+            // correcta en vertical es la X del telefono (su eje derecho) y la
+            // Z (la normal de la pantalla, que es la que mira al conductor).
+            //
+            // Antes se pasaba `AXIS_X to AXIS_Z`, que parece un remapeo pero
+            // no lo es: la funcion de Android calcula `Z = Y xor X` y
+            // permuta las filas enteras, asi que con esos dos ejes la
+            // permutacion cae en la identidad y el mapa salia girado justo
+            // los 90 grados de los que se queja.
+            //
+            // El remapeo se hace aqui en vez de con
+            // `SensorManager.remapCoordinateSystem` porque esa funcion
+            // rechaza los ejes negativos (`AXIS_MINUS_X` es -1 y no pasa su
+            // comprobacion `X & 0x7C`), que hacen falta en las rotaciones de
+            // pantalla, y porque deja `outR` intacto cuando devuelve false:
+            // un fallo silencioso que hacia que en horizontal se siguiera
+            // leyendo la matriz del evento anterior.
+            val (ejeX, ejeY, signoX, signoY) = when (remapSegunPantalla()) {
+                0 -> Ejes(
+                    SensorManager.AXIS_X, SensorManager.AXIS_Y, 1f, 1f)
+                1 -> Ejes(
+                    SensorManager.AXIS_Y, SensorManager.AXIS_X, 1f, -1f)
+                2 -> Ejes(
+                    SensorManager.AXIS_X, SensorManager.AXIS_Y, -1f, -1f)
+                else -> Ejes(
+                    SensorManager.AXIS_Y, SensorManager.AXIS_X, -1f, 1f)
+            }
+            remapParaAzimut(matrizRotacion, matrizRemapeada, ejeX, ejeY, signoX, signoY)
+            SensorManager.getOrientation(matrizRemapeada, orientacion)
+
+            // orientacion[0] es el azimut en RADIANES, 0 = norte y creciendo en
+            // sentido horario, que es justo lo que espera el `bearing` de
+            // MapLibre. Se convierte a grados al mandar.
+            val azimut = Math.toDegrees(orientacion[0].toDouble())
+            val normalizado = ((azimut % 360.0) + 360.0) % 360.0
+
+            // Acumulacion del recorrido angular para el vigilante. Va por el
+            // camino corto: un salto de 359 a 1 son 2 grados, no 358.
+            if (!ultimoAzimut.isNaN()) {
+                val d = (normalizado - ultimoAzimut + 540.0) % 360.0 - 180.0
+                recorridoAzimut += if (d < 0) -d else d
+            }
+            ultimoAzimut = normalizado
+
+            channel?.invokeMethod(
+                "onHeading",
+                mapOf(
+                    "bearing" to normalizado,
+                    // Antes se mandaba esto como `accuracyRad` y no era una
+                    // precision: era `orientacion[2]`, que es la inclinacion. Con
+                    // el nombre correcto deja de invite a usarlo mal.
+                    "inclinacionGrados" to Math.toDegrees(orientacion[2].toDouble()).toFloat(),
+                    // De que sensor viene: si el vigilante cambia de sensor en
+                    // caliente, la traza de Dart lo tiene que poder decir.
+                    "source" to sensorNombre,
+                    "elapsedRealtimeMs" to SystemClock.elapsedRealtime()
+                )
+            )
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     }
 
     /** Par de ejes (y sus signos) con el que se remapea la matriz de rotacion. */
@@ -643,8 +855,8 @@ class MainActivity : FlutterActivity() {
                 null,
                 mainExecutor
             ) { location ->
-                if (location != null) emit(location)
-                finish(location?.let { toMap(it) } ?: lastKnown())
+                if (location != null) emit(location, MODO_FLOTA)
+                finish(location?.let { toMap(it, MODO_FLOTA) } ?: lastKnown())
             }
             return
         }
@@ -652,8 +864,8 @@ class MainActivity : FlutterActivity() {
         val oneShot = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 runCatching { lm.removeUpdates(this) }
-                emit(location)
-                finish(toMap(location))
+                emit(location, MODO_FLOTA)
+                finish(toMap(location, MODO_FLOTA))
             }
 
             override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) {}
@@ -685,7 +897,7 @@ class MainActivity : FlutterActivity() {
         }
         stopUpdates()
         val l = object : LocationListener {
-            override fun onLocationChanged(location: Location) = emit(location)
+            override fun onLocationChanged(location: Location) = emit(location, MODO_FLOTA)
             override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
             override fun onProviderEnabled(p: String) {}
             override fun onProviderDisabled(p: String) {}

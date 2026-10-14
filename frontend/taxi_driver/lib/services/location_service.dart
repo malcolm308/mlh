@@ -32,7 +32,18 @@ class LocationService {
   static const _channel = MethodChannel('taxirapid/location');
   static const _fallback = LatLng(23.1136, -82.3666);
 
-  static final _positions = StreamController<GeoFix>.broadcast();
+  /// Posiciones del GPS de NAVEGACION (1 Hz). Las consume el servicio de camara.
+  ///
+  /// Van en un stream APARTE del de flota a proposito. Compartiendo uno solo, el
+  /// suscriptor del modo flota recibia tambien las posiciones de navegacion a
+  /// 1 Hz, y cada una hacia que la pantalla recalculara las rutas. Eso arrastraba
+  /// al detector de desvios, que se reiniciaba 63 veces por minuto y por tanto
+  /// nunca llegaba a su contador de 3 muestras consecutivas fuera de ruta.
+  static final _posicionesNav = StreamController<GeoFix>.broadcast();
+
+  /// Posiciones del GPS de FLOTA (10 s / 20 m). Las que se dibujan y las que ve
+  /// el backend.
+  static final _posicionesFlota = StreamController<GeoFix>.broadcast();
 
   /// Rumbo del sensor, en el rango [0, 360). Llega a ~50 Hz, independiente del
   /// GPS que va a 1 Hz, asi que va en un stream aparte.
@@ -45,6 +56,13 @@ class LocationService {
   /// Ultimo rumbo del sensor, para poder combinarlo con un fix ya recibido.
   static double? _ultimoRumboSensor;
 
+  /// Sensor nativo que ha mandao la ultima lectura, para diagnostico.
+  ///
+  /// Lo dice el propio `MainActivity`: si sale `TYPE_GAME_ROTATION_VECTOR` y el
+  /// rumbo no se mueve nunca, el problema no es Dart.
+  static String? _fuenteRumboSensor;
+  static String? get fuenteRumbo => _fuenteRumboSensor;
+
   static void _ensureHandler() {
     if (_handlerReady) return;
     _handlerReady = true;
@@ -56,7 +74,15 @@ class LocationService {
             // El rumbo del sensor y el fix GPS son datos independientes, asi
             // que se combinan aqui en lugar de mezclarlos en nativo.
             final conRumbo = fix.conRumboSensor(_ultimoRumboSensor);
-            if (!_positions.isClosed) _positions.add(conRumbo);
+            // El nativo etiqueta de que listener sale la posicion. Sin esto los
+            // dos modos se mezclaban en un unico stream y el de flota corria a
+            // 1 Hz. Ver [_posicionesNav].
+            final modo = call.arguments is Map
+                ? (call.arguments as Map)['modo']
+                : null;
+            final destino =
+                modo == 'nav' ? _posicionesNav : _posicionesFlota;
+            if (!destino.isClosed) destino.add(conRumbo);
           }
           break;
         case 'onHeading':
@@ -64,6 +90,9 @@ class LocationService {
           if (args is Map && args['bearing'] is num) {
             final grados = ((args['bearing'] as num).toDouble() % 360 + 360) % 360;
             _ultimoRumboSensor = grados;
+            // El sensor puede cambiar solo (ver el vigilante de `MainActivity`):
+            // se guarda de que sensor vino para poder decirlo en la traza.
+            _fuenteRumboSensor = args['source'] as String?;
             if (!_headings.isClosed) _headings.add(grados);
           }
           break;
@@ -90,23 +119,30 @@ class LocationService {
         _watching = false;
       });
     }
-    return _positions.stream;
+    return _posicionesFlota.stream;
   }
 
   /// Emisiones de posicion a 1 Hz para el modo navegacion.
   ///
   /// El GPS se pausa solo si el vehiculo lleva mas de 10 s parado, y se reanuda
   /// en cuanto arranca. Eso lo decide el nativo; aqui solo se pide el arranque.
-  static Stream<GeoFix> watchNavegacion() {
+  ///
+  /// [usarSensor] decide si se registra el sensor de rumbo. Va en `false` porque
+  /// el heading-up sale de la ruta y no de ningun sensor: dejarlo encendido
+  /// registraba un listener que emitia ~50 eventos por segundo por el canal, unas
+  /// 180.000 durante un viaje, para nada.
+  static Stream<GeoFix> watchNavegacion({bool usarSensor = true}) {
     _ensureHandler();
     if (!_navWatching) {
       _navWatching = true;
       _ultimoRumboSensor = null;
-      _channel.invokeMethod('startNav').catchError((_) {
+      _channel.invokeMethod('startNav', <String, dynamic>{
+        'sensor': usarSensor,
+      }).catchError((_) {
         _navWatching = false;
       });
     }
-    return _positions.stream;
+    return _posicionesNav.stream;
   }
 
   /// Rumbo del sensor en grados, 0 = norte. Llega a ~50 Hz.

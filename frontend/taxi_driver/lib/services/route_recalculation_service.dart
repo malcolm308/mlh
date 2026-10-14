@@ -7,6 +7,7 @@ import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 import '../api_config.dart';
 import 'api_client.dart';
 import 'osrm_service.dart';
+import 'traza_fichero.dart';
 
 /// Estado del recalculo de ruta.
 enum RouteRecalcState {
@@ -173,7 +174,23 @@ class RouteRecalculationService extends ChangeNotifier {
   ///
   /// Llamar de nuevo con una ruta nueva reinicia los contadores, que es
   /// justo lo que hace falta cuando el backend ya ha devuelto un trazado.
-  void iniciar({required List<LatLng> ruta, required LatLng destino}) {
+void iniciar({required List<LatLng> ruta, required LatLng destino}) {
+    // Idempotencia: si es el MISMO trayecto, no se toca NADA.
+    //
+    // Sin esta guarda el detector es inútil, y no por culpa del GPS. La pantalla
+    // pide las rutas cada vez que llega una posicion, y al recibir las del modo
+    // navegacion a 1 Hz eso era unas 63 llamadas por minuto. Cada una ejecutaba
+    // los resets de mas abajo y, en particular, `_fueraConsecutivas = 0`: el
+    // contador exige 3 muestras consecutivas fuera de ruta y se ponia a 1 antes
+    // de llegar a 3. Medido en el recorrido del 14/10: 2.243 reinicios en 35
+    // minutos, `fuera=0/3` en las 36 trazas, y 3 recalculos de 2.243
+    // oportunidades (0,13 %), los tres en huecos en los que llego a llamar
+    // `iniciar`.
+    if (_mismoTrayecto(ruta, destino)) {
+      _ruta = ruta;
+      return;
+    }
+
     _destino = destino;
     _ruta = ruta;
     _fueraConsecutivas = 0;
@@ -182,6 +199,7 @@ class RouteRecalculationService extends ChangeNotifier {
     _intentos = 0;
     _descartado = false;
     _enVuelo = false;
+    _contadorTrazas = 0;
     _temporizadorReintento?.cancel();
     _temporizadorEnfriamiento?.cancel();
     _temporizadorReintento = null;
@@ -189,6 +207,37 @@ class RouteRecalculationService extends ChangeNotifier {
     _ultimoRecalculoMs = null;
     if (!_reloj.isRunning) _reloj.start();
     _setEstado(RouteRecalcState.idle);
+    TrazaFichero.instancia.escribir('[RECALC] detector ARRANCADO: '
+        '${ruta.length} puntos, destino '
+        '${destino.latitude.toStringAsFixed(5)},${destino.longitude.toStringAsFixed(5)}');
+  }
+
+  /// Tolerancia para comparar el destino, en grados.
+  ///
+  /// 1e-6 son unos 11 cm: bastante mas que el redondeo del JSON de OSRM y bastante
+  /// menos que cualquier movimiento real de destino.
+  static const double _toleranciaDestino = 1e-6;
+
+  /// `true` si [ruta] y [destino] son el mismo trayecto que ya se sigue.
+  ///
+  /// Se compara el numero de puntos y el primero y el ultimo, que es lo que
+  /// identifica un trazado de OSRM: dos rutas distintas casi nunca coinciden en
+  /// los tres, y dos peticiones del mismo trayecto devuelven el mismo dibujo.
+  bool _mismoTrayecto(List<LatLng> ruta, LatLng destino) {
+    final actual = _destino;
+    if (actual == null) return false;
+    if ((actual.latitude - destino.latitude).abs() > _toleranciaDestino) {
+      return false;
+    }
+    if ((actual.longitude - destino.longitude).abs() > _toleranciaDestino) {
+      return false;
+    }
+    if (_ruta.length != ruta.length) return false;
+    if (ruta.isEmpty) return true;
+    return _ruta.first.latitude == ruta.first.latitude &&
+        _ruta.first.longitude == ruta.first.longitude &&
+        _ruta.last.latitude == ruta.last.latitude &&
+        _ruta.last.longitude == ruta.last.longitude;
   }
 
   /// Corta el seguimiento y suelta los temporizadores.
@@ -196,6 +245,8 @@ class RouteRecalculationService extends ChangeNotifier {
   /// Se llama al cancelar o completar el viaje. Cancelar los temporizadores es
   /// lo que evita que una peticion en vuelo wakee el servicio mas tarde.
   void detener() {
+    TrazaFichero.instancia.escribir('[RECALC] detector PARADO '
+        '(queda _descartado=true hasta el siguiente iniciar)');
     _temporizadorReintento?.cancel();
     _temporizadorEnfriamiento?.cancel();
     _temporizadorReintento = null;
@@ -216,15 +267,32 @@ class RouteRecalculationService extends ChangeNotifier {
   /// [posicion] tambien viene suavizada: medir la distancia contra una
   /// posicion con error de 30 m daria desvios falsos en cada esquina.
   void informarPosicion(LatLng posicion, double velocidadMps) {
-    if (_descartado) return;
-    if (_ruta.length < 2) return; // sin trazado no hay nada que comparar
     if (!_reloj.isRunning) _reloj.start();
 
-    _detectarParado(velocidadMps);
+    // La pausa por parado se evalua ANTES de la traza, para que la linea
+    // refleje el estado en el que se decide seguir o no.
+    if (_ruta.length >= 2) _detectarParado(velocidadMps);
 
     // Se guarda la ultima posicion para usarla como origen del recalculo: es el
     // punto exacto donde el conductor se salio, no un vertice de la ruta vieja.
     _ultimaPosicionConocida = posicion;
+
+    final hayRuta = _ruta.length >= 2;
+    final distancia =
+        hayRuta ? distanciaPerpendicularMetros(posicion, _ruta) : double.nan;
+
+    // El umbral sale de la velocidad del tramo, no de un valor fijo: ver
+    // [UmbralPorVelocidad.paraVelocidadKmh].
+    final umbral = UmbralPorVelocidad.paraVelocidadKmh(velocidadMps * 3.6);
+
+    // La traza va ANTES de cualquier `return`. Si fuera despues, cada una de
+    // las cuatro salidas tempranas se llevaria por delante su propia linea y el
+    // log no distinguiria "no se llama" de "vuelve antes", que es justo lo que
+    // hay que separar para encontrar el bloqueo.
+    _trazaDeteccion(distancia, umbral, velocidadMps);
+
+    if (_descartado) return;
+    if (!hayRuta) return; // sin trazado no hay nada que comparar
 
     // En pausa por parado no se cuenta nada, pero tampoco se borra el
     // contador: al arrancar puede que siga fuera de ruta de verdad.
@@ -233,12 +301,6 @@ class RouteRecalculationService extends ChangeNotifier {
     // Cinco segundos de calma tras un recalculo. El conductor aun no ha
     // corregido y su posicion sigue en la calle anterior.
     if (enPausaPostRecalculo) return;
-
-    final distancia = distanciaPerpendicularMetros(posicion, _ruta);
-
-    // El umbral sale de la velocidad del tramo, no de un valor fijo: ver
-    // [UmbralPorVelocidad.paraVelocidadKmh].
-    final umbral = UmbralPorVelocidad.paraVelocidadKmh(velocidadMps * 3.6);
 
     if (distancia > umbral) {
       _fueraConsecutivas++;
@@ -252,6 +314,51 @@ class RouteRecalculationService extends ChangeNotifier {
       _fueraConsecutivas = 0;
     }
   }
+
+  /// Muestra como va la deteccion, sin actuar.
+  ///
+  /// Va a la traza cada [cadaCuantasTrazas] muestras del GPS. Sin esto no hay
+  /// forma de saber por que el recalculo no dispara: las cuatro salidas
+  /// tempranas de [informarPosicion] y la comparacion con el umbral son
+  /// silenciosas, y sin GPS no se ve si el problema es que no se llama, que
+  /// vuelve antes, o que la distancia nunca pasa del umbral.
+  ///
+  /// [corte] es la condicion que haria volver a la llamada justo despues, y va
+  /// escrita en la linea para no tener que deducirla leyendo el codigo.
+  void _trazaDeteccion(
+    double distancia,
+    double umbral,
+    double velocidadMps,
+  ) {
+    final corte = _descartado
+        ? 'DESCARTADO'
+        : (_ruta.length < 2
+            ? 'SIN_RUTA'
+            : (_pausadoPorParado
+                ? 'PARADO'
+                : (enPausaPostRecalculo ? 'ESPERA' : 'ok')));
+
+    _contadorTrazas++;
+    if (_contadorTrazas % cadaCuantasTrazas != 0) return;
+    TrazaFichero.instancia.escribir(
+      '[RECALC-DET] corte=$corte '
+      'dist=${distancia.isNaN ? 'nan' : distancia.toStringAsFixed(0)} '
+      'umbral=${umbral.toStringAsFixed(0)} '
+      'v=${(velocidadMps * 3.6).toStringAsFixed(1)}km/h '
+      'fuera=$_fueraConsecutivas/${ApiConfig.desvioMuestrasConsecutivas} '
+      'pts=${_ruta.length} parachute=$_descartado '
+      'parado=$_pausadoPorParado espera=$enPausaPostRecalculo '
+      'intentos=$_intentos',
+    );
+  }
+
+  /// Cada cuantas muestras del GPS se escribe una linea de deteccion.
+  ///
+  /// 5. A 1 Hz es una linea cada 5 s: bastante para ver la tendencia de la
+  /// distancia sin llenar el fichero (que ya llega a 10 MB en un viaje).
+  static const int cadaCuantasTrazas = 5;
+
+  int _contadorTrazas = 0;
 
   // ---------------- Deteccion ----------------
 
@@ -293,6 +400,12 @@ class RouteRecalculationService extends ChangeNotifier {
 
   Future<void> _pedirRecalculo() async {
     final destino = _destino;
+    TrazaFichero.instancia.escribir('[RECALC] pido ruta: origen='
+        '${_ultimaPosicionConocida?.latitude.toStringAsFixed(5)},'
+        '${_ultimaPosicionConocida?.longitude.toStringAsFixed(5)} '
+        'destino=${destino?.latitude.toStringAsFixed(5)},'
+        '${destino?.longitude.toStringAsFixed(5)} '
+        'intento=${_intentos + 1}');
     if (destino == null) return;
     if (_descartado) return;
 
@@ -358,6 +471,8 @@ class RouteRecalculationService extends ChangeNotifier {
       _ruta = ruta.points;
       _intentos = 0;
       _setEstado(RouteRecalcState.success);
+      TrazaFichero.instancia.escribir('[RECALC] ruta nueva APLICADA: '
+          '${ruta.points.length} puntos, ${ruta.distanceKm.toStringAsFixed(2)} km');
       _rutaCambiada.add(ruta);
 
       // Enfriamiento: si el chofer sigue fuera de la nueva ruta, se necesita un
@@ -385,6 +500,8 @@ class RouteRecalculationService extends ChangeNotifier {
   /// es mejor que un spinner infinito.
   void _fallarYReintentar() {
     _intentos++;
+    TrazaFichero.instancia.escribir('[RECALC] fallo, intento $_intentos'
+        '${_intentos >= ApiConfig.desvioIntentosMaximos ? ' -> AGOTADO' : ''}');
     if (_intentos >= ApiConfig.desvioIntentosMaximos) {
       _descartado = true;
       _setEstado(RouteRecalcState.agotado);
