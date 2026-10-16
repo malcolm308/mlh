@@ -13,6 +13,7 @@ from routers import routing
 from routers import vehiculos
 from routers import chofer_cancelaciones
 from routers import tariffs
+from routers import telegram_webhook
 from services.traccar_listener import listen_traccar
 
 # Funciones que necesitamos del modulo de viajes
@@ -65,6 +66,7 @@ app.include_router(routing.router)
 app.include_router(vehiculos.router)
 app.include_router(chofer_cancelaciones.router)
 app.include_router(tariffs.router, prefix="/api", tags=["tariffs"])
+app.include_router(telegram_webhook.router)
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la
 # app arranca igualmente: lo reintentan el startup y el job de APScheduler.
@@ -204,6 +206,15 @@ async def startup_event():
 
     # Traccar listener (lo que ya tenias)
     asyncio.create_task(listen_traccar())
+
+    # Indice unico del vinculo con Telegram. Se asegura aqui y no al importar el
+    # modulo: si el indice no se puede crear por datos duplicados, el bot sigue
+    # funcionando y solo queda el aviso en el log.
+    try:
+        telegram_webhook.asegurar_indice_telegram()
+    except Exception:
+        logger.warning("No se pudo asegurar el indice de telegram_chat_id",
+                       exc_info=True)
 
     # Scheduler: expiracion de viajes + autorreparacion de tablas
     scheduler.add_job(sweep_expired_trips, "interval", seconds=30, id="sweep_expired_trips")

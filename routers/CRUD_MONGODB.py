@@ -53,6 +53,11 @@ class ChoferResponse(BaseModel):
     status: Optional[str] = None
     documents_verified: Optional[bool] = None
     max_passengers: Optional[int] = None
+    # Vínculo con Telegram. Lo rellena el bot al compartir el número; los choferes
+    # que no usan el bot lo traen en None.
+    telegram_chat_id: Optional[int] = None
+    telegram_username: Optional[str] = None
+    telegram_registered_at: Optional[Union[str, datetime]] = None
     last_location: Optional[dict] = None
     # Device de Traccar asignado a este chofer. Opcional: los choferes sin
     # GPS todavia no lo tienen y el listener los ignora. Ver docstring de
