@@ -89,3 +89,12 @@ keystore.properties
 .DS_Store
 Thumbs.db
 .env.local
+
+# Logs de pruebas de navegacion y capturas de pantalla.
+# Son artefactos de una corrida concreta: pesan decenas de MB y no aportan nada
+# al codigo. El codigo de los scripts que los generan si se sube.
+navlog_*.txt
+*_navlog.txt
+12-10/
+screenshots/
+capturas/
