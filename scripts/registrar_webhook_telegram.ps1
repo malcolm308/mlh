@@ -94,13 +94,26 @@ Write-Host "3. Verificando con getWebhookInfo..."
 $info = Invoke-Telegram -Metodo "getWebhookInfo"
 $resultado = $info.result
 Write-Host "   URL:            $($resultado.url)"
-Write-Host "   Estado:         $($resultado.status)"
 Write-Host "   Errores:        $($resultado.last_error_message -replace "`n", ' ')"
 Write-Host "   Actualizaciones pendientes: $($resultado.pending_update_count)"
+Write-Host "   Conexiones maximas: $($resultado.max_connections)"
 
-if ($resultado.status -ne "ok") {
-    Write-Error "El webhook quedo en estado '$($resultado.status)'. Revisa que el backend este desplegado y que la URL sea publica."
+# `getWebhookInfo` NO devuelve un campo `status`: lo unico que dice si el webhook
+# funciona es si hay `last_error_message` (Telegram no pudo entregar una
+# actualizacion) y si se acumulo`pending_update_count` (nada llego nunca).
+if ($resultado.url -ne $urlWebhook) {
+    Write-Error "La URL registrada no es la esperada. Se registro otra cosa."
     exit 1
+}
+
+if ($resultado.last_error_message) {
+    Write-Error "Telegram no ha podido entregar una actualizacion: $($resultado.last_error_message)"
+    Write-Error "Si el backend no esta desplegado o el secreto no coincide, eso es lo que vera."
+    exit 1
+}
+
+if ($resultado.pending_update_count -gt 0) {
+    Write-Warning "Hay $($resultado.pending_update_count) actualizacion(es) sin entregar. Si el bot no responde, mira el log del servidor: lo mas probable es que el secreto no coincida."
 }
 
 Write-Host ""
