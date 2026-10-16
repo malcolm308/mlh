@@ -52,7 +52,13 @@ class ApiClient {
       final j = jsonDecode(utf8.decode(r.bodyBytes));
       if (j is Map) {
         final d = j['detail'] ?? j['message'] ?? j['error'];
-        if (d != null) return d.toString();
+        if (d != null) {
+          // Algunos endpoints anidan el texto: `detail` llega como objeto con
+          // `detail`, `code` y datos del caso (por ejemplo el saldo). Sin esto
+          // el usuario veria el mapa entero impreso en pantalla.
+          if (d is Map && d['detail'] != null) return d['detail'].toString();
+          return d.toString();
+        }
       }
     } catch (_) {}
     return 'Error ${r.statusCode}';

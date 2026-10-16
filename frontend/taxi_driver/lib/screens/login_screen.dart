@@ -1,7 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import 'driver_home_screen.dart';
@@ -16,7 +15,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _email = TextEditingController();
+  final _telefono = TextEditingController();
   final _password = TextEditingController();
   bool _loading = false;
   String? _error;
@@ -55,18 +54,18 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       final api = ApiService();
-      final token = await api.login(_email.text.trim(), _password.text);
+      final token = await api.login(_telefono.text.trim(), _password.text);
       final id = api.jwtId(token);
       if (id == null) throw ApiException('No se pudo obtener el id del token');
       final profile = await api.getChofer(id);
       if (profile.email.isEmpty) {
-        throw ApiException('La cuenta no existe como chofer');
+        throw ApiException('Esta cuenta no existe como chofer');
       }
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('driver_token', token);
       await prefs.setString('driver_id', id);
-      await prefs.setString('driver_email', _email.text.trim());
+      await prefs.setString('driver_telefono', _telefono.text.trim());
 
       if (!mounted) return;
       _goHome(api, profile, id);
@@ -153,18 +152,18 @@ class _LoginScreenState extends State<LoginScreen> {
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 TextFormField(
-                                  controller: _email,
-                                  keyboardType: TextInputType.emailAddress,
+                                  controller: _telefono,
+                                  keyboardType: TextInputType.phone,
                                   autocorrect: false,
                                   decoration: const InputDecoration(
-                                    labelText: 'Email',
-                                    prefixIcon: Icon(Icons.email_outlined),
+                                    labelText: 'Número de teléfono',
+                                    prefixIcon: Icon(Icons.phone_iphone),
                                     filled: true,
                                     fillColor: Colors.white,
                                     border: OutlineInputBorder(),
                                   ),
                                   validator: (v) => (v == null || v.trim().isEmpty)
-                                      ? 'Ingresa tu email'
+                                      ? 'Ingresa tu número de teléfono'
                                       : null,
                                 ),
                                 const SizedBox(height: 14),
@@ -235,9 +234,11 @@ class _LoginScreenState extends State<LoginScreen> {
                               ],
                             ),
                           ),
-                          const SizedBox(height: 14),
+                          const SizedBox(height: 8),
                           Text(
-                            'Backend: ${ApiConfig.baseUrl}',
+                            '¿Olvidaste tu contraseña? Restablécela desde el bot de '
+                            'Telegram: abre @RapiTaxiSoporte_bot, comparte tu número y '
+                            'escribe /restablecer.',
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               color: Colors.white70,
@@ -259,7 +260,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _email.dispose();
+    _telefono.dispose();
     _password.dispose();
     super.dispose();
   }

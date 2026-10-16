@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
+from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ def _guardar_archivo(driver_id: str, campo: str, upload: UploadFile) -> dict:
             status_code=413,
             detail="La imagen %s supera los %d MB" % (campo, MAX_SIZE_MB))
     if not data:
-        raise HTTPException(status_code=400, detail="El archivo %s esta vacio" % campo)
+        raise HTTPException(status_code=400, detail="El archivo %s está vacío" % campo)
 
     # El content_type lo manda el cliente, asi que se comprueban los bytes reales
     real = _detectar_extension(data, upload.content_type)
@@ -290,14 +291,26 @@ async def registro_con_fotos(
 
     email = email.strip().lower()
     if chofer_coleccion.find_one({"email": email}):
-        raise HTTPException(status_code=400, detail="Email ya registrado")
+        raise HTTPException(status_code=400, detail="Correo ya registrado")
+
+    # El teléfono identifica a la persona. Se compara normalizado, porque en la
+    # base puede estar escrito con o sin el prefijo del país y sin normalizar
+    # "+5359295207" y "59295207" pasarían los dos como si fueran distintos.
+    if not es_telefono_valido(numero_de_telefono):
+        raise HTTPException(
+            status_code=400,
+            detail="El número de teléfono no es válido. Escribe los 8 dígitos.")
+    if buscar_por_telefono(chofer_coleccion, numero_de_telefono):
+        raise HTTPException(
+            status_code=409,
+            detail="El número de teléfono ya está asociado a otra cuenta.")
 
     ahora = datetime.utcnow()
     doc = {
         "Nombre": Nombre.strip(),
         "Apellidos": Apellidos.strip(),
         "email": email,
-        "numero_de_telefono": numero_de_telefono.strip(),
+        "numero_de_telefono": normalizar_telefono(numero_de_telefono),
         "password": bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
         "Fondo": 0.0,
         "raiting": 5.0,
@@ -369,7 +382,7 @@ async def subir_documentos(
     """Sube o reemplaza fotos de un chofer ya registrado."""
     require_chofer_o_admin(driver_id, authorization)
     if not ObjectId.is_valid(driver_id):
-        raise HTTPException(status_code=400, detail="Id de chofer invalido")
+        raise HTTPException(status_code=400, detail="Id de chofer inválido")
     chofer = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
     if not chofer:
         raise HTTPException(status_code=404, detail="Chofer no encontrado")
@@ -388,7 +401,7 @@ async def subir_documentos(
     }
     recibidos = {k: v for k, v in archivos.items() if v is not None and v.filename}
     if not recibidos:
-        raise HTTPException(status_code=400, detail="No se recibio ninguna imagen")
+        raise HTTPException(status_code=400, detail="No se recibió ninguna imagen")
 
     docs = chofer.get("documentos") or []
     nuevos = []
@@ -426,7 +439,7 @@ async def estado_documentos(driver_id: str,
     """Que documentos faltan y cuales estan subidos."""
     require_chofer_o_admin(driver_id, authorization)
     if not ObjectId.is_valid(driver_id):
-        raise HTTPException(status_code=400, detail="Id de chofer invalido")
+        raise HTTPException(status_code=400, detail="Id de chofer inválido")
     chofer = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
     if not chofer:
         raise HTTPException(status_code=404, detail="Chofer no encontrado")
@@ -442,7 +455,7 @@ async def ver_imagen(archivo: str, authorization: Optional[str] = Header(None)):
     """
     if not _es_admin(_token(authorization)):
         raise HTTPException(status_code=401,
-                            detail="Necesitas iniciar sesion como administrador")
+                            detail="Necesitas iniciar sesión como administrador")
     seguro = os.path.basename(archivo)
     ruta = os.path.join(UPLOAD_DIR, seguro)
     if not os.path.isfile(ruta):

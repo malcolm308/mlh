@@ -42,6 +42,9 @@ from fastapi.responses import JSONResponse
 
 from routers.cache import garnet_client
 from routers.documentos import CAMPOS, MAX_SIZE_MB, _detectar_extension
+from services.telefono import (LARGO_NACIONAL, TELEFONOS_DE_RELLENO,
+                               buscar_por_telefono, es_telefono_valido,
+                               normalizar_telefono, variantes)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,7 @@ API_TELEGRAM = "https://api.telegram.org"
 TIMEOUT_API = httpx.Timeout(10.0, connect=5.0, read=8.0, write=8.0)
 
 TTL_CHOFER = 365 * 24 * 3600  # Un chat puede volver al mes siguiente.
+TTL_FLUJO = 15 * 60           # Una conversacion abierta no dura mas de 15 min.
 TTL_TOKEN_ADMIN = 25 * 60     # El JWT dura 30 min; se renueva antes de caducar.
 TTL_AUTO = 6 * 3600           # Cuanto se recuerda la ultima pasada automatica.
 
@@ -141,6 +145,14 @@ def asegurar_indice_telegram() -> None:
 
 def _nombre_de(chofer: Dict[str, Any]) -> str:
     return " ".join(filter(None, [chofer.get("Nombre"), chofer.get("Apellidos")])).strip()
+
+
+def _object_id(driver_id: str):
+    """Convierte el id de chofer a ObjectId. Si no es válido devuelve None, que
+    en un filtro de Mongo simplemente no casa con ningún documento."""
+    from bson import ObjectId
+
+    return ObjectId(driver_id) if ObjectId.is_valid(driver_id) else None
 
 
 # ===================== ESTADO (Redis con respaldo en memoria) =====================
@@ -266,6 +278,17 @@ class Telegram:
         except Exception:
             logger.debug("answerCallbackQuery sin respuesta para %s", callback_id)
 
+    async def set_my_commands(self, comandos: List[Dict[str, str]]) -> bool:
+        """Publica la lista en el menú de Telegram. Si falla no es grave: el bot
+        sigue funcionando, solo que el chofer no ve los comandos sugeridos."""
+        try:
+            await self._llamar("setMyCommands",
+                               commands=json.dumps(comandos, ensure_ascii=False))
+            return True
+        except Exception as exc:
+            logger.warning("No se pudieron publicar los comandos del bot: %s", exc)
+            return False
+
     async def leer_archivo(self, file_id: str) -> bytes:
         info = await self._llamar("getFile", file_id=file_id)
         ruta = (info or {}).get("file_path")
@@ -352,94 +375,41 @@ async def _token_admin() -> Optional[str]:
 
 # ===================== TELEFONO =====================
 
-def normalizar_telefono(raw: str) -> str:
-    """Deja solo los digitos y quita el prefijo de Cuba.
+# `normalizar_telefono`, `variantes` y `buscar_por_telefono` viven en
+# services/telefono.py porque los necesita el login, el registro y este bot. Si
+# cada uno tuviera su copia, corregir uno dejaria a los otros con el bug.
 
-        "+53 5 9295207"  -> "59295207"
-        "5359295207"     -> "59295207"
-        "59295207"       -> "59295207"
 
-    El 53 solo se quita cuando el numero tiene 10 digitos, que es el largo real
-    de un movil cubano con el pais delante. Asi un fijo de 8 digitos que empiece
-    por 53 no se mutila.
+def _choferes_por_telefono(digitos: str) -> List[Dict[str, Any]]:
+    """Choferes cuyo teléfono normalizado es `digitos`.
+
+    No se usa `find_one`: si el número está en dos choferes hay que saberlo,
+    porque elegir uno al azar metería a uno en la cuenta del otro.
     """
-    digitos = "".join(ch for ch in str(raw or "") if ch.isdigit())
-    if digitos.startswith("053") and len(digitos) == 11:
-        digitos = digitos[1:]
-    if digitos.startswith("53") and len(digitos) == 10:
-        digitos = digitos[2:]
-    return digitos
-
-
-def _variantes(digitos: str) -> List[str]:
-    """Como puede estar escrito ese mismo numero en la base."""
-    if not digitos:
-        return []
-    return [digitos, "53" + digitos, "+53" + digitos, "0" + "53" + digitos,
-            "53 " + digitos, "+53 " + digitos]
-
-
-def _buscar_choferes_por_telefono(digitos: str) -> List[Dict[str, Any]]:
-    """Todos los choferes cuyo numero, ya normalizado, coincide con `digitos`.
-
-    No se usa `find_one`: si el numero esta en dos choferes hay que saberlo para
-    no meter a nadie en la cuenta de otro. Devuelve la lista de documentos.
-
-    La busqueda va en tres pasos porque el campo esta sin normalizar:
-
-      1. Literal sobre las formas habituales (`59295207`, `+5359295207`, ...).
-      2. Expresion regular sobre los ultimos 8 digitos, para lo que tenga
-         espacios o guiones.
-      3. Barrido acotado de la coleccion, normalizando en Python.
-
-    El paso 3 existe porque un regex no puede encontrar `59295207` dentro de
-    `+53 5 9295207`: los digitos estan partidos por los separadores y ningun
-    patron los junta. Se compara siempre el valor normalizado, asi que un
-    coincidente de mas se descarta. Y no es un problema de rendimiento: cada
-    vinculacion deja el telefono ya normalizado, con lo cual el paso 1 acierta
-    cada vez mas y el barrido se usa menos.
-    """
-    if len(digitos) < 7 or digitos in TELEFONOS_DE_RELLENO:
-        return []
-
-    coleccion = _coleccion()
-    encontrados: Dict[str, Dict[str, Any]] = {}
-
-    # 1) Literal: camino rapido, y el que va a acertar casi siempre.
-    for documento in coleccion.find({"numero_de_telefono": {"$in": _variantes(digitos)}},
-                                    {"password": 0}):
-        encontrados[str(documento["_id"])] = documento
-
-    # 2) Regex sobre los ultimos 8 digitos.
-    if not encontrados and len(digitos) >= 8:
-        patron = re.compile(r"(^|\D)(%s)(\D|$)" % re.escape(digitos[-8:]))
-        for documento in coleccion.find({"numero_de_telefono": patron}, {"password": 0}):
-            if normalizar_telefono(documento.get("numero_de_telefono")) == digitos:
-                encontrados[str(documento["_id"])] = documento
-
-    # 3) Barrido acotado, normalizando en Python.
-    if not encontrados:
-        for documento in coleccion.find({}, {"password": 0}).limit(MAX_BARRIDO):
-            if normalizar_telefono(documento.get("numero_de_telefono")) == digitos:
-                encontrados[str(documento["_id"])] = documento
-
-    return list(encontrados.values())
+    return buscar_por_telefono(_coleccion(), digitos)
 
 
 def _normalizar_en_la_base(documento: Dict[str, Any], digitos: str) -> None:
-    """Deja el telefono del chofer en la forma normalizada. Se hace al vincular,
-    no en una migracion aparte: asi el campo queda limpio para el siguiente que
-    se vinculo y para cualquier busqueda futura."""
+    """Deja el teléfono del chofer en la forma normalizada. Se hace al vincular,
+    no en una migración aparte: así el campo queda limpio para el siguiente que se
+    vinculó y para cualquier búsqueda futura.
+
+    Puede chocar con el índice único si resultara que otro chofer tiene ese mismo
+    número normalizado. No es motivo para tumbar el vínculo: el chat queda
+    ligado igual y lo que se avisa es el dato que hay que resolver a mano.
+    """
     actual = documento.get("numero_de_telefono")
     if normalizar_telefono(actual) == digitos and str(actual).strip() == digitos:
         return
     try:
         _coleccion().update_one({"_id": documento["_id"]},
                                 {"$set": {"numero_de_telefono": digitos}})
-        logger.info("Telefono normalizado del chofer %s: %r -> %r",
+        logger.info("Teléfono normalizado del chofer %s: %r -> %r",
                     documento["_id"], actual, digitos)
-    except Exception:
-        logger.exception("No se pudo normalizar el telefono del chofer %s", documento["_id"])
+    except Exception as exc:
+        logger.warning("No se pudo normalizar el teléfono del chofer %s: %s. El "
+                       "índice único de teléfono o un dato repetido lo bloquean; "
+                       "el vínculo sigue en pie.", documento["_id"], exc)
 
 
 # ===================== VINCULACION =====================
@@ -491,7 +461,7 @@ async def _procesar_contacto(bot: Telegram, chat_id: int, contacto: Dict[str, An
         return
 
     try:
-        candidatos = _buscar_choferes_por_telefono(digitos)
+        candidatos = _choferes_por_telefono(digitos)
     except Exception:
         logger.exception("Fallo la busqueda del telefono %s", digitos)
         await bot.enviar(chat_id, "❌ No pude consultar la base. Intentalo en un momento.")
@@ -649,6 +619,7 @@ def _texto_comandos() -> str:
             "/fondo - Saldo disponible\n"
             "/mi_id - Tu identificador de chofer\n"
             "/documentos - Poner fotos que falten\n"
+            "/restablecer - Cambiar tu contraseña\n"
             "/ayuda - Ver esta ayuda")
 
 
@@ -946,6 +917,75 @@ async def _cmd_soporte(bot: Telegram, chat_id: int) -> None:
     await bot.enviar(chat_id, "Soporte:\n%s" % _escapar(_soporte()))
 
 
+async def _cmd_restablecer(bot: Telegram, chat_id: int) -> None:
+    """Cambia la contraseña desde el propio chat.
+
+    No se pide el correo ni se manda ningún mensaje: Telegram ya verificó que el
+    número compartido es de la persona, y ese es el mismo grado de confianza con
+    el que se hizo el vínculo. Un chófer que perdió su clave la cambia aquí sin
+    depender de que le llegue un correo a una bandeja que ya no controla.
+
+    Lo que NO hace es invalidar los tokens que ya se emitieron: el JWT es sin
+    estado y dura 30 minutos, así que una sesión abierta sigue viva hasta que
+    caduca. Para invalidarla al instante haría falta versionar los tokens, que
+    obliga a tocar los tres módulos de autenticación.
+    """
+    info = await _mi_chofer(chat_id)
+    if not info:
+        await bot.enviar(chat_id, "Primero vincula tu cuenta: comparte tu número de "
+                                  "celular con el botón de abajo.")
+        await bot.teclado_boton_compartir(chat_id)
+        return
+
+    _iniciar_flujo(chat_id, "restablecer", extra={"driver_id": info["driver_id"]})
+    await bot.enviar(chat_id, "Escribe la contraseña nueva (mínimo 6 caracteres). "
+                              "Luego te la pido otra vez para confirmar.")
+
+
+def _validar_contrasena(valor: str) -> str:
+    """Devuelve el texto del error, o cadena vacía si la contraseña vale."""
+    return "" if len(valor) >= 6 else "La contraseña necesita al menos 6 caracteres."
+
+
+async def _confirmar_restablecer(bot: Telegram, chat_id: int,
+                                 estado: Dict[str, Any], contrasena: str) -> None:
+    driver_id = estado.get("driver_id")
+    _terminar_flujo(chat_id)
+
+    try:
+        import bcrypt
+        hash_ = bcrypt.hashpw(contrasena.encode("utf-8"),
+                              bcrypt.gensalt()).decode("utf-8")
+    except Exception:
+        logger.exception("No se pudo generar el hash para %s", driver_id)
+        await bot.enviar(chat_id, "❌ No pude guardar la contraseña. Inténtalo otra vez.")
+        return
+
+    try:
+        # El filtro lleva el `telegram_chat_id` a propósito: aunque alguien
+        # manipulase el estado del chat, solo puede cambiar la contraseña del
+        # chofer que ese chat tiene vinculado.
+        resultado = _coleccion().update_one(
+            {"_id": _object_id(driver_id), "telegram_chat_id": int(chat_id)},
+            {"$set": {"password": hash_, "password_changed_at": datetime.utcnow()}},
+        )
+    except Exception:
+        logger.exception("No se pudo actualizar la contraseña de %s", driver_id)
+        await bot.enviar(chat_id, "❌ No pude guardar la contraseña. Inténtalo otra vez.")
+        return
+
+    if resultado.modified_count != 1:
+        _auditar(chat_id, "restablecer", "driver=%s sin coincidencia" % driver_id, ok=False)
+        await bot.enviar(chat_id, "❌ Tu vínculo ya no es válido. Comparte tu número de "
+                                  "celular otra vez.")
+        return
+
+    _auditar(chat_id, "restablecer_ok", "driver=%s" % driver_id)
+    await bot.enviar(chat_id, "✅ Contraseña actualizada.\n\nEntra en la app con tu número "
+                              "de teléfono y la nueva contraseña. Las sesiones que ya "
+                              "estén abiertas siguen vivas hasta 30 minutos.")
+
+
 async def _cmd_documentos(bot: Telegram, chat_id: int) -> None:
     info = await _mi_chofer(chat_id)
     if not info:
@@ -1179,7 +1219,7 @@ async def _cmd_desvincular(bot: Telegram, chat_id: int, argumento: str) -> None:
         return
 
     try:
-        candidatos = _buscar_choferes_por_telefono(digitos)
+        candidatos = _choferes_por_telefono(digitos)
     except Exception:
         logger.exception("Fallo al buscar el telefono %s", digitos)
         await bot.enviar(chat_id, "No pude consultar la base. Intentalo en un momento.")
@@ -1391,6 +1431,7 @@ COMANDOS = {
     "mi_id": lambda b, c: _cmd_mi_id(b, c),
     "documentos": lambda b, c: _cmd_documentos(b, c),
     "soporte": lambda b, c: _cmd_soporte(b, c),
+    "restablecer": lambda b, c: _cmd_restablecer(b, c),
 }
 
 COMANDOS_ADMIN = {
@@ -1478,6 +1519,27 @@ async def _procesar_mensaje(bot: Telegram, chat_id: int, texto: str,
                             ubicacion: Optional[dict], foto: Optional[dict]) -> None:
     estado = _flujo(chat_id)
     tipo = (estado or {}).get("tipo")
+
+    # --- Restablecer contraseña: se pide dos veces para no teclear mal ---
+    if tipo == "restablecer" and texto:
+        pendiente = (estado.get("datos") or {}).get("primera")
+        error = _validar_contrasena(texto.strip())
+        if error:
+            await bot.enviar(chat_id, error)
+            return
+        if pendiente is None:
+            estado.setdefault("datos", {})["primera"] = texto.strip()
+            _escribir_json(_clave_flujo(chat_id), estado, TTL_FLUJO)
+            await bot.enviar(chat_id, "Repite la contraseña para confirmar.")
+            return
+        if texto.strip() != pendiente:
+            estado["datos"]["primera"] = None
+            _escribir_json(_clave_flujo(chat_id), estado, TTL_FLUJO)
+            await bot.enviar(chat_id, "Las dos contraseñas no coinciden. Escribe la nueva "
+                                      "otra vez.")
+            return
+        await _confirmar_restablecer(bot, chat_id, estado, texto.strip())
+        return
 
     # --- Cerrar viaje: llega la ubicacion de destino ---
     if ubicacion and tipo == "completar":
@@ -1577,6 +1639,26 @@ async def webhook(
     # Telegram reintenta el envio y el chofer recibe el mensaje duplicado.
     background.add_task(_despachar, actualizacion)
     return JSONResponse({"ok": True})
+
+
+async def _registrar_comandos(bot: Telegram) -> bool:
+    """Publica la lista de comandos en el menú de Telegram.
+
+    Sin esto el chofer tiene que acordarse de los comandos: en el teclado de
+    Telegram sale `/` y no aparece nada. Se llama al montar el bot.
+    """
+    return await bot.set_my_commands([
+        {"command": "start", "description": "Menú"},
+        {"command": "estado", "description": "Ver el viaje activo"},
+        {"command": "completar", "description": "Cerrar el viaje en curso"},
+        {"command": "cancelar", "description": "Cancelar el viaje actual"},
+        {"command": "precio", "description": "Tarifas de referencia"},
+        {"command": "fondo", "description": "Saldo disponible"},
+        {"command": "mi_id", "description": "Tu identificador de chofer"},
+        {"command": "documentos", "description": "Poner fotos que falten"},
+        {"command": "restablecer", "description": "Cambiar tu contraseña"},
+        {"command": "ayuda", "description": "Ayuda"},
+    ])
 
 
 async def _despachar(actualizacion: dict) -> None:

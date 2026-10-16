@@ -50,9 +50,12 @@ class ApiService {
 
   // ------------------- AUTH -------------------
 
-  Future<String> login(String email, String password) async {
+  /// Entra con el número de teléfono o con el correo. El backend distingue los
+  /// dos por su forma: si hay dígitos y no hay arroba, lo trata como teléfono.
+  /// El JWT que devuelve sigue llevando el correo, así que `jwtId` no cambia.
+  Future<String> login(String telefono, String password) async {
     final j = await _map('POST', '/login',
-        body: {'email': email, 'password': password});
+        body: {'email': telefono, 'password': password});
     final t = j['access_token']?.toString();
     if (t == null || t.isEmpty) throw ApiException('Respuesta de login inválida');
     token = t;

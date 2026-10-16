@@ -376,6 +376,96 @@ class TestDesvincular(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Uso", self.telegram.ultimo())
 
 
+# ===================== RESTABLECER CONTRASENA =====================
+
+class TestRestablecerContrasena(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        import bcrypt
+        from bson import ObjectId
+        self.bcrypt = bcrypt
+        self.oid = ObjectId()
+        # El id tiene que ser un ObjectId de verdad: `_object_id` devuelve None
+        # para cualquier otra cosa y el filtro del update no casa con nadie.
+        self.coleccion = ColeccionFalsa([
+            {"_id": self.oid, "Nombre": "Carlos", "Apellidos": "Perez",
+             "email": "c@e.com", "numero_de_telefono": "59295207",
+             "telegram_chat_id": 111,
+             "password": bcrypt.hashpw(b"vieja123", bcrypt.gensalt()).decode()}])
+        self.original = bot._coleccion
+        bot._coleccion = lambda: self.coleccion
+        bot._MEMORIA.clear()
+        self.telegram = TelegramFalsa()
+
+    def tearDown(self):
+        bot._coleccion = self.original
+        bot._MEMORIA.clear()
+
+    async def test_pide_el_numero_si_no_esta_vinculado(self):
+        await bot._cmd_restablecer(self.telegram, 999)
+        import json
+        teclado = json.loads([p["reply_markup"] for m, p in self.telegram.llamadas
+                              if m == "sendMessage" and p.get("reply_markup")][0])
+        self.assertIn("request_contact", teclado["keyboard"][0][0])
+
+    async def test_abre_el_flujo_y_pide_contrasena(self):
+        await bot._cmd_restablecer(self.telegram, 111)
+        estado = bot._flujo(111)
+        self.assertIsNotNone(estado)
+        self.assertEqual(estado["tipo"], "restablecer")
+        self.assertEqual(estado["driver_id"], str(self.oid))
+        self.assertIn("contraseña nueva", self.telegram.ultimo().lower())
+
+    async def test_rechaza_contrasena_corta_y_no_avanza(self):
+        await bot._cmd_restablecer(self.telegram, 111)
+        await bot._procesar_mensaje(self.telegram, 111, "abc", None, None)
+        self.assertIn("6 caracteres", self.telegram.ultimo())
+        self.assertEqual(bot._flujo(111)["datos"], {})
+
+    async def test_pide_confirmacion_tras_la_primera(self):
+        await bot._cmd_restablecer(self.telegram, 111)
+        await bot._procesar_mensaje(self.telegram, 111, "nueva123", None, None)
+        self.assertEqual(bot._flujo(111)["datos"]["primera"], "nueva123")
+        self.assertIn("Repite", self.telegram.ultimo())
+
+    async def test_si_no_coinciden_vuelve_a_empezar(self):
+        await bot._cmd_restablecer(self.telegram, 111)
+        await bot._procesar_mensaje(self.telegram, 111, "nueva123", None, None)
+        await bot._procesar_mensaje(self.telegram, 111, "otra999", None, None)
+        self.assertIn("no coinciden", self.telegram.ultimo())
+        # Sigue el flujo: la primera se limpia para poder volver a escribir.
+        self.assertIsNone(bot._flujo(111)["datos"]["primera"])
+
+    async def test_cambia_la_contrasena_guardedada(self):
+        await bot._cmd_restablecer(self.telegram, 111)
+        await bot._procesar_mensaje(self.telegram, 111, "nueva123", None, None)
+        await bot._procesar_mensaje(self.telegram, 111, "nueva123", None, None)
+
+        documento = self.coleccion.documentos[0]
+        self.assertIn("actualizada", self.telegram.ultimo())
+        self.assertIsNone(bot._flujo(111), "el flujo deberia cerrarse")
+        # El hash guardado tiene que validar la nueva y rechazar la vieja.
+        self.assertTrue(self.bcrypt.checkpw(b"nueva123",
+                                            documento["password"].encode("utf-8")))
+        self.assertFalse(self.bcrypt.checkpw(b"vieja123",
+                                             documento["password"].encode("utf-8")))
+        self.assertIn("password_changed_at", documento)
+
+    async def test_no_cambia_el_de_otro_chofer_si_se_inventa_el_id(self):
+        """El filtro del update lleva el telegram_chat_id: aunque el estado del
+        chat dijera otro driver_id, no se toca la cuenta de otro."""
+        bot._escribir_json(bot._clave_flujo(111), {
+            "tipo": "restablecer", "indice": 0,
+            "datos": {"primera": "nueva123"},
+            "driver_id": "6a0514216184605ccfebd5ec"}, 600)
+        await bot._procesar_mensaje(self.telegram, 111, "nueva123", None, None)
+
+        # Ese id no existe en la coleccion: nada cambia y se avisa.
+        self.assertIn("vínculo", self.telegram.ultimo().lower())
+        self.assertTrue(self.bcrypt.checkpw(
+            b"vieja123", self.coleccion.documentos[0]["password"].encode("utf-8")))
+
+
 # ===================== INDICE =====================
 
 class TestIndice(unittest.TestCase):

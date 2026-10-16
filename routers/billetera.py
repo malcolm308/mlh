@@ -252,7 +252,7 @@ async def descontar(body: DescargoIn, admin: dict = Depends(require_admin)):
     monto = round(float(body.monto), 2)
     anterior = _saldo(doc)
     if anterior < monto:
-        raise HTTPException(status_code=400, detail="Saldo insuficiente para el debito")
+        raise HTTPException(status_code=400, detail="Saldo insuficiente para el débito")
 
     nuevo = round(anterior - monto, 2)
     try:

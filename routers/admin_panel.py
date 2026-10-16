@@ -325,7 +325,7 @@ async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Dep
         raise HTTPException(status_code=400,
                             detail=f"Estado invalido. Opciones: {', '.join(ESTADOS_VALIDOS)}")
     if not ObjectId.is_valid(driver_id):
-        raise HTTPException(status_code=400, detail="Id de chofer invalido")
+        raise HTTPException(status_code=400, detail="Id de chofer inválido")
 
     doc = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
     if not doc:

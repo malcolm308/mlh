@@ -85,7 +85,7 @@ def create_poi(poi: PoiIn):
 def delete_poi(poi_id: str):
     """Elimina un punto de interes."""
     if not ObjectId.is_valid(poi_id):
-        raise HTTPException(status_code=400, detail="id invalido")
+        raise HTTPException(status_code=400, detail="id inválido")
     res = _pois.delete_one({"_id": ObjectId(poi_id)})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="punto de interes no encontrado")

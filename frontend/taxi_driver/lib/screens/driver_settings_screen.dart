@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../api_config.dart';
 import '../services/api_service.dart';
 
 /// Configuración general del conductor (opción del menú hamburguesa).
@@ -56,28 +55,14 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
           ),
           const SizedBox(height: 16),
           _card(
-            'Servidor',
+            'Aplicación',
             [
-              const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.storage, color: Color(0xFF333333)),
-                title: Text('Backend'),
-                subtitle: Text(ApiConfig.baseUrl,
-                    style: TextStyle(color: Color(0xFF888888))),
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.map_outlined, color: Color(0xFF333333)),
-                title: const Text('Mapa (tiles)'),
-                subtitle: Text(ApiConfig.mapStyleUrl,
-                    style: const TextStyle(color: Color(0xFF888888))),
-              ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.info_outline,
                     color: Color(0xFF333333)),
                 title: const Text('Acerca de'),
-                subtitle: const Text('RapiTaxi Chofer v2.0',
+                subtitle: const Text('RapiTaxi Chofer 1.0.0',
                     style: TextStyle(color: Color(0xFF888888))),
                 trailing: IconButton(
                   icon: const Icon(Icons.refresh),
@@ -87,8 +72,7 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
                       await widget.api.getChofer(widget.driverId);
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text('Conexión correcta con el backend')),
+                        const SnackBar(content: Text('Conexión correcta')),
                       );
                     } catch (e) {
                       if (!context.mounted) return;

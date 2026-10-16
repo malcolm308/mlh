@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../api_config.dart';
-
 /// Pantalla de soporte/ayuda (opción del menú hamburguesa).
 class SupportScreen extends StatelessWidget {
   const SupportScreen({super.key});
@@ -39,7 +37,7 @@ class SupportScreen extends StatelessWidget {
           _card(
             Icons.mail_outline,
             'Correo',
-            'soporte@taxirapid.cu',
+            'malcolmlamar308@gmail.com',
           ),
           const SizedBox(height: 12),
           _card(
@@ -47,15 +45,11 @@ class SupportScreen extends StatelessWidget {
             'Horario de atención',
             'Lunes a sábado · 8:00 am - 8:00 pm',
           ),
-          const SizedBox(height: 24),
-          const Divider(),
           const SizedBox(height: 12),
-          Center(
-            child: Text(
-              'Servidor de datos: ${ApiConfig.baseUrl}',
-              style: const TextStyle(
-                  color: Color(0xFF888888), fontSize: 12),
-            ),
+          _card(
+            Icons.telegram,
+            'Bot de Telegram',
+            '@RapiTaxiSoporte_bot',
           ),
         ],
       ),

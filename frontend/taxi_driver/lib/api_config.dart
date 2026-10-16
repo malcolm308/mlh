@@ -4,7 +4,7 @@ import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 /// Configuracion central de la app de chofer.
 ///
 /// Por defecto apunta a los servicios desplegados en Render (backend FastAPI
-/// y servidor de tiles Martin). Se puede sobreescribir por l├¡nea de comandos
+/// y servidor de tiles Martin). Se puede sobreescribir por línea de comandos
 /// con --dart-define, por ejemplo para desarrollo local:
 ///   flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000 --dart-define=MARTIN_URL=http://localhost:8010
 class ApiConfig {
@@ -236,7 +236,7 @@ class ApiConfig {
 
   /// Cambio maximo de tilt por segundo, en grados.
   ///
-  /// 30 grados/s. Un cambio mas rapido se ve como un tir├│n, sobre todo al salir
+  /// 30 grados/s. Un cambio mas rapido se ve como un tirón, sobre todo al salir
   /// de un semaforo. El objetivo de [tiltObjetivoParaVelocidad] se persigue con
   /// esta rampa en lugar de saltar.
   static const double rampaTiltGradosPorSegundo = 30.0;
@@ -348,7 +348,7 @@ class ApiConfig {
   ///
   /// **Medido y bajada a 2.2 m/s.** Con 3.5 el umbral casi no se alcanzaba en el
   /// trafico de La Habana (en el viaje 22b00b2f la velocidad maxima que saw el
-  /// GPS fue de 1.3 m/s), asi que mandaba casi siempre la br├║jula, que en este
+  /// GPS fue de 1.3 m/s), asi que mandaba casi siempre la brújula, que en este
   /// movil va desviada unos 85 grados. Sacando el rumbo real del propio
   /// recorrido del backend, el coche iba al este (113 grados de media) mientras
   /// el sensor decia 28. Con 2.2 m/s (~8 km/h) el GPS ya discrimina de sobra:
@@ -398,7 +398,7 @@ class ApiConfig {
     return 13;
   }
 
-  /// Zoom de la fase actual del viaje, para establishes el modo navegaci├│n.
+  /// Zoom de la fase actual del viaje, para establecer el modo navegación.
   ///
   /// Devuelve [zoomIdle] si no hay viaje en curso.
   static double zoomParaFase({String? status}) {

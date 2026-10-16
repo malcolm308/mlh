@@ -157,6 +157,26 @@ def validate_driver_exists(driver_id: str) -> bool:
         return False
 
 
+def saldo_de_chofer(driver_id: str) -> Optional[float]:
+    """Fondo actual del chofer, o None si Mongo no responde.
+
+    Devuelve None y no 0 a propósito: si la base no se puede leer, quien llama
+    no debe inventarse un saldo y bloquear a un chofer que sí tiene fondo.
+    Quien lo use tiene que decidir qué hacer con ese None.
+    """
+    try:
+        documento = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)})
+        if not documento:
+            return None
+        valor = documento.get("Fondo")
+        if valor is None:
+            valor = documento.get("fondo")
+        return float(valor or 0)
+    except Exception:
+        logger.exception("No se pudo leer el fondo de %s", driver_id)
+        return None
+
+
 # ===================== PostgreSQL (Pool de conexiones) =====================
 DB_CONFIG = {
     "dbname": "taxi_db",
@@ -751,7 +771,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             if not trip:
                 raise ValueError("Viaje no encontrado")
             if trip["status"] != "in_progress":
-                raise ValueError("El viaje no esta en curso")
+                raise ValueError("El viaje no está en curso")
 
             # 2. Obtener el conductor desde MongoDB usando _id (coherente con el resto del codigo)
             driver = chofer_coleccion.find_one({"_id": to_mongo_id(trip["driver_id"])})
@@ -2007,13 +2027,26 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
         raise HTTPException(404, "Conductor no encontrado en MongoDB")
     status = await get_driver_status(driver_id)
     if status != "available":
-        raise HTTPException(400, f"El conductor no esta disponible (estado: {status})")
+        raise HTTPException(400, f"El conductor no está disponible (estado: {status})")
+
+    # Un chofer en números rojos no trabaja: se le avisa antes de que pierda el
+    # viaje, no después. La comprobación va aquí, en el servidor, porque un reloj
+    # desajustado o un SharedPreferences borrado en el móvil no pueden permitir
+    # lo que el servidor veta.
+    saldo = saldo_de_chofer(driver_id)
+    if saldo is not None and saldo < 0:
+        raise HTTPException(402, {
+            "code": "saldo_negativo",
+            "detail": "Tu saldo está en rojo (%s CUP). Recarga tu fondo antes de "
+                      "aceptar viajes." % saldo,
+            "saldo": saldo,
+        })
 
     trip = get_trip(trip_id)
     if not trip:
         raise HTTPException(404, "Viaje no encontrado")
     if trip["status"] != "requested":
-        raise HTTPException(400, f"El viaje no esta disponible (estado: {trip['status']})")
+        raise HTTPException(400, f"El viaje no está disponible (estado: {trip['status']})")
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

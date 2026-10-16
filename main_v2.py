@@ -14,6 +14,7 @@ from routers import vehiculos
 from routers import chofer_cancelaciones
 from routers import tariffs
 from routers import telegram_webhook
+from services import indices
 from services.traccar_listener import listen_traccar
 
 # Funciones que necesitamos del modulo de viajes
@@ -215,6 +216,26 @@ async def startup_event():
     except Exception:
         logger.warning("No se pudo asegurar el indice de telegram_chat_id",
                        exc_info=True)
+
+    # Telefono unico en choferes y pasajeros. Impide dar de alta dos cuentas con
+    # el mismo numero. Si ya hay repetidos, avisa en el log con cuales y sigue:
+    # es un problema de datos que se resuelve a mano, no un fallo de arranque.
+    try:
+        indices.asegurar_indices_de_identidad()
+    except Exception:
+        logger.warning("No se pudieron asegurar los indices de identidad",
+                       exc_info=True)
+
+    # Publica los comandos del bot en el menu de Telegram. Solo si el bot esta
+    # configurado: sin token no hay a quien preguntar. Si falla, el bot sigue
+    # funcionando, solo que el movil no sugiere los comandos.
+    if os.getenv("TELEGRAM_BOT_TOKEN"):
+        try:
+            asyncio.create_task(telegram_webhook._registrar_comandos(
+                telegram_webhook._cliente()))
+        except Exception:
+            logger.warning("No se pudieron publicar los comandos del bot",
+                           exc_info=True)
 
     # Scheduler: expiracion de viajes + autorreparacion de tablas
     scheduler.add_job(sweep_expired_trips, "interval", seconds=30, id="sweep_expired_trips")

@@ -17,6 +17,8 @@ from db.Cliente.connection import cliente_db
 from db.Cliente.models import CLIENTE
 from db.Cliente.auth import create_access_token as create_access_token_cliente, verify_token as verify_token_cliente
 
+from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
+
 from db.Administración.connection import admin_db
 from db.Administración.models import ADMINISTRADOR
 from db.Administración.auth import create_access_token as create_access_token_admin, verify_token as verify_token_admin
@@ -31,8 +33,31 @@ ESTADO_RECHAZADO = "rechazado"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 class LoginRequest(BaseModel):
-    email: str
+    """La persona entra con su número de celular.
+
+    `email` sigue siendo el nombre del campo porque es lo que mandan las dos
+    apps, pero lo que llega ahí puede ser un correo o un teléfono: se detecta
+    cuál es por su forma. `telefono` se acepta además por si algún cliente
+    prefiere no mezclar los dos conceptos en un mismo campo.
+
+    Da igual qué se mande: el JWT sigue llevando el correo en `sub`. Cambiarlo
+    obligaría a revisar documentos.py, admin_panel.py y billetera.py, que hoy lo
+    usan como identificador de email.
+    """
+
+    email: Optional[str] = None
+    telefono: Optional[str] = None
     password: str
+
+    @property
+    def identificador(self) -> str:
+        return (self.telefono or self.email or "").strip()
+
+    @property
+    def parece_telefono(self) -> bool:
+        valor = self.identificador
+        return any(ch.isdigit() for ch in valor) and "@" not in valor
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -105,41 +130,101 @@ admin_coleccion = admin_db.users
 def _estado_habilitacion(chofer: dict) -> str:
     return chofer.get("estado_habilitacion") or ESTADO_APROBADO
 
+
+def _por_telefono_o_primero(coleccion, digitos: str):
+    """Documento cuyo teléfono normalizado es `digitos`, o None.
+
+    OJO: `buscar_por_telefono` proyecta `{"password": 0}` a proposito, porque su
+    otro consumidor es el bot de Telegram y un hash de contrasena no tiene por
+    que andar suelto por ahi. Aqui hace falta para comprobar la contrasena, asi
+    que se vuelve a leer el documento entero por su id. Si se usara el resultado
+    de la busqueda tal cual, `bcrypt.checkpw` recibiria una cadena vacia en vez
+    del hash y responderia "Invalid salt" en TODOS los accesos por telefono.
+    """
+    for candidato in buscar_por_telefono(coleccion, digitos):
+        documento = coleccion.find_one({"_id": candidato["_id"]})
+        if documento:
+            return documento
+    return None
+
+
+def _rechazar_telefono_repetido(coleccion, telefono: str, otro_coleccion=None):
+    """Impide dar de alta dos cuentas con el mismo número.
+
+    Se compara el teléfono NORMALIZADO y no el texto guardado: sin eso,
+    "+5359295207" y "59295207" pasarían los dos y el índice único no serviría,
+    porque para Mongo son cadenas distintas.
+    """
+    if not es_telefono_valido(telefono):
+        raise HTTPException(
+            status_code=400,
+            detail="El número de teléfono no es válido. Escribe los 8 dígitos.")
+    if buscar_por_telefono(coleccion, telefono):
+        raise HTTPException(
+            status_code=409,
+            detail="El número de teléfono ya está asociado a otra cuenta.")
+    if otro_coleccion is not None and buscar_por_telefono(otro_coleccion, telefono):
+        raise HTTPException(
+            status_code=409,
+            detail="El número de teléfono ya está asociado a otra cuenta.")
+
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest):
-    chofer = chofer_coleccion.find_one({"email": request.email})
+    identificador = request.identificador
+    if not identificador:
+        raise HTTPException(
+            status_code=400, detail="Escribe tu número de teléfono o tu correo")
+
+    if request.parece_telefono:
+        # Se busca por número normalizado, porque en la base el teléfono está
+        # escrito como lo escribió la persona: "+5359295207" y "59295207" son el
+        # mismo número y tienen que entrar por la misma puerta.
+        digitos = normalizar_telefono(identificador)
+        if not es_telefono_valido(digitos):
+            raise HTTPException(
+                status_code=401,
+                detail="Ese número no parece válido. Revisa que esté completo.")
+        chofer = _por_telefono_o_primero(chofer_coleccion, digitos)
+        cliente = None if chofer else _por_telefono_o_primero(cliente_coleccion, digitos)
+    else:
+        correo = identificador.lower()
+        chofer = chofer_coleccion.find_one({"email": correo})
+        cliente = None if chofer else cliente_coleccion.find_one({"email": correo})
+
     if chofer:
-        # El administrador decide si el chofer esta apto para entrar a la app
+        # El administrador decide si el chofer está apto para entrar a la app
         estado = _estado_habilitacion(chofer)
         if estado == ESTADO_PENDIENTE:
             raise HTTPException(
                 status_code=403,
-                detail="Tu cuenta esta pendiente de aprobacion por el administrador")
+                detail="Tu cuenta está pendiente de aprobación por el administrador")
         if estado == ESTADO_RECHAZADO:
             raise HTTPException(
                 status_code=403,
                 detail="Tu cuenta fue rechazada por el administrador. Contacta al soporte.")
         if not chofer.get("Enable", True):
-            raise HTTPException(status_code=403, detail="Tu cuenta esta deshabilitada")
+            raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
         if bcrypt.checkpw(request.password.encode('utf-8'), chofer.get("password", "").encode('utf-8')):
             token_data = {"sub": chofer["email"], "id": str(chofer["_id"])}
             access_token = create_access_token_chofer(token_data)
             return {"access_token": access_token, "token_type": "bearer"}
-    
-    cliente = cliente_coleccion.find_one({"email": request.email})
+
+    cliente = cliente or cliente_coleccion.find_one({"email": identificador.lower()})
     if cliente:
         if bcrypt.checkpw(request.password.encode('utf-8'), cliente.get("password", "").encode('utf-8')):
             token_data = {"sub": cliente["email"], "id": str(cliente["_id"])}
             access_token = create_access_token_cliente(token_data)
             return {"access_token": access_token, "token_type": "bearer"}
-    admin = admin_coleccion.find_one({"email": request.email})
+    admin = admin_coleccion.find_one({"email": identificador.lower()})
     if admin:
             if bcrypt.checkpw(request.password.encode('utf-8'), admin.get("password", "").encode('utf-8')):
                 token_data = {"sub": admin["email"], "id": str(admin["_id"])}
                 access_token = create_access_token_cliente(token_data)
                 return {"access_token": access_token, "token_type": "bearer"}
-    
-    raise HTTPException(status_code=401, detail="Email o contrasena incorrectos")
+
+    raise HTTPException(
+        status_code=401,
+        detail="El número de teléfono o la contraseña no son correctos")
 
 ##################################CRUD Chofer########################################
 @router.post("/chofer", response_model=ChoferResponse, status_code=status.HTTP_201_CREATED)
@@ -151,10 +236,18 @@ async def create_chofer(chofer: CHOFER):
     para siempre en el panel (nunca podra aprobarse por falta de documentos).
     """
     if chofer_coleccion.find_one({"email": chofer.email}):
-        raise HTTPException(status_code=400, detail="Email ya registrado")
+        raise HTTPException(status_code=400, detail="Correo ya registrado")
+
+    # El teléfono identifica a la persona, así que no puede repetirse: ni entre
+    # choferes ni contra una cuenta de pasajero.
+    _rechazar_telefono_repetido(chofer_coleccion, chofer.numero_de_telefono,
+                                 cliente_coleccion)
 
     # Convertir a dict CON fechas como string (gracias a mode='json')
     chofer_dict = chofer.model_dump(mode='json')
+    # Se guarda ya normalizado: si no, la misma persona podría registrarse otra
+    # vez con "+53..." y el índice único no lo detectaría.
+    chofer_dict["numero_de_telefono"] = normalizar_telefono(chofer.numero_de_telefono)
 
     # Todo chofer nuevo entra pendiente: el administrador lo habilita desde el panel
     chofer_dict["estado_habilitacion"] = ESTADO_PENDIENTE
@@ -184,7 +277,7 @@ async def create_chofer(chofer: CHOFER):
 @router.get("/chofer", response_model=List[ChoferResponse])
 async def get_all_choferes(token: str = Depends(oauth2_scheme)):
     if not verify_token_chofer(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     docs = chofer_coleccion.find()
     choferes = []
@@ -197,7 +290,7 @@ async def get_all_choferes(token: str = Depends(oauth2_scheme)):
 @router.get("/chofer/{id}", response_model=ChoferResponse)
 async def get_chofer(id: str, token: str = Depends(oauth2_scheme)):
     if not verify_token_chofer(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     doc = chofer_coleccion.find_one({"_id": ObjectId(id)})
     if not doc:
@@ -209,11 +302,23 @@ async def get_chofer(id: str, token: str = Depends(oauth2_scheme)):
 @router.put("/chofer/{id}", response_model=ChoferResponse)
 async def update_chofer(id: str, chofer: CHOFER, token: str = Depends(oauth2_scheme)):
     if not verify_token_chofer(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     chofer_dict = chofer.model_dump()
     if chofer_dict.get("password"):
         chofer_dict["password"] = bcrypt.hashpw(chofer_dict["password"].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    # Cambiar el teléfono no puede.convertir a dos choferes en uno solo.
+    if chofer_dict.get("numero_de_telefono"):
+        repetidos = [d for d in buscar_por_telefono(chofer_coleccion,
+                                                    chofer_dict["numero_de_telefono"])
+                     if str(d["_id"]) != str(id)]
+        if repetidos:
+            raise HTTPException(
+                status_code=409,
+                detail="El número de teléfono ya está asociado a otra cuenta.")
+        chofer_dict["numero_de_telefono"] = normalizar_telefono(
+            chofer_dict["numero_de_telefono"])
     
     result = chofer_coleccion.update_one({"_id": ObjectId(id)}, {"$set": chofer_dict})
     if result.matched_count == 0:
@@ -225,7 +330,7 @@ async def update_chofer(id: str, chofer: CHOFER, token: str = Depends(oauth2_sch
 @router.delete("/chofer/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chofer(id: str, token: str = Depends(oauth2_scheme)):
     if not verify_token_chofer(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     result = chofer_coleccion.delete_one({"_id": ObjectId(id)})
     if result.deleted_count == 0:
@@ -237,9 +342,15 @@ async def delete_chofer(id: str, token: str = Depends(oauth2_scheme)):
 @router.post("/cliente", response_model=ClienteResponse, status_code=status.HTTP_201_CREATED)
 async def create_cliente(cliente: CLIENTE):
     if cliente_coleccion.find_one({"email": cliente.email}):
-        raise HTTPException(status_code=400, detail="Email ya registrado")
-    
+        raise HTTPException(status_code=400, detail="Correo ya registrado")
+
+    # El teléfono también es único entre pasajeros: es lo que usa la app para
+    # reconocer al pasajero y no puede apuntar a dos cuentas.
+    _rechazar_telefono_repetido(cliente_coleccion, cliente.numero_de_telefono,
+                                 chofer_coleccion)
+
     cliente_dict = cliente.model_dump()
+    cliente_dict["numero_de_telefono"] = normalizar_telefono(cliente.numero_de_telefono)
     # Hashear la contrasena
     cliente_dict["password"] = bcrypt.hashpw(
         cliente_dict["password"].encode('utf-8'), 
@@ -259,7 +370,7 @@ async def create_cliente(cliente: CLIENTE):
 @router.get("/cliente", response_model=List[ClienteResponse])
 async def get_all_clientes(token: str = Depends(oauth2_scheme)):
     if not verify_token_cliente(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     docs = cliente_coleccion.find()
     clientes = []
@@ -272,7 +383,7 @@ async def get_all_clientes(token: str = Depends(oauth2_scheme)):
 @router.get("/cliente/{id}", response_model=ClienteResponse)
 async def get_cliente(id: str, token: str = Depends(oauth2_scheme)):
     if not verify_token_cliente(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     doc = cliente_coleccion.find_one({"_id": ObjectId(id)})
     if not doc:
@@ -284,7 +395,7 @@ async def get_cliente(id: str, token: str = Depends(oauth2_scheme)):
 @router.put("/cliente/{id}", response_model=ClienteResponse)
 async def update_cliente(id: str, cliente: CLIENTE, token: str = Depends(oauth2_scheme)):
     if not verify_token_cliente(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     cliente_dict = cliente.model_dump()
     if cliente_dict.get("password"):
@@ -300,7 +411,7 @@ async def update_cliente(id: str, cliente: CLIENTE, token: str = Depends(oauth2_
 @router.delete("/cliente/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_cliente(id: str, token: str = Depends(oauth2_scheme)):
     if not verify_token_cliente(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     result = cliente_coleccion.delete_one({"_id": ObjectId(id)})
     if result.deleted_count == 0:
@@ -328,7 +439,7 @@ def serialize_mongo_doc(doc: dict) -> dict:
 @router.post("/admin", response_model=AdminResponse, status_code=status.HTTP_201_CREATED)
 async def create_admin(ADMIN: ADMINISTRADOR):
     if admin_coleccion.find_one({"email": ADMIN.email}):
-        raise HTTPException(status_code=400, detail="Email ya registrado")
+        raise HTTPException(status_code=400, detail="Correo ya registrado")
     
     admin_dict = ADMIN.model_dump()
     
@@ -351,7 +462,7 @@ async def create_admin(ADMIN: ADMINISTRADOR):
 @router.get("/admin", response_model=List[AdminResponse])
 async def get_all_admin(token: str = Depends(oauth2_scheme)):
     if not verify_token_admin(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     docs = admin_coleccion.find()
     admins = []
@@ -364,7 +475,7 @@ async def get_all_admin(token: str = Depends(oauth2_scheme)):
 @router.get("/admin/{id}", response_model=AdminResponse)
 async def get_admin(id: str, token: str = Depends(oauth2_scheme)):
     if not verify_token_admin(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     doc = admin_coleccion.find_one({"_id": ObjectId(id)})
     if not doc:
@@ -376,7 +487,7 @@ async def get_admin(id: str, token: str = Depends(oauth2_scheme)):
 @router.put("/admin/{id}", response_model=ClienteResponse)
 async def update_admin(id: str, ADMIN: ADMINISTRADOR, token: str = Depends(oauth2_scheme)):
     if not verify_token_admin(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     admin_dict = ADMIN.model_dump()
     if admin_dict.get("password"):
@@ -392,7 +503,7 @@ async def update_admin(id: str, ADMIN: ADMINISTRADOR, token: str = Depends(oauth
 @router.delete("/admin/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_admin(id: str, token: str = Depends(oauth2_scheme)):
     if not verify_token_admin(token):
-        raise HTTPException(status_code=401, detail="Token invalido")
+        raise HTTPException(status_code=401, detail="Token inválido")
     
     result = admin_coleccion.delete_one({"_id": ObjectId(id)})
     if result.deleted_count == 0:
