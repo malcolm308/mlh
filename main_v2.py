@@ -6,6 +6,7 @@ from routers import billetera
 from routers import CRUD_MONGODB
 from routers import Solicitud_de_viajes_v4
 from routers import admin_panel
+from routers import promociones
 from routers import documentos
 from routers import pois
 from routers import geo
@@ -57,6 +58,9 @@ app.add_middleware(
 # El panel de administracion va antes que CRUD_MONGODB: si no, el GET /admin/{id}
 # se traga las rutas /admin/choferes, /admin/trips, etc.
 app.include_router(admin_panel.router)
+# Promociones antes que CRUD_MONGODB: ese router tiene un `GET /admin/{id}` que
+# se tragaria `/admin/promociones`.
+app.include_router(promociones.router)
 app.include_router(CRUD_MONGODB.router)
 app.include_router(Solicitud_de_viajes_v4.router)
 app.include_router(billetera.router)
@@ -73,9 +77,10 @@ app.include_router(telegram_webhook.router)
 # app arranca igualmente: lo reintentan el startup y el job de APScheduler.
 try:
     chofer_cancelaciones.asegurar_tabla_cancelaciones()
+    promociones.asegurar_tabla_promociones()
 except Exception:
-    logger.warning("No se pudo asegurar la tabla de cancelaciones en el import; se reintentara",
-                   exc_info=True)
+    logger.warning("No se pudo asegurar la tabla de cancelaciones o la de "
+                   "promociones en el import; se reintentara", exc_info=True)
 
 # ---- Scheduler para expiracion de viajes ----
 scheduler = AsyncIOScheduler(timezone="America/Havana")
@@ -112,7 +117,7 @@ async def sweep_expired_trips():
 BD_ESPERADAS = {
     "trips", "transactions", "driver_payouts", "tariffs",
     "daily_trip_metrics", "time_pricing_rules",
-    "wallet_movements", "driver_cancellations",
+    "wallet_movements", "driver_cancellations", "promociones",
 }
 
 
@@ -137,6 +142,7 @@ def inicializar_bd() -> dict:
     init_db()
     billetera.init_wallet_db()
     chofer_cancelaciones.asegurar_tabla_cancelaciones()
+    promociones.asegurar_tabla_promociones()
     with get_connection() as conn:
         despues = _tablas_publicas(conn)
     return {

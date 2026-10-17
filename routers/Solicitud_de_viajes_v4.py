@@ -13,7 +13,7 @@ import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 from datetime import datetime, timedelta, date, timezone
 from zoneinfo import ZoneInfo
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from bson import ObjectId
 from pymongo import MongoClient
 import redis.asyncio as redis
@@ -24,6 +24,13 @@ import urllib.request
 import urllib.parse
 
 logger = logging.getLogger(__name__)
+
+# Promociones: comision vigente, descuento al cliente y bono diario. Se importa
+# aqui y no dentro de las funciones porque `routers.promociones` no importa este
+# modulo (usa `get_connection` por dentro, en tiempo de llamada), asi que no
+# queda ciclo.
+from routers.promociones import (calcular_descuento_cliente,  # noqa: E402
+                                 leer_promocion)
 
 # ===================== Zona horaria Cuba =====================
 CUBA_TZ = ZoneInfo("America/Havana")
@@ -261,6 +268,16 @@ def init_db():
             ADD COLUMN IF NOT EXISTS dropoff_address TEXT;
     """
 
+    # Descuento que se le concedio al cliente y comision que se habria cobrado sin
+    # el. Se guardan para que el reparto de dinero de cada viaje sea auditable:
+    # sin estas dos columnas no hay forma de comprobar despues que al chofer no
+    # se le descuento nada de su parte.
+    migrate_trips_promociones = """
+        ALTER TABLE trips
+            ADD COLUMN IF NOT EXISTS descuento_cliente NUMERIC(12,2) DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS comision_nominal NUMERIC(12,2);
+    """
+
     create_transactions_table = """
         CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY,
@@ -352,6 +369,7 @@ def init_db():
         create_postgis,
         create_trips_table,
         migrate_trips_addresses,
+        migrate_trips_promociones,
         create_transactions_table,
         create_driver_payouts_table,
         create_tariffs_table,
@@ -838,7 +856,22 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             # 8. Calcular componentes de tarifa
             distance_fare = distance_km * price_per_km
             time_fare = duration_min * price_per_minute
-            total_fare = base_fare + distance_fare + time_fare + tip
+
+            # `precio_bruto` es lo que costaria el viaje sin promociones. Todo lo
+            # que viene despues se calcula sobre el, NUNCA sobre `total_fare` ya
+            # descontado: si la comision se calculara sobre el precio rebajado,
+            # el chofer perderia la diferencia entre el 15% del precio entero y el
+            # 15% del precio con descuento, y ese dinero es suyo.
+            precio_bruto = base_fare + distance_fare + time_fare + tip
+
+            # 8b. Promocion vigente y descuento al cliente.
+            promo = leer_promocion()
+            descuento_cliente = calcular_descuento_cliente(
+                Decimal(str(precio_bruto)), promo)
+
+            # Lo que paga el pasajero. El descuento sale de la comision de la
+            # plataforma, nunca del bolsillo del chofer.
+            total_fare = float(Decimal(str(precio_bruto)) - descuento_cliente)
 
             # 9. Actualizar el viaje en PostgreSQL
             cur.execute("""
@@ -852,6 +885,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     distance_fare = %s,
                     tip = %s,
                     total_fare = %s,
+                    descuento_cliente = %s,
+                    comision_nominal = %s,
                     currency = 'CUP'
                 WHERE trip_id = %s
                 RETURNING *;
@@ -859,6 +894,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 dropoff_lng, dropoff_lat, now,
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
+                float(descuento_cliente), None,
                 trip_id
             ))
             updated_trip = cur.fetchone()
@@ -872,21 +908,42 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
             # 10. Descontar la comision del FONDO del conductor.
             #
-            #     El precio del viaje (total_fare) NO se modifica: es lo que
-            #     paga el pasajero. La comision sale del fondo del chofer.
+            #     La comision sale del fondo del chofer, nunca del precio que paga
+            #     el pasajero. Y sale sobre el PRECIO BRUTO, no sobre el precio ya
+            #     descontado, para que el descuento al cliente lo pague la
+            #     plataforma y no el chofer:
+            #
+            #         comision nominal  = 15% de 10.00 = 1.50
+            #         descuento cliente = 10% de 10.00 = 1.00
+            #         comision cobrada  = 1.50 - 1.00 = 0.50
+            #         conserva chofer   = 10.00 - 1.50 = 8.50
+            #
+            #     Si se calculara sobre 9.00 serian 1.35 y el chofer se quedaria
+            #     con 7.65: perderia 0.85 por un descuento que no es suyo.
             #
             #     El viaje ya quedo guardado como 'completed' mas arriba, asi
             #     que el conteo del dia ya lo incluye y resolve_commission
             #     sabe si este es el tercero.
             driver_id_str = updated_trip["driver_id"]
-            comision = resolve_commission(driver_id_str)
-            commission = round(total_fare * comision["rate"], 2)
+            comision = resolve_commission(driver_id_str, promo["comision_porcentaje"])
+            comision_nominal = float(
+                (Decimal(str(precio_bruto)) * comision["rate"]).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP))
+            commission = max(0.0, round(comision_nominal - float(descuento_cliente), 2))
             commit_commission(
                 driver_id_str,
                 commission,
                 comision["discount_applied"],
                 comision["discount_date"],
             )
+
+            # La comision nominal queda guardada junto al descuento para que el
+            # calculo sea auditable despues: sin esto no habria forma de saber
+            # de donde salio lo que se desconto del fondo.
+            cur.execute(
+                "UPDATE trips SET comision_nominal = %s WHERE trip_id = %s",
+                (comision_nominal, trip_id))
+            conn.commit()
 
             # 11. Retornar el viaje completo con informacion adicional
             return {
@@ -900,8 +957,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "distance_fare": float(updated_trip["distance_fare"]),
                 "time_fare": round(time_fare, 2),
                 "tip": float(updated_trip["tip"]),
+                "precio_bruto": round(float(precio_bruto), 2),
+                "descuento_cliente": float(descuento_cliente),
                 "total_fare": float(updated_trip["total_fare"]),
                 "commission": commission,
+                "commission_nominal": comision_nominal,
                 "commission_rate": comision["rate"],
                 "commission_label": comision["label"],
                 "commission_discount": comision["discount_applied"],
@@ -1122,6 +1182,22 @@ COMMISSION_DISCOUNT_TRIP = 3
 # Etiquetas legibles de las tasas, para el log y las respuestas.
 COMMISSION_RATE_LABEL = {0.15: "15%", 0.10: "10%"}
 
+
+def _etiqueta_tasa(rate) -> str:
+    """'%s%%' de la tasa, con los decimales justos.
+
+    Antes se buscaba en `COMMISSION_RATE_LABEL` y solo tenia dos claves. Con la
+    comision configurable eso reventaba con KeyError en cuanto el administrador
+    pusiera, por ejemplo, 12%.
+    """
+    try:
+        valor = float(rate) * 100
+    except (TypeError, ValueError):
+        return "0%"
+    if abs(valor - round(valor)) < 0.005:
+        return "%d%%" % round(valor)
+    return ("%s%%" % round(valor, 2)).replace(".", ",")
+
 def get_daily_trip_count(driver_id: str) -> int:
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1146,9 +1222,32 @@ def get_daily_trip_count(driver_id: str) -> int:
 
 
 def apply_daily_bonus(driver_id: str) -> dict:
+    """Abono al Fondo cuando el chofer llega al umbral de viajes del dia.
+
+    Los valores salen de Promociones, no de constantes: `BONIFICATION_THRESHOLD` y
+    `BONIFICATION_AMOUNT` quedan como respaldo si la tabla todavia no existe, para
+    que arrancar sin base de promociones no rompa los viajes.
+
+    Antes el `BONIFICATION_THRESHOLD` de 10 se comparaba con `>`, asi que el bono
+    saltaba en el viaje 11 y el administrador que escribiera "10 viajes" en el
+    panel contaria hasta 10 esperando algo que no llegaba. Ahora la comparacion es
+    `>=`: "10 viajes requeridos" significa que al tenth viaje se paga.
+    """
     driver = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)})
     if not driver:
         raise ValueError(f"Conductor no encontrado: {driver_id}")
+
+    promo = leer_promocion()
+    if not promo["bono_chofer_activo"]:
+        return {
+            "driver_id": driver_id,
+            "bonus_applied": False,
+            "reason": "Bono de chofer desactivado en Promociones",
+            "amount": 0,
+        }
+
+    umbral = promo["bono_chofer_viajes_requeridos"]
+    monto = promo["bono_chofer_monto"]
 
     # Usar fecha de Cuba para el bono diario
     now_cuba = datetime.now(CUBA_TZ)
@@ -1164,48 +1263,88 @@ def apply_daily_bonus(driver_id: str) -> dict:
         }
 
     daily_trips = get_daily_trip_count(driver_id)
-    if daily_trips > BONIFICATION_THRESHOLD:
-        chofer_coleccion.update_one(
-            {"_id": to_mongo_id(driver_id)},
-            {"$inc": {"Fondo": BONIFICATION_AMOUNT},
-             "$set": {"last_bonus_date": today_str}}
-        )
+    if daily_trips < umbral:
         return {
             "driver_id": driver_id,
-            "bonus_applied": True,
-            "reason": f"Bonificacion por {daily_trips} viajes completados",
-            "amount": BONIFICATION_AMOUNT,
+            "bonus_applied": False,
+            "reason": f"Viajes insuficientes: {daily_trips}/{umbral}",
+            "amount": 0,
             "daily_trips": daily_trips
         }
+
+    saldo_anterior = float(driver.get("Fondo") or 0)
+    saldo_nuevo = round(saldo_anterior + float(monto), 2)
+    chofer_coleccion.update_one(
+        {"_id": to_mongo_id(driver_id)},
+        {"$inc": {"Fondo": monto},
+         "$set": {"last_bonus_date": today_str}}
+    )
+
+    # El bono entra al mismo campo `Fondo` que una recarga, asi que se anota igual
+    # que una recarga. Antes no se anotaba nada y el administrador no tenia forma
+    # de saber de donde salia cada peso del saldo.
+    _registrar_movimiento_bono(driver_id, saldo_anterior, saldo_nuevo, float(monto),
+                               today_str, daily_trips)
+
     return {
         "driver_id": driver_id,
-        "bonus_applied": False,
-        "reason": f"Viajes insuficientes: {daily_trips}/{BONIFICATION_THRESHOLD}",
-        "amount": 0,
-        "daily_trips": daily_trips
+        "bonus_applied": True,
+        "reason": f"Bonificacion por {daily_trips} viajes completados",
+        "amount": float(monto),
+        "daily_trips": daily_trips,
+        "umbral": umbral
     }
 
 
-def resolve_commission(driver_id: str) -> dict:
+def _registrar_movimiento_bono(driver_id: str, saldo_anterior: float,
+                               saldo_nuevo: float, monto: float,
+                               dia: str, viajes: int) -> None:
+    """Deja el bono en `wallet_movements` como movimiento tipo `bono`.
+
+    `admin_email` va vacio a proposito: no lo hizo un administrador, lo hizo el
+    sistema. `metodo` = 'automatico' y `referencia` = el dia, para poder
+    auditar de un vistazo quedia se pago cada bono.
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO wallet_movements
+                    (driver_id, tipo, monto, saldo_anterior, saldo_nuevo,
+                     metodo, referencia, nota, created_at)
+                VALUES (%s, 'bono', %s, %s, %s, 'automatico', %s, %s, NOW())
+                """,
+                (driver_id, monto, saldo_anterior, saldo_nuevo, dia,
+                 "Bono diario por %d viajes completados" % viajes),
+            )
+            conn.commit()
+            cur.close()
+    except Exception:
+        # Que el saldo se haya abonado es lo importante. Si el movimiento no se
+        # guarda, el saldo es correcto igual y avisar por log basta: perder el
+        # bono por no poder escribir en el historial seria peor.
+        logger.exception("Bono acreditado a %s pero no se pudo registrar el movimiento",
+                         driver_id)
+
+
+def resolve_commission(driver_id: str, tasa_base=None) -> dict:
     """Devuelve la tasa de comision que corresponde al viaje que se esta cerrando.
 
-    La regla es: el TERCER viaje del dia paga 10% en lugar de 15%, y solo una
-    vez al dia.
+    La regla del TERCER viaje se mantiene: el tercero del dia paga la mitad de la
+    tasa base, y solo una vez al dia. `tasa_base` es la comision que fijo el
+    administrador en Promociones; si no se pasa, se usa `COMMISSION_RATE`, que es
+    lo que pasaba antes de que existiera la configuracion.
 
-    Nota sobre el conteo: se llama DESPUES de que el viaje ya quedo guardado
-    como `completed` en PostgreSQL, asi que `get_daily_trip_count` ya incluye
-    este viaje. Por eso el conteo es directamente la posicion ordinal de este
-    viaje dentro del dia (1, 2, 3, ...).
-
-    Si el viaje es el tercero, se intenta RESERVAR el descuento del dia con
-    `claim_commission_discount`. La reserva es atomica, asi que la tasa se
-    decide en el mismo paso: si otro proceso ya lo reservo, este viaje paga la
-    comision normal. No queda nada que compensar porque todavia no se toco el
-    `Fondo` (eso ocurre despues, en `commit_commission`).
-
-    Esta funcion SI escribe en Mongo cuando el viaje es el tercero, porque la
-    reserva del dia es parte de decidir la tasa.
+    La tasa del 3er viaje se deriva de la base (`COMMISSION_DISCOUNT_TRIP` = media
+    tasa), no es un numero fijo: si el administrador pone la comision en 0 no hay
+    mitad que aplicar, y quedaria un 5% fantasma cobrando a los choferes durante
+    una promocion de captacion.
     """
+    if tasa_base is None:
+        tasa_base = Decimal(str(COMMISSION_RATE))
+    tasa_base = Decimal(str(tasa_base))
+
     oid = to_mongo_id(driver_id)
     if not chofer_coleccion.find_one({"_id": oid}):
         raise ValueError(f"Conductor no encontrado: {driver_id}")
@@ -1214,23 +1353,28 @@ def resolve_commission(driver_id: str) -> dict:
     daily_trips = get_daily_trip_count(driver_id)
     es_el_tercero = daily_trips == COMMISSION_DISCOUNT_TRIP
 
-    if es_el_tercero and claim_commission_discount(driver_id, today_str):
-        rate = COMMISSION_DISCOUNT_RATE
+    # Media tasa base. Es lo que significa "el 3er viaje paga la mitad". Con
+    # comision 0 se queda en 0, que es lo correcto.
+    tasa_descuento = (tasa_base * Decimal(str(COMMISSION_DISCOUNT_RATE))
+                      / Decimal(str(COMMISSION_RATE))) if tasa_base > 0 else Decimal("0")
+
+    if es_el_tercero and tasa_descuento > 0 and claim_commission_discount(driver_id, today_str):
+        rate = tasa_descuento
         motivo = (
             f"3er viaje del dia ({daily_trips}): comision reducida a "
-            f"{COMMISSION_RATE_LABEL[COMMISSION_DISCOUNT_RATE]}"
+            f"{_etiqueta_tasa(rate)}"
         )
     else:
-        rate = COMMISSION_RATE
+        rate = tasa_base
         if es_el_tercero:
             motivo = "Descuento del 3er viaje ya consumido hoy"
         else:
             motivo = f"Comision normal (viaje {daily_trips} del dia)"
 
     return {
-        "rate": rate,
-        "label": COMMISSION_RATE_LABEL[rate],
-        "discount_applied": rate == COMMISSION_DISCOUNT_RATE,
+        "rate": float(rate),
+        "label": _etiqueta_tasa(rate),
+        "discount_applied": rate < tasa_base,
         "discount_date": today_str,
         "driver_id": driver_id,
         "trip_of_day": daily_trips,
@@ -1273,6 +1417,7 @@ def commit_commission(driver_id: str, commission: float, discount_applied: bool,
     )
 
 #====================== Garnet ===========================
+
 async def update_driver_location(driver_id: str, lon: float, lat: float):
     """Actualiza la posicion de un conductor en tiempo real."""
     await garnet.geoadd("drivers:geo", (lon, lat, driver_id))

@@ -211,3 +211,15 @@ class ApiClient:
 
     def resumen_billetera(self):
         return self.get("/billetera/resumen")
+
+    # ------------------- PROMOCIONES Y COMISIONES -------------------
+
+    def promocion(self):
+        """Configuracion vigente de comisiones, bono y descuento."""
+        return self.get("/admin/promociones")
+
+    def guardar_promocion(self, **kwargs):
+        """Guarda la configuracion. Va por POST y no por PUT porque es lo unico
+        que expone este cliente: no hace falta anadir un verbo nuevo para una
+        pantalla que solo necesita leer y escribir un unico recurso."""
+        return self.post("/admin/promociones", kwargs)

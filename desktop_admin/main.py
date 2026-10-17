@@ -18,6 +18,7 @@ from admin_nuevo_window import VentanaAltaAdmin       # noqa: E402
 from tab_viajes import TabViajes                      # noqa: E402
 from tab_choferes import TabChoferes                  # noqa: E402
 from tab_billetera import TabBilletera                # noqa: E402
+from tab_promociones import TabPromociones            # noqa: E402
 
 
 class AppAdmin(tk.Tk):
@@ -95,10 +96,12 @@ class AppAdmin(tk.Tk):
         self.tab_viajes = TabViajes(self.notebook, self)
         self.tab_choferes = TabChoferes(self.notebook, self)
         self.tab_billetera = TabBilletera(self.notebook, self)
+        self.tab_promociones = TabPromociones(self.notebook, self)
 
         self.notebook.add(self.tab_viajes, text="Viajes")
         self.notebook.add(self.tab_choferes, text="Choferes")
         self.notebook.add(self.tab_billetera, text="Billetera")
+        self.notebook.add(self.tab_promociones, text="Promociones y Comisiones")
 
         # barra de estado
         self.lbl_status = tk.Label(self, text="Listo", bg="#243447", fg="#9fb3c8",
