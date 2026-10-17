@@ -2778,11 +2778,56 @@ String _fmtCoord(LatLng p) =>
   /// etiqueta. Ahora delega en [VehicleTypesService], que es la unica fuente.
   String _vehicleTypeLabel(String? type) => _tiposVehiculo.etiquetaDe(type);
 
+  /// Aviso de la espera de cortesía mientras el pasajero no ha subido.
+  ///
+  /// Solo aparece cuando el viaje está en `driver_arrived`: antes de eso el
+  /// chófer va en camino y no hay espera, y después de que sube ya se cobra. El
+  /// contador se pinta aquí y no se pide al backend cada segundo porque lo que se
+  /// cobra lo decide el servidor al cerrar; esto es solo para que el chófer sepa
+  /// qué está viendo y qué se le paga.
+  Widget _lineaEspera(TripOffer trip) {
+    if (!trip.esperandoPasajero) return const SizedBox.shrink();
+
+    final minutos = trip.esperaSegs ?? 0;
+    // El total se pinta en rojo en cuanto se pasa de la cortesía: a partir de ahi
+    // el pasajero está pagando y conviene que se note.
+    final excede = minutos > (trip.cortesiaMin ?? 4) * 60;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: excede ? const Color(0xFFFEE2E2) : const Color(0xFFFEF3C7),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.hourglass_top,
+                size: 16, color: excede ? const Color(0xFFB91C1C) : const Color(0xFF92400E)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                excede
+                    ? 'Esperando ${trip.esperaLegible}. Se cobran ${(trip.excedenteEsperaVivo / 60).ceil()} min de los que lleva esperando.'
+                    : 'Esperando ${trip.esperaLegible}. ${trip.cortesiaMin ?? 4} min gratis, los de más se cobran.',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: excede ? const Color(0xFFB91C1C) : const Color(0xFF92400E),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildActiveTripPanel() {
     final trip = _activeTrip!;
     final pickup = trip.pickup;
     final nextStep = switch (trip.status) {
-      'accepted' => 'Llegué al punto de recogida',
+      'accepted' => 'He llegado al punto de recogida',
       'driver_arrived' => 'Iniciar viaje',
       'in_progress' => 'Completar viaje',
       _ => null,
@@ -2845,6 +2890,7 @@ if (pickup != null)
             ),
           const SizedBox(height: 8),
           Text('Precio estimado: ${trip.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP'),
+          _lineaEspera(trip),
           if (trip.clientName != null) Text('Cliente: ${trip.clientName}'),
           const SizedBox(height: 12),
           Row(

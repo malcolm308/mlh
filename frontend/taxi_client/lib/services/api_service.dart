@@ -174,6 +174,23 @@ class ApiService {
     });
   }
 
+  /// Minutos de espera que el pasajero no paga.
+  ///
+  /// No hace falta administrador: es un dato público, como la tarifa base, y el
+  /// pasajero tiene derecho a saberlo ANTES de pedir el viaje. Si la peticion
+  /// falla se devuelve `null` y el cliente simplemente no lo menciona, en vez
+  /// de inventar un numero.
+  Future<int?> fetchCortesiaMinutos() async {
+    try {
+      final datos = await _map('GET', '/admin/promociones/tarifas-espera');
+      final valor = datos['tiempo_espera_cortesia_minutos'];
+      if (valor is num) return valor.round();
+    } catch (_) {
+      // Sin dato no se inventa nada: la app sigue funcionando igual.
+    }
+    return null;
+  }
+
   Future<ClientTrip> getTrip(String tripId) async {
     final j = await _map('GET', '/trips/$tripId');
     return ClientTrip.fromJson(j);

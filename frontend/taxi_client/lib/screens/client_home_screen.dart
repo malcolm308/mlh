@@ -54,6 +54,21 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   bool _estFareBusy = false;
   bool _estFareError = false;
   int _estReq = 0;
+
+  /// Desglose de la última estimación, tal y como lo devuelve el backend.
+  ///
+  /// Se guarda entero, no solo el total, para poder enseñar de donde sale el
+  /// precio: con el coeficiente por distancia el total ya no es "base + km +
+  /// tiempo" a ojos del pasajero.
+  Map<String, dynamic>? _detalleFare;
+
+  /// Si el desglose está abierto. Cerrado por defecto porque a quien pide un
+  /// viaje le interesa el total, no la cuenta.
+  bool _verDetalle = false;
+
+  /// Minutos de espera que regala la plataforma, para poder avisar al pasajero.
+  /// `null` mientras no se haya podido leer; entonces no se pinta nada.
+  int? _cortesiaMin;
   String? _pickupAddr;
   String? _dropoffAddr;
   final TextEditingController _searchController = TextEditingController();
@@ -289,6 +304,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
 
   double? get _estimatedFare => _backendFare;
 
+  Future<void> _loadCortesia() async {
+    final minutos = await widget.api.fetchCortesiaMinutos();
+    if (!mounted || minutos == null) return;
+    setState(() => _cortesiaMin = minutos);
+  }
+
   Future<void> _loadEstimate() async {
     final pickup = _pickup;
     final dropoff = _dropoff;
@@ -309,6 +330,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         _estFareBusy = false;
         _estFareError = false;
         _backendFare = (res['precio_estimado'] ?? 0).toDouble();
+        _detalleFare = res;
       });
     } catch (_) {
       if (!mounted || req != _estReq) return;
@@ -523,6 +545,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         _vehicleType = _vehicleTypeMarcado(tarifas);
       });
       _loadEstimate();
+      // La cortesía se pide aparte y sin esperar: si falla, la pantalla sigue
+      // mostrando el precio igual, solo que sin el aviso de la espera.
+      unawaited(_loadCortesia());
     } catch (_) {
       if (!mounted) return;
       final prefs = await SharedPreferences.getInstance();
@@ -566,7 +591,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
 
   Widget _buildRouteStats(ColorScheme scheme) {
     final fare = _estimatedFare;
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+      Row(
       children: [
         Expanded(
           child: _statTile(
@@ -599,6 +627,102 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           ),
         ),
       ],
+      ),
+      _botonDetalle,
+      _panelDetalle,
+      ],
+    );
+  }
+
+  /// El botón de desglose. Va aparte porque solo tiene sentido cuando hay
+  /// desglose que enseñar.
+  Widget get _botonDetalle {
+    if (_detalleFare == null) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.centerRight,
+      child: TextButton.icon(
+        onPressed: () =>
+            setState(() => _verDetalle = !_verDetalle),
+        icon: Icon(_verDetalle ? Icons.expand_less : Icons.expand_more,
+            size: 18),
+        label: Text(_verDetalle ? 'Ocultar desglose' : 'Ver desglose',
+            style: const TextStyle(fontSize: 12)),
+      ),
+    );
+  }
+
+  /// Detalle de la tarifa, si el botón lo tiene abierto.
+  Widget get _panelDetalle =>
+      _verDetalle ? _detalleTarifa() : const SizedBox.shrink();
+
+  /// Explica por que la tarifa estimada es la que es.
+  ///
+  /// Con el coeficiente por distancia el precio ya no es "base + km + tiempo" a
+  /// ojos del pasajero, y un número que no se explica parece un error. Se
+  /// despieza en las tres partes de verdad, sin inventar nada: los datos salen
+  /// del backend en el breakdown de la estimación.
+  Widget _detalleTarifa() {
+    if (_detalleFare == null) return const SizedBox.shrink();
+    final d = _detalleFare!;
+    final base = (d['base_fare'] as num?)?.toDouble();
+    final coef = (d['coeficiente'] as num?)?.toDouble();
+    final km = (d['distance_fare'] as num?)?.toDouble();
+    final tiempo = (d['time_fare'] as num?)?.toDouble();
+    final ahorro = (d['ahorro_por_coeficiente'] as num?)?.toDouble();
+    if (base == null || coef == null || km == null || tiempo == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F5F7),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _lineaDetalle('Tarifa base', '${base.toStringAsFixed(0)} CUP'),
+          _lineaDetalle(
+              'Kilometraje (x${coef.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '')})',
+              '${km.toStringAsFixed(0)} CUP'),
+          _lineaDetalle('Tiempo estimado', '${tiempo.toStringAsFixed(0)} CUP'),
+          if ((ahorro ?? 0) > 0)
+            _lineaDetalle('Ahorro por carrera corta',
+                '-${ahorro!.toStringAsFixed(0)} CUP', color: const Color(0xFF15803D)),
+          if (_cortesiaMin != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                _cortesiaMin == 0
+                    ? 'La espera del chofer se cobra completa.'
+                    : 'Espera del chofer: $_cortesiaMin min gratis. '
+                        'Lo que pase de ahí se paga.',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _lineaDetalle(String texto, String valor, {Color? color}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(texto,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
+          Text(valor,
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color ?? const Color(0xFF111827))),
+        ],
+      ),
     );
   }
 

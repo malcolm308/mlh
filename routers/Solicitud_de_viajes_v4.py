@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # modulo (usa `get_connection` por dentro, en tiempo de llamada), asi que no
 # queda ciclo.
 from routers.promociones import (calcular_descuento_cliente,  # noqa: E402
+                                 coeficiente_por_distancia, excedente_espera,
                                  leer_promocion)
 
 # ===================== Zona horaria Cuba =====================
@@ -275,7 +276,10 @@ def init_db():
     migrate_trips_promociones = """
         ALTER TABLE trips
             ADD COLUMN IF NOT EXISTS descuento_cliente NUMERIC(12,2) DEFAULT 0,
-            ADD COLUMN IF NOT EXISTS comision_nominal NUMERIC(12,2);
+            ADD COLUMN IF NOT EXISTS comision_nominal NUMERIC(12,2),
+            ADD COLUMN IF NOT EXISTS hora_llegada TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS espera_secs INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS excedente_espera_secs INTEGER DEFAULT 0;
     """
 
     create_transactions_table = """
@@ -509,7 +513,18 @@ def get_applicable_time_rule(vehicle_type: str, current_time: datetime) -> Optio
         return dict(row) if row else None
 
 def _price_breakdown(distance_km: float, vehicle_type: str) -> dict:
-    """Calcula los componentes de tarifa usando la tarifa vigente y la regla horaria."""
+    """Calcula los componentes de tarifa usando la tarifa vigente y la regla horaria.
+
+    El coeficiente por distancia se aplica SOLO al subtotal del kilometraje:
+
+        precio = base_fare
+               + (distancia_km * price_per_km * coeficiente)
+               + (minutos_estimados * price_per_minute)
+
+    La tarifa base y el termino por tiempo van enteros: el coeficiente suaviza
+    el kilometraje de las carreras cortas porque ahi el precio por km pesa mas
+    sobre la tarifa final, y tocar la base bajaria el suelo de TODOS los viajes.
+    """
     tariff = get_tariff(vehicle_type)
     if not tariff:
         raise ValueError(f"No hay tarifa configurada para: {vehicle_type}")
@@ -523,17 +538,51 @@ def _price_breakdown(distance_km: float, vehicle_type: str) -> dict:
         base_fare *= float(time_rule["base_fare_multiplier"])
         price_per_km *= float(time_rule["price_per_km_multiplier"])
         price_per_minute *= float(time_rule["price_per_minute_multiplier"])
-    distance_fare = distance_km * price_per_km
+
+    promo = leer_promocion()
+    coeficiente = coeficiente_por_distancia(distance_km, promo)
+
+    # El coeficiente va aqui y en ningun otro sitio. Si se aplicara despues al
+    # total, bajaria tambien la base y el tiempo, que es justo lo que no se
+    # quiere.
+    distance_fare = distance_km * price_per_km * float(coeficiente)
+    distance_fare_sin_coeficiente = distance_km * price_per_km
     time_fare = estimated_time_min * price_per_minute
     return {
         "distance_km": round(distance_km, 2),
         "estimated_time_min": round(estimated_time_min, 1),
         "base_fare": round(base_fare, 2),
+        "coeficiente": float(coeficiente),
+        "price_per_km": round(price_per_km, 4),
         "distance_fare": round(distance_fare, 2),
+        "distance_fare_sin_coeficiente": round(distance_fare_sin_coeficiente, 2),
+        "ahorro_por_coeficiente": round(distance_fare_sin_coeficiente - distance_fare, 2),
         "time_fare": round(time_fare, 2),
         "precio_estimado": round(base_fare + distance_fare + time_fare, 2),
         "vehicle_type": vehicle_type,
     }
+
+
+# Los minutos de cortesía valen 4 mientras la tabla de promociones no este
+# disponible. Es el valor por defecto del enunciado y es preferible contestar
+# con 4 que no contestar: pintar "esperando" sin el dato de la cortesía es
+# misinformation, y 4 solo se usa si la base se caido.
+_CORTESIA_POR_DEFECTO = 4
+
+
+def _cortesia_minutos_actual() -> float:
+    """Minutos de espera que regala la plataforma ahora mismo.
+
+    Se lee aquí y no en cada sitio que la necesita porque la fila de
+    configuracion se cambia en caliente desde el panel, y este valor se pinta en
+    la app del chofer.
+    """
+    try:
+        return float(leer_promocion()["tiempo_espera_cortesia_minutos"])
+    except Exception:
+        logger.warning("no se pudo leer la cortesía; se usa %s min",
+                       _CORTESIA_POR_DEFECTO, exc_info=True)
+        return float(_CORTESIA_POR_DEFECTO)
 
 def calculate_estimated_price(distance_km: float, vehicle_type: str) -> float:
     return _price_breakdown(distance_km, vehicle_type)["precio_estimado"]
@@ -656,6 +705,10 @@ def get_trip(trip_id: str) -> Optional[dict]:
                 ST_AsText(pickup_location) as pickup_location,
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
+                hora_llegada, espera_secs, excedente_espera_secs,
+                GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
+                    COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
+                    AS espera_segundos,
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
@@ -684,7 +737,12 @@ def update_trip_status(trip_id: str, status: str) -> bool:
         if status == "accepted":
             pass
         elif status == "driver_arrived":
-            pass
+            # Momento en que el chofer llega al punto de recogida. Es el origen
+            # del reloj de espera: a partir de aqui el pasajero tiene gratis los
+            # primeros minutos de cortesia y lo que pase de ahi se le paga al
+            # chofer. Antes este estado no guardaba ninguna hora, y sin ella no
+            # habia forma de saber cuanto espero el pasajero.
+            extra["hora_llegada"] = datetime.now(timezone.utc)
         elif status == "in_progress":
             extra["started_at"] = datetime.now(timezone.utc)
         elif status == "completed":
@@ -851,7 +909,49 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 if started.tzinfo is None:
                     started = started.replace(tzinfo=timezone.utc)
                 duration_secs = max(0, int((now - started).total_seconds()))
-            duration_min = duration_secs / 60.0
+
+# --- 7b. Tiempo de espera de cortesía ---
+            #
+            # El chófer marca "He llegado" (estado `driver_arrived`) y luego
+            # "Iniciar viaje" (`in_progress`). Entre medias el pasajero puede
+            # tardar: eso es espera, y no cuenta como tiempo de trayecto.
+            #
+            # Al pasajero se le regalan los primeros `cortesia` minutos. Lo que
+            # pase de ahi es tiempo que el chófer estuvo esperando con el motor
+            # parado, así que se le paga: se suma a la duracion facturable.
+            #
+            #     espera      = hora_inicio - hora_llegada
+            #     excedente   = max(0, espera - cortesia)
+            #     duracion    = (hora_fin - hora_inicio) + excedente
+            #
+            # LA DIFERENCIA SE CALCULA EN SQL, no restando datetimes en Python.
+            # En una base donde `hora_llegada` es TIMESTAMP (sin zona) y
+            # `started_at` es TIMESTAMP WITH TIME ZONE, restarlos en Python
+            # mezclaba dos tipos y salia un desfase de horas: el chofer
+            # acababa cobrando 5 horas de espera que no habian ocurrido.
+            # Postgres conoce los dos tipos y los resta bien.
+            cortesia_min = _cortesia_minutos_actual()
+            espera_secs = 0
+            if started is not None:
+                cur2 = conn.cursor()
+                cur2.execute("""
+                    SELECT GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
+                        started_at - hora_llegada)), 0))::int AS espera
+                    FROM trips WHERE trip_id = %s
+                """, (trip_id,))
+                fila_espera = cur2.fetchone()
+                cur2.close()
+                if fila_espera:
+                    espera_secs = int(fila_espera[0] or 0)
+
+            # El reparto entre cortesía y exceso lo hace `excedente_espera`, que
+            # es la misma función que usan las pruebas y la app. Antes este calculo
+            # estaba aqui escrito a mano y usaba `promo`, que en este punto del
+            # codigo todavia no existia: NameError en cuanto un chofer cerraba un
+            # viaje con espera.
+            excedente_secs, duracion_facturable = excedente_espera(
+                espera_secs, duration_secs, cortesia_min)
+            duration_min = duracion_facturable / 60.0
 
             # 8. Calcular componentes de tarifa
             distance_fare = distance_km * price_per_km
@@ -887,14 +987,17 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     total_fare = %s,
                     descuento_cliente = %s,
                     comision_nominal = %s,
+                    espera_secs = %s,
+                    excedente_espera_secs = %s,
                     currency = 'CUP'
                 WHERE trip_id = %s
                 RETURNING *;
             """, (
                 dropoff_lng, dropoff_lat, now,
-                distance_km, duration_secs,
+                distance_km, duracion_facturable,
                 base_fare, distance_fare, tip, total_fare,
                 float(descuento_cliente), None,
+                espera_secs, excedente_secs,
                 trip_id
             ))
             updated_trip = cur.fetchone()
@@ -953,6 +1056,19 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "status": updated_trip["status"],
                 "distance_km": round(float(updated_trip["distance_km"]), 2),
                 "duration_secs": updated_trip["duration_secs"],
+                "espera_secs": espera_secs,
+                "excedente_espera_secs": excedente_secs,
+                # Alias con los nombres que consumen las apps. Se mandan los dos
+                # porque el receipt ya usa `espera_secs` y las apps leen
+                # `espera_segundos`; un solo nombre habria hecho tocar el receipt
+                # por un cambio de la app.
+                "espera_segundos": espera_secs,
+                "excedente_espera_segundos": excedente_secs,
+                "espera_cortesia_minutos": cortesia_min,
+                "tiempo_espera_cortesia_minutos": cortesia_min,
+                "hora_llegada": (trip["hora_llegada"].isoformat()
+                                 if trip.get("hora_llegada") else None),
+                "hora_inicio_viaje": (started.isoformat() if started else None),
                 "base_fare": float(updated_trip["base_fare"]),
                 "distance_fare": float(updated_trip["distance_fare"]),
                 "time_fare": round(time_fare, 2),
@@ -1006,6 +1122,10 @@ def get_trips_by_client(client_id: str, limit: int = 50) -> list[dict]:
                 ST_AsText(pickup_location) as pickup_location,
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
+                hora_llegada, espera_secs, excedente_espera_secs,
+                GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
+                    COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
+                    AS espera_segundos,
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
@@ -1030,6 +1150,10 @@ def get_trips_by_driver(driver_id: str, limit: int = 50) -> list[dict]:
                 ST_AsText(pickup_location) as pickup_location,
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
+                hora_llegada, espera_secs, excedente_espera_secs,
+                GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
+                    COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
+                    AS espera_segundos,
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
@@ -1054,6 +1178,10 @@ def get_trips_by_status(status: str, limit: int = 50) -> list[dict]:
                 ST_AsText(pickup_location) as pickup_location,
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
+                hora_llegada, espera_secs, excedente_espera_secs,
+                GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
+                    COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
+                    AS espera_segundos,
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
@@ -1125,6 +1253,10 @@ def get_nearby_requested_trips(
                 ST_AsText(pickup_location) as pickup_location,
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
+                hora_llegada, espera_secs, excedente_espera_secs,
+                GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
+                    COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
+                    AS espera_segundos,
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
@@ -2144,6 +2276,11 @@ async def api_get_trip(trip_id: str):
         client_doc = cliente_coleccion.find_one({"_id": to_mongo_id(trip["client_id"])})
         trip["client_name"] = _client_display_name(client_doc)
         trip["client_phone"] = _client_phone(client_doc)
+
+    # Los minutos de cortesía viajan con el viaje para que el chofer pueda
+    # pintar el contador sin tener que recordar un número que el administrador
+    # puede cambiar en cualquier momento.
+    trip["tiempo_espera_cortesia_minutos"] = _cortesia_minutos_actual()
     return trip
 
 
@@ -2470,7 +2607,13 @@ async def api_get_trips_by_client(client_id: str, limit: int = Query(50, le=200)
 
 @router.get("/trips/driver/{driver_id}")
 async def api_get_trips_by_driver(driver_id: str, limit: int = Query(50, le=200)):
-    return get_trips_by_driver(driver_id, limit)
+    viajes = get_trips_by_driver(driver_id, limit)
+    # Se lee una sola vez y se reparte: `leer_promocion` va a la base y esta
+    # llamada se hace en cada sondeo del chofer, no en cada uno de los viajes.
+    cortesia = _cortesia_minutos_actual()
+    for viaje in viajes:
+        viaje["tiempo_espera_cortesia_minutos"] = cortesia
+    return viajes
 
 
 @router.get("/trips/status/{status}")

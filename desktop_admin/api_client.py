@@ -223,3 +223,15 @@ class ApiClient:
         que expone este cliente: no hace falta anadir un verbo nuevo para una
         pantalla que solo necesita leer y escribir un unico recurso."""
         return self.post("/admin/promociones", kwargs)
+
+    # ------------------- TARIFAS Y ESPERA -------------------
+
+    def tarifas_espera(self):
+        """Coeficientes por distancia y minutos de espera de cortesia."""
+        return self.get("/admin/promociones/tarifas-espera")
+
+    def guardar_tarifas_espera(self, **kwargs):
+        """Guarda SOLO coeficientes y espera, sin tocar la comision, el bono ni el
+        descuento. Por eso tiene su propio endpoint: sharing el guardado general
+        haria que cada cambio de coeficiente reenviara el resto del formulario."""
+        return self.post("/admin/promociones/tarifas-espera", kwargs)

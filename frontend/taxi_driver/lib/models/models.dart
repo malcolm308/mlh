@@ -149,6 +149,28 @@ class TripOffer {
   final String? clientPhone;
 final String status;
   final String? requestedAt;
+
+  /// Cuando el chófer marco "He llegado" al punto de recogida.
+  ///
+  /// Es el arranque del reloj de espera: hasta que el pasajero no pulse
+  /// "Iniciar viaje", este tiempo es del pasajero. Los primeros
+  /// `tiempo_espera_cortesia_minutos` no se cobran y el resto se le paga al
+  /// chófer como si fuera tiempo de trayecto.
+  final String? horaLlegada;
+
+  /// Segundos que el pasajero estuvo esperando, si el viaje ya empezo.
+  ///
+  /// Lo calcula el backend. Aqui no se cuenta con el reloj del telefono porque
+  /// la hora de llegada y la de inicio las pone el servidor y son las que se
+  /// cobran.
+  final int? esperaSegs;
+
+  /// De esos segundos, los que se cobran al pasajero por pasar de la cortesia.
+  final int? excedenteEsperaSegs;
+
+  /// Minutos de espera que regala la plataforma, para poder escribir
+  /// "de los N min que lleva esperando, 2 son gratis".
+  final int? cortesiaMin;
   final String? requestAddress;
   final String? dropoffAddress;
   final double? totalFare;
@@ -178,6 +200,10 @@ final String status;
     this.clientPhone,
     this.status = 'requested',
     this.requestedAt,
+    this.horaLlegada,
+    this.esperaSegs,
+    this.excedenteEsperaSegs,
+    this.cortesiaMin,
     this.requestAddress,
     this.dropoffAddress,
     this.totalFare,
@@ -186,6 +212,37 @@ this.currency = 'CUP',
     this.offerExpiresInSecs,
     this.tripDriverId,
   });
+
+  /// Segundos de espera que se cobran al pasajero.
+  ///
+  /// Lo calcula el backend al cerrar el viaje y lo guarda en el viaje. Mientras
+  /// el viaje sigue en marcha se usa este getter, que aplica la misma regla:
+  /// gratis lo que quepa en la cortesía, pagado el resto. Se duplica aqui a
+  /// proposito, para que el contador que ve el chófer vaya cambiando solo sin
+  /// tener que pegarle al servidor cada segundo.
+  int get excedenteEsperaVivo {
+    if (excedenteEsperaSegs != null) return excedenteEsperaSegs!;
+    final espera = esperaSegs ?? 0;
+    if (espera <= 0) return 0;
+    final gratis = (cortesiaMin ?? 4) * 60;
+    final exceso = espera - gratis;
+    return exceso > 0 ? exceso : 0;
+  }
+
+  /// `true` cuando el pasajero ya está esperando y todavía no ha subido.
+  bool get esperandoPasajero =>
+      status == 'driver_arrived' && horaLlegada != null;
+
+  /// Espera formateada para pintar, por ejemplo "8 min" o "1:05".
+  String get esperaLegible {
+    final total = esperaSegs ?? 0;
+    if (total <= 0) return '0 min';
+    final minutos = total ~/ 60;
+    final segundos = total % 60;
+    if (minutos == 0) return '$segundos s';
+    if (segundos == 0) return '$minutos min';
+    return '$minutos:${segundos.toString().padLeft(2, '0')} min';
+  }
 
   factory TripOffer.fromJson(Map<String, dynamic> j) => TripOffer(
         tripId: (j['trip_id'] ?? '').toString(),
@@ -204,6 +261,10 @@ this.currency = 'CUP',
         clientPhone: j['client_phone']?.toString(),
         status: (j['status'] ?? 'requested').toString(),
         requestedAt: j['requested_at']?.toString(),
+        horaLlegada: j['hora_llegada']?.toString(),
+        esperaSegs: (j['espera_segundos'])?.toInt(),
+        excedenteEsperaSegs: (j['excedente_espera_segundos'])?.toInt(),
+        cortesiaMin: (j['tiempo_espera_cortesia_minutos'])?.toInt(),
         requestAddress: j['request_address']?.toString(),
         dropoffAddress: j['dropoff_address']?.toString(),
         totalFare: (j['total_fare'] ?? j['total_fare'])?.toDouble(),

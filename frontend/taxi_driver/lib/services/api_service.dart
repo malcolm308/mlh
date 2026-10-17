@@ -328,4 +328,22 @@ class ApiService {
   Future<Map<String, dynamic>> applyDailyBonus(String driverId) async {
     return _map('POST', '/drivers/$driverId/bonus');
   }
+
+  /// Minutes de espera que regala la plataforma.
+  ///
+  /// Lo lee el chofer para poder decirle al pasajero, mientras espera, cuanto
+  /// le queda gratis. No hace falta administrador: es el mismo dato que la
+  /// tarifa base, publico. Si la peticion falla se devuelve el valor por
+  /// defecto y el chofer sigue trabajando igual, porque la espera se cobra en el
+  /// backend de todos modos y aqui solo se esta pintando informacion.
+  Future<int> fetchCortesiaMinutos({int porDefecto = 4}) async {
+    try {
+      final datos = await _map('GET', '/admin/promociones/tarifas-espera');
+      final valor = datos['tiempo_espera_cortesia_minutos'];
+      if (valor is num) return valor.round();
+    } catch (_) {
+      // Sin internet o backend caido: se sigue con el valor por defecto.
+    }
+    return porDefecto;
+  }
 }

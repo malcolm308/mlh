@@ -28,7 +28,7 @@ cambiar lo que la app del chofer ya recibe en `commission_rate`.
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from psycopg2.extras import RealDictCursor
@@ -67,6 +67,17 @@ DDL = """
         descuento_cliente_activo BOOLEAN NOT NULL DEFAULT FALSE,
         descuento_cliente_porcentaje NUMERIC(5,4) NOT NULL DEFAULT 0.0000,
         fecha_expiracion TIMESTAMP,
+        -- Coeficientes por distancia. Se aplican SOLO al subtotal del
+        -- kilometraje: la tarifa base siempre se suma entera.
+        --   precio = base + (km * precio_por_km * coeficiente)
+        coef_corto_km NUMERIC(6,2) NOT NULL DEFAULT 3.0,
+        coef_corto_valor NUMERIC(6,4) NOT NULL DEFAULT 0.5000,
+        coef_medio_km NUMERIC(6,2) NOT NULL DEFAULT 10.0,
+        coef_medio_valor NUMERIC(6,4) NOT NULL DEFAULT 0.6000,
+        coef_largo_valor NUMERIC(6,4) NOT NULL DEFAULT 1.0000,
+        -- Minutos de cortesia que espera el pasajero sin que se cobren. Solo
+        -- cuenta lo que pase de aqui, y se suma a la duracion facturable.
+        tiempo_espera_cortesia_minutos NUMERIC(6,2) NOT NULL DEFAULT 4.0,
         actualizado_at TIMESTAMP DEFAULT NOW(),
         actualizado_por VARCHAR(200)
     );
@@ -96,6 +107,17 @@ def require_admin(authorization: Optional[str] = Header(None)) -> dict:
     return {"id": str(admin["_id"]), "email": email, "rol": admin.get("rol")}
 
 
+ALTER_PROMOCIONES = """
+    ALTER TABLE promociones
+            ADD COLUMN IF NOT EXISTS coef_corto_km NUMERIC(6,2) NOT NULL DEFAULT 3.0,
+            ADD COLUMN IF NOT EXISTS coef_corto_valor NUMERIC(6,4) NOT NULL DEFAULT 0.5000,
+            ADD COLUMN IF NOT EXISTS coef_medio_km NUMERIC(6,2) NOT NULL DEFAULT 10.0,
+            ADD COLUMN IF NOT EXISTS coef_medio_valor NUMERIC(6,4) NOT NULL DEFAULT 0.6000,
+            ADD COLUMN IF NOT EXISTS coef_largo_valor NUMERIC(6,4) NOT NULL DEFAULT 1.0000,
+            ADD COLUMN IF NOT EXISTS tiempo_espera_cortesia_minutos NUMERIC(6,2) NOT NULL DEFAULT 4.0;
+    """
+
+
 def _conexion():
     """Se importa aqui y no arriba para que este modulo se pueda cargar sin
     PostgreSQL (los tests del bot lo importan)."""
@@ -106,11 +128,18 @@ def _conexion():
 # ===================== TABLA =====================
 
 def asegurar_tabla_promociones() -> None:
-    """Crea la tabla y deja la fila de configuracion lista (idempotente)."""
+    """Crea la tabla y deja la fila de configuracion lista (idempotente).
+
+    Las columnas nuevas van en un ALTER aparte y no en el CREATE: sobre una tabla
+    que ya existe (produccion, o la local de hace meses) un CREATE TABLE IF NOT
+    EXISTS no hace absolutamente nada, y las columnas faltarian. Un ADD COLUMN si es
+    aditivo y se aplica sobre la tabla que haya.
+    """
     try:
         with _conexion() as conn:
             cur = conn.cursor()
             cur.execute(DDL)
+            cur.execute(ALTER_PROMOCIONES)
             cur.execute(
                 "INSERT INTO promociones (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
             conn.commit()
@@ -150,6 +179,12 @@ def leer_promocion() -> Dict[str, Any]:
         "descuento_cliente_activo": False,
         "descuento_cliente_porcentaje": Decimal("0"),
         "fecha_expiracion": None,
+        "coef_corto_km": Decimal("3.0"),
+        "coef_corto_valor": Decimal("0.5"),
+        "coef_medio_km": Decimal("10.0"),
+        "coef_medio_valor": Decimal("0.6"),
+        "coef_largo_valor": Decimal("1.0"),
+        "tiempo_espera_cortesia_minutos": Decimal("4.0"),
         "actualizado_at": None,
         "actualizado_por": None,
     }
@@ -176,6 +211,13 @@ def leer_promocion() -> Dict[str, Any]:
             "descuento_cliente_porcentaje": _a_decimal(
                 fila.get("descuento_cliente_porcentaje"), Decimal("0")),
             "fecha_expiracion": fila.get("fecha_expiracion"),
+            "coef_corto_km": _a_decimal(fila.get("coef_corto_km"), Decimal("3.0")),
+            "coef_corto_valor": _a_decimal(fila.get("coef_corto_valor"), Decimal("0.5")),
+            "coef_medio_km": _a_decimal(fila.get("coef_medio_km"), Decimal("10.0")),
+            "coef_medio_valor": _a_decimal(fila.get("coef_medio_valor"), Decimal("0.6")),
+            "coef_largo_valor": _a_decimal(fila.get("coef_largo_valor"), Decimal("1.0")),
+            "tiempo_espera_cortesia_minutos": _a_decimal(
+                fila.get("tiempo_espera_cortesia_minutos"), Decimal("4.0")),
             "actualizado_at": fila.get("actualizado_at"),
             "actualizado_por": fila.get("actualizado_por"),
         })
@@ -246,6 +288,71 @@ def calcular_descuento_cliente(precio_bruto: Decimal,
     return max(Decimal("0"), descuento)
 
 
+def excedente_espera(espera_secs: Optional[float], trayecto_secs: Optional[float],
+                     cortesia_minutos: float) -> Tuple[int, int]:
+    """Reparte la espera entre lo que es cortesía y lo que se cobra.
+
+        espera    = hora_inicio_viaje - hora_llegada
+        excedente = max(0, espera - cortesia)
+        total     = trayecto_real + excedente
+
+    Devuelve `(excedente_segundos, total_facturable_segundos)`, los dos en
+    segundos. Recibe el trayecto aparte porque desde la espera no se puede saber.
+
+    Que la espera NUNCA sea negativa importa: con dos relojes desajustados
+    `started_at` puede quedar antes que `hora_llegada`, y el `max(0, ...)` evita
+    que al chofer le resten minutos de su propio trayecto.
+    """
+    def _segundos(valor) -> int:
+        try:
+            return max(0, int(valor or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    try:
+        cortesia = float(cortesia_minutos or 0) * 60
+    except (TypeError, ValueError):
+        cortesia = 0.0
+
+    espera = _segundos(espera_secs)
+    trayecto = _segundos(trayecto_secs)
+    excedente = max(0, int(espera - cortesia))
+    return excedente, trayecto + excedente
+
+
+def coeficiente_por_distancia(distancia_km: float, promo: Dict[str, Any]) -> Decimal:
+    """Que coeficiente se aplica a un trayecto de `distancia_km` kilometros.
+
+        <= corto_km              -> coef_corto_valor   (0.5 por defecto)
+        >  corto_km y <= medio_km-> coef_medio_valor   (0.6 por defecto)
+        >  medio_km              -> coef_largo_valor   (1.0 por defecto)
+
+    Los limites son INCLUSIVOS por arriba, que es como se lee "de 3 a 10 km":
+    un viaje de exactamente 10 km entra en el tramo medio, no en el largo. Con
+    los limites invertidos (si el administrador se colgara y pusiera 10 en el
+    corto y 3 en el medio) se devuelven los por defecto, porque antes que
+    calcular un precio raro es mejor calcular el precio que todos esperan.
+    """
+    try:
+        km = float(distancia_km)
+    except (TypeError, ValueError):
+        return Decimal("1.0")
+
+    corto_km = float(promo.get("coef_corto_km") or 0)
+    medio_km = float(promo.get("coef_medio_km") or 0)
+
+    if corto_km <= 0 or medio_km <= 0 or corto_km >= medio_km:
+        logger.warning("promociones: limites de coeficiente incoherentes "
+                       "(corto=%s, medio=%s); se usa el tramo largo", corto_km, medio_km)
+        return _a_decimal(promo.get("coef_largo_valor"), Decimal("1.0"))
+
+    if km <= corto_km:
+        return _a_decimal(promo.get("coef_corto_valor"), Decimal("0.5"))
+    if km <= medio_km:
+        return _a_decimal(promo.get("coef_medio_valor"), Decimal("0.6"))
+    return _a_decimal(promo.get("coef_largo_valor"), Decimal("1.0"))
+
+
 def _a_dinero(valor: Decimal) -> Decimal:
     """Redondeo a centimos con ROUND_HALF_UP, que es como se redondea un precio
     para un humano. El `round()` de Python usa banker's rounding y daria centavos
@@ -264,6 +371,17 @@ class PromoIn(BaseModel):
     descuento_cliente_porcentaje: float = 0
     fecha_expiracion: Optional[str] = Field(
         None, description="YYYY-MM-DD. Vacio = no caduca")
+    coef_corto_km: Optional[float] = Field(
+        3.0, description="En km. A esta distancia y por debajo entra el coeficiente corto.")
+    coef_corto_valor: Optional[float] = Field(
+        0.5, description="Multiplica SOLO al kilometraje. La base y el tiempo van enteros.")
+    coef_medio_km: Optional[float] = Field(
+        10.0, description="En km. Tope del tramo medio, inclusivo.")
+    coef_medio_valor: Optional[float] = Field(0.6)
+    coef_largo_valor: Optional[float] = Field(
+        1.0, description="Por encima del tramo medio. Con 1.0 el precio es el de siempre.")
+    tiempo_espera_cortesia_minutos: Optional[float] = Field(
+        4.0, description="Minutos gratis de espera. Lo que pase de ahi se paga al chofer.")
 
 
 def _validar(datos: PromoIn) -> Dict[str, Any]:
@@ -320,6 +438,13 @@ def _validar(datos: PromoIn) -> Dict[str, Any]:
                 status_code=400,
                 detail="La fecha no es válida. Use el formato AAAA-MM-DD.")
 
+    # --- Coeficientes por distancia y espera de cortesía ---
+    tarifas = _validar_tarifas(TarifasEsperaIn(
+        coef_corto_km=datos.coef_corto_km, coef_corto_valor=datos.coef_corto_valor,
+        coef_medio_km=datos.coef_medio_km, coef_medio_valor=datos.coef_medio_valor,
+        coef_largo_valor=datos.coef_largo_valor,
+        tiempo_espera_cortesia_minutos=datos.tiempo_espera_cortesia_minutos))
+
     return {
         "comision_porcentaje": comision,
         "bono_chofer_activo": bool(datos.bono_chofer_activo),
@@ -328,7 +453,25 @@ def _validar(datos: PromoIn) -> Dict[str, Any]:
         "descuento_cliente_activo": descuento_activo,
         "descuento_cliente_porcentaje": descuento,
         "fecha_expiracion": expiracion,
+        **tarifas,
     }
+
+
+def _a_numero(valor: Any, nombre: str) -> float:
+    """Lee un número de un valor del formulario o de la API, con un mensaje que
+    diga QUÉ está mal en lugar de un 422 seco de pydantic.
+
+    Los campos son opcionales a proposito: si el panel deja una casilla en blanco
+    llega `None` (o "") y aqui se convierte en "la espera de cortesía debe ser un
+    número", que el panel sabe señalar. Si fueran `float` a secas, pydantic
+    respondería con un error de esquema que no menciona el campo.
+    """
+    if valor is None:
+        raise HTTPException(status_code=400, detail="%s debe ser un número." % nombre)
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="%s debe ser un número." % nombre)
 
 
 def _porcentaje(fraccion: Decimal) -> str:
@@ -350,53 +493,156 @@ async def obtener_promocion(admin: dict = Depends(require_admin)):
 @router.post("")
 async def guardar_promocion(datos: PromoIn, admin: dict = Depends(require_admin)):
     limpio = _validar(datos)
+    columnas = ("comision_porcentaje, bono_chofer_activo, bono_chofer_monto, "
+                "bono_chofer_viajes_requeridos, descuento_cliente_activo, "
+                "descuento_cliente_porcentaje, fecha_expiracion, "
+                "coef_corto_km, coef_corto_valor, coef_medio_km, coef_medio_valor, "
+                "coef_largo_valor, tiempo_espera_cortesia_minutos")
+    asignaciones = ", ".join("%s = %%s" % c for c in columnas.split(", "))
+    valores = tuple(limpio[c.strip()] for c in columnas.split(", "))
+    # El id va al final en los dos UPDATE: es el que se repite.
+    # En el primero la fila no existe todavia, asi que se inserta primero y se
+    # actualiza despues. Por eso se hace en dos pasos y no con un UPSERT.
     with _conexion() as conn:
         cur = conn.cursor()
+        cur.execute("INSERT INTO promociones (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
         cur.execute(
-            """
-            UPDATE promociones SET
-                comision_porcentaje = %s,
-                bono_chofer_activo = %s,
-                bono_chofer_monto = %s,
-                bono_chofer_viajes_requeridos = %s,
-                descuento_cliente_activo = %s,
-                descuento_cliente_porcentaje = %s,
-                fecha_expiracion = %s,
-                actualizado_at = NOW(),
-                actualizado_por = %s
-            WHERE id = 1
-            """,
-            (limpio["comision_porcentaje"], limpio["bono_chofer_activo"],
-             limpio["bono_chofer_monto"], limpio["bono_chofer_viajes_requeridos"],
-             limpio["descuento_cliente_activo"], limpio["descuento_cliente_porcentaje"],
-             limpio["fecha_expiracion"], admin.get("email")),
-        )
-        if cur.rowcount == 0:
-            cur.execute("INSERT INTO promociones (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
-            cur.execute(
-                """
-                UPDATE promociones SET
-                    comision_porcentaje = %s, bono_chofer_activo = %s,
-                    bono_chofer_monto = %s, bono_chofer_viajes_requeridos = %s,
-                    descuento_cliente_activo = %s, descuento_cliente_porcentaje = %s,
-                    fecha_expiracion = %s, actualizado_at = NOW(), actualizado_por = %s
-                WHERE id = 1
-                """,
-                (limpio["comision_porcentaje"], limpio["bono_chofer_activo"],
-                 limpio["bono_chofer_monto"], limpio["bono_chofer_viajes_requeridos"],
-                 limpio["descuento_cliente_activo"], limpio["descuento_cliente_porcentaje"],
-                 limpio["fecha_expiracion"], admin.get("email")),
-            )
+            "UPDATE promociones SET %s, actualizado_at = NOW(), actualizado_por = %%s "
+            "WHERE id = 1" % asignaciones,
+            valores + (admin.get("email"),))
         conn.commit()
         cur.close()
 
-    logger.info("promociones: guardada por %s -> comision=%s descuento=%s%%",
+    logger.info("promociones: guardada por %s -> comision=%s descuento=%s%% "
+                "coeficientes=%s/%s/%s cortesia=%s min",
                 admin.get("email"), limpio["comision_porcentaje"],
-                limpio["descuento_cliente_porcentaje"] * 100)
+                limpio["descuento_cliente_porcentaje"] * 100,
+                limpio["coef_corto_valor"], limpio["coef_medio_valor"],
+                limpio["coef_largo_valor"], limpio["tiempo_espera_cortesia_minutos"])
 
     promo = leer_promocion()
     respuesta = _a_json(promo)
     respuesta["message"] = "Configuración guardada"
+    return respuesta
+
+
+class TarifasEsperaIn(BaseModel):
+    """Solo los coeficientes por distancia y la espera de cortesía.
+
+    Van aparte de `PromoIn` a proposito. Las dos cosas viven en la misma fila de
+    `promociones` porque comparten periodicidad, pero se editan desde pantallas
+    distintas: si la pestaña de tarifas usara el guardado general, cada vez que
+    un administrador tocara un coeficiente el formulario de comisiones enviaría
+    también sus valores y una promotional caducada volvería a la vida.
+    """
+    coef_corto_km: Optional[float] = Field(
+        3.0, description="En km. A esta distancia y por debajo entra el tramo corto.")
+    coef_corto_valor: Optional[float] = Field(
+        0.5, description="Multiplica SOLO al kilometraje. Base y tiempo van enteros.")
+    coef_medio_km: Optional[float] = Field(
+        10.0, description="En km. Tope del tramo medio, inclusivo.")
+    coef_medio_valor: Optional[float] = Field(0.6)
+    coef_largo_valor: Optional[float] = Field(
+        1.0, description="Por encima del tramo medio. Con 1.0 es el precio de siempre.")
+    tiempo_espera_cortesia_minutos: Optional[float] = Field(
+        4.0, description="Minutos gratis de espera. Lo que pase de ahi se paga al chofer.")
+
+
+def _validar_tarifas(datos: "TarifasEsperaIn") -> Dict[str, Any]:
+    """Valida coeficientes y espera, y devuelve solo esos seis campos.
+
+    Vive suelta para que la guarde tanto el formulario general de promociones
+    como la pestaña de tarifas: son las mismas reglas y no tiene sentido que se
+    pursiguen en dos sitios, porque un día se tocan una y la otra se queda vieja
+    sin que nada lo delate.
+    """
+    corto_km = _a_numero(datos.coef_corto_km, "el límite de las carreras cortas")
+    medio_km = _a_numero(datos.coef_medio_km, "el límite de las carreras medias")
+    if corto_km <= 0 or medio_km <= 0:
+        raise HTTPException(
+            status_code=400, detail="Los límites en kilómetros deben ser mayores que cero.")
+    if corto_km >= medio_km:
+        raise HTTPException(
+            status_code=400,
+            detail="El límite de las carreras cortas (%s km) tiene que ser menor que el "
+                   "de las medias (%s km)." % (corto_km, medio_km))
+
+    tarifas = {
+        "coef_corto_valor": _a_numero(datos.coef_corto_valor, "el coeficiente de las cortas"),
+        "coef_medio_valor": _a_numero(datos.coef_medio_valor, "el coeficiente de las medias"),
+        "coef_largo_valor": _a_numero(datos.coef_largo_valor, "el coeficiente de las largas"),
+    }
+    for nombre, valor in tarifas.items():
+        if valor <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="%s debe ser mayor que cero. Un coeficiente de cero haría que las "
+                       "carreras de ese tramo no costaran nada." % nombre)
+
+    espera = _a_numero(datos.tiempo_espera_cortesia_minutos, "la espera de cortesía")
+    if espera < 0:
+        raise HTTPException(
+            status_code=400, detail="La espera de cortesía no puede ser negativa.")
+
+    return {"coef_corto_km": corto_km, "coef_medio_km": medio_km,
+            "tiempo_espera_cortesia_minutos": espera, **tarifas}
+
+
+@router.get("/tarifas-espera")
+async def obtener_tarifas_espera():
+    """Coeficientes y espera de cortesía, sin el resto de la promoción.
+
+    No pide administrador a proposito: el pasajero tiene que ver el precio
+    estimado antes de pedir el viaje, y el chófer tiene que saber cuántos
+    minutos de espera se le pagan antes de aceptar. Es la misma clase de dato
+    publico que la tarifa base. Lo que NO es publico es cambiarla, y eso lo
+    protege `guardar_tarifas_espera`.
+    """
+    promo = leer_promocion()
+    return {
+        "coef_corto_km": _a_dinero(promo["coef_corto_km"]),
+        "coef_corto_valor": _a_dinero(promo["coef_corto_valor"]),
+        "coef_medio_km": _a_dinero(promo["coef_medio_km"]),
+        "coef_medio_valor": _a_dinero(promo["coef_medio_valor"]),
+        "coef_largo_valor": _a_dinero(promo["coef_largo_valor"]),
+        "tiempo_espera_cortesia_minutos": _a_dinero(promo["tiempo_espera_cortesia_minutos"]),
+        "tramos": [
+            {"hasta_km": _a_dinero(promo["coef_corto_km"]),
+             "coeficiente": _a_dinero(promo["coef_corto_valor"])},
+            {"hasta_km": _a_dinero(promo["coef_medio_km"]),
+             "coeficiente": _a_dinero(promo["coef_medio_valor"])},
+            {"hasta_km": None, "coeficiente": _a_dinero(promo["coef_largo_valor"])},
+        ],
+    }
+
+
+@router.post("/tarifas-espera")
+async def guardar_tarifas_espera(datos: TarifasEsperaIn,
+                                admin: dict = Depends(require_admin)):
+    limpio = _validar_tarifas(datos)
+
+    columnas = ("coef_corto_km, coef_corto_valor, coef_medio_km, "
+                "coef_medio_valor, coef_largo_valor, tiempo_espera_cortesia_minutos")
+    asignaciones = ", ".join("%s = %%s" % c for c in columnas.split(", "))
+    valores = tuple(limpio[c.strip()] for c in columnas.split(", "))
+
+    with _conexion() as conn:
+        cur = conn.cursor()
+        # Sin esto el UPDATE no tocaria nada en una base recien creada.
+        cur.execute("INSERT INTO promociones (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
+        cur.execute("UPDATE promociones SET %s, actualizado_at = NOW(), "
+                    "actualizado_por = %%s WHERE id = 1" % asignaciones,
+                    valores + (admin.get("email"),))
+        conn.commit()
+        cur.close()
+
+    logger.info("tarifas-espera: guardada por %s -> coeficientes=%s/%s/%s "
+                "cortesia=%s min", admin.get("email"), limpio["coef_corto_valor"],
+                limpio["coef_medio_valor"], limpio["coef_largo_valor"],
+                limpio["tiempo_espera_cortesia_minutos"])
+
+    respuesta = await obtener_tarifas_espera()
+    respuesta["message"] = "Tarifas y espera guardadas"
     return respuesta
 
 
@@ -419,6 +665,12 @@ def _a_json(promo: Dict[str, Any]) -> Dict[str, Any]:
         "fecha_expiracion": (promo["fecha_expiracion"].isoformat()
                              if promo["fecha_expiracion"] else None),
         "descuento_maximo": float(DESCUENTO_MAXIMO),
+        "coef_corto_km": float(promo["coef_corto_km"]),
+        "coef_corto_valor": float(promo["coef_corto_valor"]),
+        "coef_medio_km": float(promo["coef_medio_km"]),
+        "coef_medio_valor": float(promo["coef_medio_valor"]),
+        "coef_largo_valor": float(promo["coef_largo_valor"]),
+        "tiempo_espera_cortesia_minutos": float(promo["tiempo_espera_cortesia_minutos"]),
         "actualizado_at": (promo["actualizado_at"].isoformat()
                            if promo["actualizado_at"] else None),
         "actualizado_por": promo["actualizado_por"],
