@@ -299,6 +299,25 @@ class CompletedTrip {
   final String currency;
   final String? appliedRule;
 
+  /// Coeficiente por distancia que se aplicó a este viaje.
+  ///
+  /// El kilometraje se cobra multiplicado por este valor, así que por debajo
+  /// del tramo corto el chofer percibe menos de lo que daría `price_per_km` a
+  /// pelo. Se guarda y se muestra para que la cifra del recibo no aparezca sin
+  /// explicación.
+  final double? coeficienteAplicado;
+
+  /// Lo que el kilometraje habría costado sin ese coeficiente.
+  final double? distanceFareSinCoeficiente;
+
+  /// Segundos que el pasajero estuvo esperando, y de ellos los que se pagaron.
+  ///
+  /// La espera de cortesía es el único momento del viaje en el que el chofer
+  /// está parado y cobrando. Mostrarlo es la mitad del trabajo: sin esto, el
+  /// chofer no tiene forma de saber si le ha tocado esperar de más.
+  final int? esperaSegs;
+  final int? excedenteEsperaSegs;
+
   CompletedTrip({
     required this.tripId,
     required this.distanceKm,
@@ -314,6 +333,10 @@ class CompletedTrip {
     this.commissionLabel = '15%',
     this.commissionDiscount = false,
     this.appliedRule,
+    this.coeficienteAplicado,
+    this.distanceFareSinCoeficiente,
+    this.esperaSegs,
+    this.excedenteEsperaSegs,
   });
 
   factory CompletedTrip.fromJson(Map<String, dynamic> j) => CompletedTrip(
@@ -331,6 +354,12 @@ class CompletedTrip {
         commissionDiscount: (j['commission_discount'] ?? false) == true,
         currency: (j['currency'] ?? 'CUP').toString(),
         appliedRule: j['applied_rule']?.toString(),
+        coeficienteAplicado: (j['coeficiente_aplicado'])?.toDouble(),
+        distanceFareSinCoeficiente:
+            (j['distance_fare_sin_coeficiente'])?.toDouble(),
+        esperaSegs: (j['espera_segundos'] ?? j['espera_secs'])?.toInt(),
+        excedenteEsperaSegs:
+            (j['excedente_espera_segundos'] ?? j['excedente_espera_secs'])?.toInt(),
       );
 }
 

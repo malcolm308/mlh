@@ -41,8 +41,8 @@ class TabTarifasEspera(ttk.Frame):
         tk.Label(izq, text="Tarifas y Espera", bg="#243447", fg="#ffffff",
                  font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 4))
         tk.Label(izq,
-                 text="El coeficiente multiplica solo al kilometraje. "
-                      "La base y el tiempo se cobran enteros.",
+                 text="El coeficiente multiplica solo al kilometraje, y se aplica "
+                      "tanto al precio que ve el pasajero como a lo que se le cobra.",
                  bg="#243447", fg="#9fb3c8", justify="left",
                  font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 10))
 
@@ -237,6 +237,9 @@ class TabTarifasEspera(ttk.Frame):
             lineas.append(linea)
 
         lineas.append("")
+        lineas.append("Estos son los precios que se COBRAN, no solo los que se "
+                      "muestran: el coeficiente baja el kilometraje tanto al "
+                      "estimado como al total.")
         lineas.append("Con un coeficiente de 1.0 el precio es el de siempre: "
                       "por encima de %s km ya se cobra entero." % medio_km)
 

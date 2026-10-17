@@ -1863,7 +1863,31 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             _row('Duración', _fmtDuration(t.durationSecs)),
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
+            // El kilometraje se cobra con un coeficiente segun lo larga que sea
+            // la carrera. Ponerlo aqui evita que el chofer mire un numero menor
+            // y piense que se han equivocado de tarifa.
+            if (t.coeficienteAplicado != null &&
+                t.coeficienteAplicado != 1.0 &&
+                t.distanceFareSinCoeficiente != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: _row(
+                    '  (x${t.coeficienteAplicado!.toStringAsFixed(2)}, sin coeficiente '
+                    '${t.distanceFareSinCoeficiente!.toStringAsFixed(2)})',
+                    ''),
+              ),
             _row('Tiempo', '${t.timeFare.toStringAsFixed(2)} ${t.currency}'),
+            // La espera se muestra solo si la hubo. El chofer la cuenta como
+            // tiempo facturable, asi que es parte de lo que entra en "Tiempo" y
+            // conviene que se vea de donde sale ese numero.
+            if ((t.esperaSegs ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: _row(
+                    'Esperó ${_fmtDuration(t.esperaSegs!)}'
+                    '${(t.excedenteEsperaSegs ?? 0) > 0 ? ', ${_fmtDuration(t.excedenteEsperaSegs!)} facturables' : ', sin costo para el pasajero'}',
+                    ''),
+              ),
             _row('Comisión ${t.commissionLabel}',
                 '-${t.commission.toStringAsFixed(2)} ${t.currency}'),
             if (t.commissionDiscount)

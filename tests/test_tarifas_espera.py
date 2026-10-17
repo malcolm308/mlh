@@ -122,6 +122,91 @@ class TestFormula(unittest.TestCase):
         self.assertGreater(descuento, 0)
 
 
+# ===================== EL COEFICIENTE EN EL COBRO REAL =====================
+
+class TestCobroReal(unittest.TestCase):
+    """El coeficiente tambien va al cobro, no solo a la estimación.
+
+    Si solo afectara a la estimación el pasajero veria un precio y se le
+    cobraría otro: por debajo de 3 km la diferencia son cientos de CUP y es
+    justo el caso corto el que más se nota."""
+
+    def _cobro(self, km, base, pkm, pmin, coef, coef_cortesia):
+        """Reproduce el paso 8 de `complete_trip`: coeficiente, después comisión
+        y descuento sobre ese precio."""
+        minutos = (km / 30.0) * 60.0
+        distance_fare = km * pkm * coef
+        time_fare = minutos * pmin
+        bruto = base + distance_fare + time_fare
+        comision = round(bruto * 0.15, 2)
+        descuento = round(bruto * 0.10, 2)
+        return distance_fare, bruto, comision, max(0.0, round(comision - descuento, 2))
+
+    def test_el_cobro_de_una_carrera_corta_baja(self):
+        base, pkm, pmin = 1500.0, 700.0, 5.0
+        km = 2.0
+
+        con, bruto, _, _ = self._cobro(km, base, pkm, pmin, 0.5, 4.0)
+        sin, bruto_sin, _, _ = self._cobro(km, base, pkm, pmin, 1.0, 4.0)
+
+        # 2 km * 700 * 0.5 = 700 en vez de 1400.
+        self.assertAlmostEqual(con, 700.0, places=2)
+        self.assertAlmostEqual(bruto - bruto_sin, -700.0, places=2)
+
+    def test_una_carrera_larga_se_cobra_entera(self):
+        base, pkm, pmin = 1500.0, 700.0, 5.0
+        km, coef = 15.0, 1.0
+        con, _, _, _ = self._cobro(km, base, pkm, pmin, coef, 4.0)
+        self.assertAlmostEqual(con, km * pkm, places=2)
+
+    def test_el_precio_pagado_y_la_estimacion_no_se_difieren(self):
+        """La garantía que importa: lo que ve el pasajero al pedir y lo que se le
+        cobra tienen que salir de la misma función. Si un camino se queda sin
+        coeficiente, esta comprobación falla."""
+        import inspect
+        from routers.Solicitud_de_viajes_v4 import complete_trip, _price_breakdown
+        fuente = inspect.getsource(complete_trip).lower()
+
+        # Ambos caminos llaman a la misma función, y ninguno multiplica el
+        # kilometraje por su cuenta.
+        self.assertIn("coeficiente_por_distancia(distance_km, promo)", fuente)
+        self.assertEqual(fuente.count("coeficiente_por_distancia("), 1)
+        self.assertIn(
+            "distance_fare = distance_km * price_per_km * float(coeficiente)", fuente)
+
+        estimacion = _price_breakdown(2.0, "basico")
+        # La estimación y el cobro comparten la fórmula y la misma función.
+        self.assertEqual(estimacion["coeficiente"],
+                         float(coeficiente_por_distancia(Decimal("2"), promo())))
+        self.assertAlmostEqual(estimacion["distance_fare"],
+                               2.0 * estimacion["price_per_km"]
+                               * estimacion["coeficiente"], places=2)
+
+    def test_la_comision_baja_con_el_precio_y_no_se_paga_dos_veces(self):
+        """El coeficiente baja el precio, así que la comisión baja con él. Pero
+        el descuento al cliente sale de esa comisión, nunca de más: la
+        plataforma no puede terminar pagando."""
+        base, pkm, pmin = 1500.0, 700.0, 5.0
+        _, _, comision, cobrado = self._cobro(2.0, base, pkm, pmin, 0.5, 4.0)
+        _, _, comision_sin, cobrado_sin = self._cobro(2.0, base, pkm, pmin, 1.0, 4.0)
+
+        self.assertLess(comision, comision_sin)
+        self.assertLess(cobrado, cobrado_sin)
+        # Y lo que se le paga a la plataforma nunca es negativo.
+        self.assertGreaterEqual(cobrado, 0.0)
+
+    def test_un_viaje_largo_no_le_cuesta_menos_al_chofer(self):
+        """Con el tramo largo a 1.0, el chofer cobra lo de siempre. El
+        coeficiente no puede convertirse en una forma de cobrarle menos."""
+        base, pkm, pmin = 1500.0, 700.0, 5.0
+        km = 12.0
+        coef = float(coeficiente_por_distancia(Decimal(km), promo()))
+        self.assertEqual(coef, 1.0)
+        con, _, _, _ = self._cobro(km, base, pkm, pmin, coef, 4.0)
+        sin, _, _, _ = self._cobro(km, base, pkm, pmin, 1.0, 4.0)
+        self.assertAlmostEqual(con, sin, places=2)
+
+
 # ===================== ESPERA DE CORTESIA =====================
 
 class TestEsperaCortesia(unittest.TestCase):

@@ -279,7 +279,13 @@ def init_db():
             ADD COLUMN IF NOT EXISTS comision_nominal NUMERIC(12,2),
             ADD COLUMN IF NOT EXISTS hora_llegada TIMESTAMP,
             ADD COLUMN IF NOT EXISTS espera_secs INTEGER DEFAULT 0,
-            ADD COLUMN IF NOT EXISTS excedente_espera_secs INTEGER DEFAULT 0;
+            ADD COLUMN IF NOT EXISTS excedente_espera_secs INTEGER DEFAULT 0,
+            -- Que coeficiente se aplico a este viaje. Sin esto no hay forma de
+            -- saber despues por que un viaje corto salio mas barato: el
+            -- administrador puede haber cambiado los tramos entre la estimacion
+            -- y el cobro, y sin guardar el valor la reclamacion no se puede
+            -- responder. NULL en los viajes anteriores a esta columna.
+            ADD COLUMN IF NOT EXISTS coeficiente_aplicado NUMERIC(6,4);
     """
 
     create_transactions_table = """
@@ -706,6 +712,7 @@ def get_trip(trip_id: str) -> Optional[dict]:
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
                 hora_llegada, espera_secs, excedente_espera_secs,
+                coeficiente_aplicado,
                 GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
@@ -953,8 +960,25 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 espera_secs, duration_secs, cortesia_min)
             duration_min = duracion_facturable / 60.0
 
-            # 8. Calcular componentes de tarifa
-            distance_fare = distance_km * price_per_km
+            # 8. Calcular componentes de tarifa.
+            #
+            # La promocion se lee AQUI, antes de tocar el dinero. Antes se leia
+            # dos lineas mas abajo, despues de haber calculado el precio, y el
+            # coeficiente que se aplica ahora necesita de ella. Si se deja mas
+            # abajo, el coeficiente del cierre sale de otra lectura y el precio
+            # que ve el pasajero al pedir no es el que se le cobra.
+            promo = leer_promocion()
+
+            # El coeficiente por distancia se aplica aqui y en la estimacion,
+            # que es `_price_breakdown`. Los dos caminos tienen que usar la misma
+            # funcion (`coeficiente_por_distancia`) o el pasajero acepta un
+            # precio que luego no se le cobra.
+            #
+            # Solo toca el kilometraje: la base y el tiempo se cobran enteros, y
+            # bajarlos seria bajar el suelo de todos los viajes.
+            coeficiente = coeficiente_por_distancia(distance_km, promo)
+            distance_fare = distance_km * price_per_km * float(coeficiente)
+            distance_fare_sin_coeficiente = distance_km * price_per_km
             time_fare = duration_min * price_per_minute
 
             # `precio_bruto` es lo que costaria el viaje sin promociones. Todo lo
@@ -964,8 +988,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             # 15% del precio con descuento, y ese dinero es suyo.
             precio_bruto = base_fare + distance_fare + time_fare + tip
 
-            # 8b. Promocion vigente y descuento al cliente.
-            promo = leer_promocion()
+            # 8b. Descuento al cliente con la promocion ya leida.
             descuento_cliente = calcular_descuento_cliente(
                 Decimal(str(precio_bruto)), promo)
 
@@ -989,6 +1012,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     comision_nominal = %s,
                     espera_secs = %s,
                     excedente_espera_secs = %s,
+                    coeficiente_aplicado = %s,
                     currency = 'CUP'
                 WHERE trip_id = %s
                 RETURNING *;
@@ -997,7 +1021,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 distance_km, duracion_facturable,
                 base_fare, distance_fare, tip, total_fare,
                 float(descuento_cliente), None,
-                espera_secs, excedente_secs,
+                espera_secs, excedente_secs, float(coeficiente),
                 trip_id
             ))
             updated_trip = cur.fetchone()
@@ -1071,6 +1095,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "hora_inicio_viaje": (started.isoformat() if started else None),
                 "base_fare": float(updated_trip["base_fare"]),
                 "distance_fare": float(updated_trip["distance_fare"]),
+                # Lo que habria costado el kilometraje sin coeficiente. Se manda
+                # para que el chofer vea de cuanto le bajo el tramo corto en vez
+                # de encontrarse un numero menor sin explicacion.
+                "distance_fare_sin_coeficiente": round(distance_fare_sin_coeficiente, 2),
+                "coeficiente_aplicado": float(coeficiente),
                 "time_fare": round(time_fare, 2),
                 "tip": float(updated_trip["tip"]),
                 "precio_bruto": round(float(precio_bruto), 2),
@@ -1123,6 +1152,7 @@ def get_trips_by_client(client_id: str, limit: int = 50) -> list[dict]:
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
                 hora_llegada, espera_secs, excedente_espera_secs,
+                coeficiente_aplicado,
                 GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
@@ -1151,6 +1181,7 @@ def get_trips_by_driver(driver_id: str, limit: int = 50) -> list[dict]:
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
                 hora_llegada, espera_secs, excedente_espera_secs,
+                coeficiente_aplicado,
                 GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
@@ -1179,6 +1210,7 @@ def get_trips_by_status(status: str, limit: int = 50) -> list[dict]:
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
                 hora_llegada, espera_secs, excedente_espera_secs,
+                coeficiente_aplicado,
                 GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
@@ -1254,6 +1286,7 @@ def get_nearby_requested_trips(
                 ST_AsText(dropoff_location) as dropoff_location,
                 requested_at, started_at, completed_at, created_at,
                 hora_llegada, espera_secs, excedente_espera_secs,
+                coeficiente_aplicado,
                 GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
