@@ -49,14 +49,22 @@ class DriverProfile {
     this.documentsVerified = true,
   });
 
-  factory DriverProfile.fromJson(Map<String, dynamic> j) {
+factory DriverProfile.fromJson(Map<String, dynamic> j) {
     final nombre =
         _str(j, ['Nombre', 'nombre', 'name']) ?? _nested(j, 'profile', 'name') ?? '';
     final apellidos =
         _str(j, ['Apellidos', 'apellidos']) ?? '';
     final vehicle = j['vehicle'];
+    // El tipo de vehiculo llega en varias claves segun por donde se creo la
+    // cuenta. `vehicle.servicio` es la que escribe el registro con fotos, y antes
+    // no se leia: el tipo llegaba null a la app y el backend, al no recibeirlo,
+    // devolvia TODAS las ofertas. Un basico veia las de moto.
     final vtype = vehicle is Map
-        ? (vehicle['type'] ?? j['vehicle_type'] ?? j['type_vehicle'])
+        ? (vehicle['servicio'] ??
+            vehicle['type'] ??
+            vehicle['tipo'] ??
+            j['vehicle_type'] ??
+            j['type_vehicle'])
         : (j['vehicle_type'] ?? j['type_vehicle']);
     return DriverProfile(
       id: (j['_id'] ?? j['id'] ?? '').toString(),
@@ -66,7 +74,7 @@ class DriverProfile {
       telefono: _str(j, ['numero_de_telefono', 'phone']) ?? '',
       fondo: (j['Fondo'] ?? j['fondo'] ?? 0).toDouble(),
       raiting: (j['raiting'] ?? j['rating'] ?? j['Rating'] ?? 5.0).toDouble(),
-      vehicleType: vtype?.toString(),
+      vehicleType: _normalizarTipo(vtype),
       vehicleModel: _vehicleModelOf(j),
       licenseNumber: _str(j, ['license_number', 'licenseNumber']),
       maxPassengers: (j['max_passengers'] ?? 4).toInt(),
@@ -74,7 +82,37 @@ class DriverProfile {
     );
   }
 
+  /// Tipo de vehiculo del chofer, ya normalizado.
+  ///
+  /// Si el chofer no tiene tipo declarado devuelve null a proposito: no se
+  /// inventa un 'basico'. Con null no llegan ofertas, que es lo correcto; con un
+  /// tipo inventado llegan ofertas de un vehiculo que no es el suyo.
+  String? get tipoVehiculo => _normalizarTipo(vehicleType);
+
+  /// Sin tipo declarado no se puede trabajar con seguridad.
+  bool get sinTipoVehiculo => tipoVehiculo == null;
+
   String get fullName => '$nombre $apellidos'.trim();
+}
+
+/// Normaliza un tipo de vehiculo: quita tildes, espacios y mayusculas.
+///
+/// Hace falta porque la base guarda 'básico' con tilde y la app escribe
+/// 'basico'. Comparar sin normalizar haria que un chofer basico no viera sus
+/// propias ofertas, que es el mismo fallo pero del lado opuesto, y igual de malo.
+String? _normalizarTipo(Object? valor) {
+  if (valor == null) return null;
+  var texto = valor.toString().trim();
+  if (texto.isEmpty) return null;
+  // 'básico' -> 'basico'. Se recorre el mapa en vez de usar una libreria de
+  // acentos porque son nueve letras y el proyecto no tiene esa dependencia.
+  const acentos = {
+    'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
+    'Á': 'a', 'É': 'e', 'Í': 'i', 'Ó': 'o', 'Ú': 'u', 'ü': 'u', 'Ü': 'u',
+    'ñ': 'n',
+  };
+  texto = texto.split('').map((c) => acentos[c] ?? c).join();
+  return texto.replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
 }
 
 /// Extrae "Marca model" del dict `vehicle` (ej. "Lada 2105").

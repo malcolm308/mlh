@@ -196,6 +196,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   final Map<String, TripOffer> _ofertaCache = <String, TripOffer>{};
 
   final Set<String> _declinedTripIds = <String>{};
+
+  /// Id del chofer al que ya se le aviso que no tiene tipo de vehiculo. Evita
+  /// que el aviso salga en cada sondeo, que es cada 4 segundos.
+  String? _avisoSinTipoMostrado;
+
   List<LatLng> _route = [];
   List<LatLng> _routeToPickup = [];
 
@@ -706,6 +711,29 @@ double? _rumboParaFlecha() {
     mq.showSnackBar(SnackBar(content: Text(texto)));
   }
 
+  /// Dos tipos de vehiculo son el mismo solo si coinciden EXACTAMENTE.
+  ///
+  /// La comparacion va sobre el valor normalizado (sin tildes, sin espacios y
+  /// en minusculas) porque la base guarda 'básico' con tilde y la app escribe
+  /// 'basico'. Sin normalizar, un chofer basico descartaria sus propias ofertas.
+  ///
+  /// Si alguno de los dos se desconoce devuelve false: no se puede afirmar que
+  /// dos desconocidos coincidan. Preferimos taparnos una oferta a ofrecer un
+  /// viaje de moto a un chofer de taxi.
+  bool _mismoTipo(String? a, String? b) {
+    final na = _normTipo(a);
+    final nb = _normTipo(b);
+    if (na == null || nb == null) return false;
+    return na == nb;
+  }
+
+  String? _normTipo(String? valor) {
+    if (valor == null) return null;
+    final texto = valor.trim();
+    if (texto.isEmpty) return null;
+    return texto.toLowerCase();
+  }
+
   void _startTicker() {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 4), (_) => _tick());
@@ -723,26 +751,63 @@ double? _rumboParaFlecha() {
     _refrescarSaldo();
 
     try {
+      final tipoChofer = widget.profile.tipoVehiculo;
+
+      // Sin tipo declarado no se sondea nada. El backend ya devuelve una lista
+      // vacia en ese caso, pero no se le pregunta: si el filtro del servidor
+      // llegara a fallar, este chofer veria ofertas de vehiculos que no son el
+      // suyo y no tendria forma de saber por que.
+      if (tipoChofer == null) {
+        if (_avisoSinTipoMostrado != widget.profile.id) {
+          _avisoSinTipoMostrado = widget.profile.id;
+          _mostrarAviso(
+              'No tienes un tipo de vehiculo definido, por eso no te llegan '
+              'ofertas. Pidele al administrador que lo ponga en tu ficha.');
+        }
+        return;
+      }
+
       final list = await widget.api.getNearbyRequestedTrips(
         _driverPos.latitude,
         _driverPos.longitude,
         driverId: widget.driverId,
         // El backend filtra por esto: solo llegan ofertas del mismo tipo de
         // vehiculo que declara el chofer.
-        vehicleType: widget.profile.vehicleType,
+        vehicleType: tipoChofer,
       );
       if (!mounted) return;
       final now = DateTime.now().toUtc();
-      for (final o in list) {
+
+      // SEGUNDA BARRERA. El backend ya filtra, pero el filtro tambien se
+      // comprueba aqui: si el tipo viaja mal, o el backend cambia, o llega una
+      // oferta por otra via (una notificacion push, una recuperacion del estado), este
+      // chofer no debe ver un viaje que no puede hacer. Moto con moto, triciclo
+      // con triciclo, basico con basico, confort con confort. Sin excepciones.
+      final deOtroTipo = list
+          .where((o) => !_mismoTipo(o.vehicleType, tipoChofer))
+          .toList();
+      if (deOtroTipo.isNotEmpty) {
+        debugPrint('[OFERTA] DESCARTADAS por tipo: '
+            '${deOtroTipo.map((o) => "${o.tripId}:${o.vehicleType}").join(", ")} '
+            '(el chofer es $tipoChofer)');
+      }
+
+      final propias = list
+          .where((o) => _mismoTipo(o.vehicleType, tipoChofer))
+          .toList();
+
+      for (final o in propias) {
         final dl = _offerDeadlineRaw(o);
-        debugPrint('[OFERTA] trip=${o.tripId} pickup=${o.pickup} '
+        debugPrint('[OFERTA] trip=${o.tripId} tipo=${o.vehicleType} '
+            'pickup=${o.pickup} '
             'deadline=${dl?.toIso8601String()} ahora=${now.toIso8601String()} '
             'vence=${dl == null ? "sin-plazo" : dl.isAfter(now)}');
       }
-      debugPrint('[OFERTA] recibidas=${list.length} online=$_online '
+      debugPrint('[OFERTA] recibidas=${list.length} propias=${propias.length} '
+          'online=$_online '
           'activeTrip=${_activeTrip?.tripId} lost=${_lostOffer?.tripId} '
           'selected=${_selectedOffer?.tripId}');
-      final offers = list
+      final offers = propias
           .where((o) =>
               o.pickup != null &&
               !_declinedTripIds.contains(o.tripId) &&

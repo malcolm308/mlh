@@ -1091,13 +1091,29 @@ def get_nearby_requested_trips(
     """
     params: list = [lng, lat, radius_km]
 
-    # Solo se filtra si el conductor manda su tipo. Si no lo manda, el
-    # comportamiento es el de siempre: ver todo (por ejemplo, cuando el viaje
-    # se crea sin tipo y el backend asume 'basico').
+    # FALLO CERRADO A PROPOSITO.
+    #
+    # Antes aqui solo se filtraba si el conductor mandaba su tipo:
+    #
+    #     if tipo_norm:  where += " AND lower(vehicle_type) = %s"
+    #
+    # y si no lo mandaba, se le devolvian TODAS las ofertas. Como la app del
+    # chofer llegaba sin tipo (el campo no venía en la respuesta del perfil), el
+    # filtro no se aplicaba nunca: un conductor 'basico' veia ofertas de 'moto',
+    # de 'triciclo' y de 'confort', que no puede atender.
+    #
+    # Un filtro que se salta cuando falta un dato no es un filtro. Si el
+    # conductor no declara que vehiculo tiene, no se le ofrece nada: es la unica
+    # forma de que el error se vea (no le llegan ofertas) en vez de dejarle
+    # aceptar un viaje que no puede hacer.
     tipo_norm = _normalize_vehicle_type(vehicle_type)
-    if tipo_norm:
-        where += "          AND lower(vehicle_type) = %s"
-        params.append(tipo_norm)
+    if not tipo_norm:
+        logger.warning("Sondeo de ofertas sin vehicle_type: no se devuelve nada. "
+                       "El conductor tiene que declarar su vehiculo.")
+        return []
+
+    where += "          AND lower(vehicle_type) = %s"
+    params.append(tipo_norm)
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2045,9 +2061,11 @@ async def api_get_requested_trips_nearby(
     vehicle_type: Optional[str] = Query(
         None,
         description=(
-            "Tipo de vehiculo del conductor. Si se envia, solo devuelve viajes "
-            "que piden ese mismo tipo: es lo que evita que un chofer con moto "
-            "vea ofertas de un viaje 'confort'."
+            "Tipo de vehiculo del conductor, obligatorio en la practica. Solo "
+            "devuelve viajes que piden EXACTAMENTE ese tipo: es lo que evita que "
+            "un chofer con moto vea ofertas de un viaje 'confort'. Si no se envia, "
+            "no devuelve nada, porque un filtro que se salta cuando falta un dato "
+            "dejaria ver todas las ofertas."
         ),
     ),
 ):
@@ -2192,6 +2210,33 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
         raise HTTPException(404, "Viaje no encontrado")
     if trip["status"] != "requested":
         raise HTTPException(400, f"El viaje no está disponible (estado: {trip['status']})")
+
+    # TERCERA BARRERA, y la que de verdad importa: el tipo de vehiculo.
+    #
+    # El sondeo ya filtra y la app del chofer tambien descarta lo que no sea de su
+    # tipo, pero aceptar es el punto sin retorno. Si aqui no se comprueba, una
+    # oferta que se colara por cualquier motivo (un fallo de cache, un endpoint
+    # nuevo, una app vieja sin el filtro) dejaria a un chofer de basico atado a un
+    # viaje de moto, y ese chofer no tendria forma de deshacerlo.
+    #
+    # Se compara el tipo NORMALIZADO y con igualdad exacta. Y si el chofer no
+    # tiene tipo declarado, no puede aceptar: no sabemos que vehiculo maneja.
+    doc_chofer = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)}) or {}
+    tipo_chofer = _driver_vehicle_type(doc_chofer)
+    tipo_viaje = _normalize_vehicle_type(trip.get("vehicle_type"))
+
+    if tipo_chofer is None or tipo_viaje is None or tipo_chofer != tipo_viaje:
+        logger.warning("intento de aceptar con vehiculo que no toca: "
+                       "chofer=%s (%s) trip=%s (%s)",
+                       driver_id, tipo_chofer, trip_id, tipo_viaje)
+        raise HTTPException(400, {
+            "code": "tipo_vehiculo_no_coincide",
+            "detail": "Este viaje pide un vehículo de tipo %s y tu ficha dice %s. "
+                      "No puedes aceptarlo."
+                      % (tipo_viaje or "desconocido", tipo_chofer or "sin definir"),
+            "tipo_chofer": tipo_chofer,
+            "tipo_viaje": tipo_viaje,
+        })
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

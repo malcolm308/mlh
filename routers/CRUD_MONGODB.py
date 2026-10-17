@@ -3,7 +3,7 @@ sys.path.insert(0, "E:\\Taxi_Rapid")
 
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Union
 from bson import ObjectId
 import bcrypt
@@ -18,6 +18,8 @@ from db.Cliente.models import CLIENTE
 from db.Cliente.auth import create_access_token as create_access_token_cliente, verify_token as verify_token_cliente
 
 from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
+from services.tipo_vehiculo import (normalizar_tipo_vehiculo,
+                                    resolver_tipo_vehiculo)
 
 from db.Administración.connection import admin_db
 from db.Administración.models import ADMINISTRADOR
@@ -74,6 +76,12 @@ class ChoferResponse(BaseModel):
     raiting: Optional[float] = None
     vehicle: Optional[dict] = None
     vehicle_type: Optional[str] = None
+    # El documento de Mongo guarda el tipo repartido en `type_vehicle`,
+    # `vehicle_type`, `vehicle.servicio` y `vehicle.type`. Este campo se declara
+    # para que Pydantic no lo borre al validar, que es lo que pasaba y hacia que
+    # la app recibiera null. `vehicle_type` sale ya resuelto y normalizado por el
+    # validador de abajo.
+    type_vehicle: Optional[str] = None
     license_number: Optional[str] = None
     status: Optional[str] = None
     documents_verified: Optional[bool] = None
@@ -93,6 +101,32 @@ class ChoferResponse(BaseModel):
     # asi que se acepta cualquiera de los dos y se serializa como ISO.
     created_at: Optional[Union[str, datetime]] = None
     updated_at: Optional[Union[str, datetime]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolver_tipo(cls, datos):
+        """Rellena `vehicle_type` con el tipo REAL del chofer, ya normalizado.
+
+        Sin esto la app del chofer recibia el tipo en null, no lo mandaba al
+        sondeo de ofertas y el backend le enseñaba TODAS las ofertas: un basico
+        veia las de moto. El fallo era silencioso en los dos extremos.
+
+        Se hace aqui y no en cada endpoint porque las dos apps leen
+        `vehicle_type` de este mismo JSON. Arreglando el contrato una vez se
+        arregla para las dos, sin tocar el Dart.
+        """
+        if not isinstance(datos, dict):
+            return datos
+        if normalizar_tipo_vehiculo(datos.get("vehicle_type")):
+            datos["vehicle_type"] = normalizar_tipo_vehiculo(datos["vehicle_type"])
+            return datos
+
+        resuelto = resolver_tipo_vehiculo(datos)
+        if resuelto:
+            datos["vehicle_type"] = resuelto
+            if not datos.get("type_vehicle"):
+                datos["type_vehicle"] = resuelto
+        return datos
 
     class Config:
         populate_by_name = True
