@@ -207,6 +207,64 @@ class TestCobroReal(unittest.TestCase):
         self.assertAlmostEqual(con, sin, places=2)
 
 
+# ===================== ZONA ESPECIAL =====================
+
+class TestZonaEspecial(unittest.TestCase):
+    """Cada vehiculo tiene su precio por km dentro de la zona especial.
+
+    El poligono son los cuatro puntos que dan forma al centro de La Habana:
+    el orden en que se dan puede cruzarse (poligono auto-intersectante), asi
+    que la deteccion tiene que tolerarlo y no devolver siempre False.
+    """
+
+    POLIGONO = [
+        [23.001228, -82.416735],
+        [23.007982, -82.394788],
+        [22.989298, -82.413242],
+        [23.001007, -82.389251],
+    ]
+    # Punto real de un destino del centro (dentro).
+    DENTRO = (22.99888251875508, -82.40861888748942)
+    # Wajay / Terminal 3: fuera del poligono.
+    FUERA = (22.9859, -82.4086)
+
+    def setUp(self):
+        from routers.Solicitud_de_viajes_v4 import _punto_en_zona_especial
+        self.en_zona = _punto_en_zona_especial
+        self.promo = {"zona_especial_coords": self.POLIGONO}
+
+    def test_el_punto_dentro_se_detecta(self):
+        self.assertTrue(self.en_zona(self.DENTRO[0], self.DENTRO[1], self.promo))
+
+    def test_un_punto_fuera_no_entra(self):
+        self.assertFalse(self.en_zona(self.FUERA[0], self.FUERA[1], self.promo))
+
+    def test_cada_vehiculo_tiene_su_precio_en_zona(self):
+        from routers.Solicitud_de_viajes_v4 import _precio_km_por_zona
+        esperado = {"basico": 1000.0, "confort": 1200.0,
+                    "triciclo": 700.0, "moto": 600.0}
+        for vehiculo, precio in esperado.items():
+            with self.subTest(vehiculo=vehiculo):
+                self.assertEqual(
+                    _precio_km_por_zona(self.promo, vehiculo, *self.DENTRO),
+                    precio)
+
+    def test_fuera_de_zona_no_hay_precio_especial(self):
+        from routers.Solicitud_de_viajes_v4 import _precio_km_por_zona
+        for vehiculo in ("basico", "confort", "triciclo", "moto"):
+            with self.subTest(vehiculo=vehiculo):
+                self.assertIsNone(
+                    _precio_km_por_zona(self.promo, vehiculo, *self.FUERA))
+
+    def test_los_precios_de_zona_se_pueden_cambiar(self):
+        from routers.Solicitud_de_viajes_v4 import _precio_km_por_zona
+        p = dict(self.promo)
+        p["precio_km_zona_triciclo"] = 750.0
+        p["precio_km_zona_moto"] = 650.0
+        self.assertEqual(_precio_km_por_zona(p, "triciclo", *self.DENTRO), 750.0)
+        self.assertEqual(_precio_km_por_zona(p, "moto", *self.DENTRO), 650.0)
+
+
 # ===================== DISTANCIA POR CALLE (OSRM) =====================
 
 class TestDistanciaPorCalle(unittest.TestCase):

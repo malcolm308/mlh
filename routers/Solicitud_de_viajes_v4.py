@@ -91,11 +91,22 @@ def _punto_en_zona_especial(lat: float, lng: float, promo: dict) -> bool:
 
 def _precio_km_por_zona(promo: dict, vehicle_type: str, lat: float, lng: float):
     if _punto_en_zona_especial(lat, lng, promo):
-        if str(vehicle_type).lower() == "confort":
+        tipo = str(vehicle_type).lower()
+        if tipo == "confort":
             try:
                 return float(promo.get("precio_km_zona_confort") or 1200.0)
             except Exception:
                 return 1200.0
+        if tipo == "triciclo":
+            try:
+                return float(promo.get("precio_km_zona_triciclo") or 700.0)
+            except Exception:
+                return 700.0
+        if tipo == "moto":
+            try:
+                return float(promo.get("precio_km_zona_moto") or 600.0)
+            except Exception:
+                return 600.0
         try:
             return float(promo.get("precio_km_zona_basico") or 1000.0)
         except Exception:

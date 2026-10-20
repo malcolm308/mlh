@@ -118,6 +118,8 @@ ALTER_PROMOCIONES = """
             ADD COLUMN IF NOT EXISTS precio_por_minuto NUMERIC(12,2) DEFAULT 5.00,
             ADD COLUMN IF NOT EXISTS precio_km_zona_basico NUMERIC(12,2) DEFAULT 1000.00,
             ADD COLUMN IF NOT EXISTS precio_km_zona_confort NUMERIC(12,2) DEFAULT 1200.00,
+            ADD COLUMN IF NOT EXISTS precio_km_zona_triciclo NUMERIC(12,2) DEFAULT 700.00,
+            ADD COLUMN IF NOT EXISTS precio_km_zona_moto NUMERIC(12,2) DEFAULT 600.00,
             ADD COLUMN IF NOT EXISTS zona_especial_coords JSONB;
     """
 
@@ -192,6 +194,8 @@ def leer_promocion() -> Dict[str, Any]:
         "precio_por_minuto": Decimal("5.0"),
         "precio_km_zona_basico": Decimal("1000.0"),
         "precio_km_zona_confort": Decimal("1200.0"),
+        "precio_km_zona_triciclo": Decimal("700.0"),
+        "precio_km_zona_moto": Decimal("600.0"),
         "zona_especial_coords": [
             [23.001228, -82.416735],
             [23.007982, -82.394788],
@@ -234,6 +238,8 @@ def leer_promocion() -> Dict[str, Any]:
             "precio_por_minuto": _a_decimal(fila.get("precio_por_minuto"), Decimal("5.0")),
             "precio_km_zona_basico": _a_decimal(fila.get("precio_km_zona_basico"), Decimal("1000.0")),
             "precio_km_zona_confort": _a_decimal(fila.get("precio_km_zona_confort"), Decimal("1200.0")),
+            "precio_km_zona_triciclo": _a_decimal(fila.get("precio_km_zona_triciclo"), Decimal("700.0")),
+            "precio_km_zona_moto": _a_decimal(fila.get("precio_km_zona_moto"), Decimal("600.0")),
             "zona_especial_coords": fila.get("zona_especial_coords") or [
                 [23.001228, -82.416735],
                 [23.007982, -82.394788],
@@ -579,6 +585,8 @@ class TarifasEsperaIn(BaseModel):
     precio_por_minuto: Optional[float] = Field(5.0)
     precio_km_zona_basico: Optional[float] = Field(1000.0)
     precio_km_zona_confort: Optional[float] = Field(1200.0)
+    precio_km_zona_triciclo: Optional[float] = Field(700.0)
+    precio_km_zona_moto: Optional[float] = Field(600.0)
     zona_especial_coords: Optional[Any] = Field(
         default_factory=lambda: [
             [23.001228, -82.416735],
@@ -647,6 +655,11 @@ async def obtener_tarifas_espera():
         "coef_medio_valor": _a_dinero(promo["coef_medio_valor"]),
         "coef_largo_valor": _a_dinero(promo["coef_largo_valor"]),
         "tiempo_espera_cortesia_minutos": _a_dinero(promo["tiempo_espera_cortesia_minutos"]),
+        "precio_por_minuto": _a_dinero(promo["precio_por_minuto"]),
+        "precio_km_zona_basico": _a_dinero(promo["precio_km_zona_basico"]),
+        "precio_km_zona_confort": _a_dinero(promo["precio_km_zona_confort"]),
+        "precio_km_zona_triciclo": _a_dinero(promo["precio_km_zona_triciclo"]),
+        "precio_km_zona_moto": _a_dinero(promo["precio_km_zona_moto"]),
         "tramos": [
             {"hasta_km": _a_dinero(promo["coef_corto_km"]),
              "coeficiente": _a_dinero(promo["coef_corto_valor"])},
@@ -712,6 +725,11 @@ def _a_json(promo: Dict[str, Any]) -> Dict[str, Any]:
         "coef_medio_valor": float(promo["coef_medio_valor"]),
         "coef_largo_valor": float(promo["coef_largo_valor"]),
         "tiempo_espera_cortesia_minutos": float(promo["tiempo_espera_cortesia_minutos"]),
+        "precio_km_zona_basico": float(promo["precio_km_zona_basico"]),
+        "precio_km_zona_confort": float(promo["precio_km_zona_confort"]),
+        "precio_km_zona_triciclo": float(promo["precio_km_zona_triciclo"]),
+        "precio_km_zona_moto": float(promo["precio_km_zona_moto"]),
+        "zona_especial_coords": promo.get("zona_especial_coords"),
         "actualizado_at": (promo["actualizado_at"].isoformat()
                            if promo["actualizado_at"] else None),
         "actualizado_por": promo["actualizado_por"],
