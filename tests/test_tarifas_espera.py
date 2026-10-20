@@ -207,6 +207,58 @@ class TestCobroReal(unittest.TestCase):
         self.assertAlmostEqual(con, sin, places=2)
 
 
+# ===================== DISTANCIA POR CALLE (OSRM) =====================
+
+class TestDistanciaPorCalle(unittest.TestCase):
+    """Lo que se cobra tiene que ser la distancia POR CALLE, no la recta.
+
+    En La Habana la recta y la ruta real pueden diferir en kilometros. El
+    pasajero ve la ruta de OSRM en el mapa; si se factura otra distancia, el
+    recibo no cuadra y parece un error.
+    """
+
+    def test_usa_la_distancia_de_osrm_cuando_responde(self):
+        from unittest import mock
+        from routers import Solicitud_de_viajes_v4 as sol
+
+        respuesta = {"routes": [{"distance": 19429.5, "duration": 1166.0}]}
+        with mock.patch.object(sol, "_osrm_distance_km", return_value=19.4295) as m:
+            self.assertAlmostEqual(
+                sol.distancia_por_calle_km(23.0, -82.0, 23.1, -82.1), 19.4295)
+            m.assert_called_once()
+
+    def test_si_osrm_falla_cae_a_la_recta(self):
+        from unittest import mock
+        from routers import Solicitud_de_viajes_v4 as sol
+
+        with mock.patch.object(sol, "_osrm_distance_km", return_value=None), \
+             mock.patch.object(sol, "_distancia_recta_km", return_value=16.23) as recta:
+            self.assertAlmostEqual(
+                sol.distancia_por_calle_km(23.0, -82.0, 23.1, -82.1), 16.23)
+            recta.assert_called_once()
+
+    def test_la_estimacion_usa_la_distancia_por_calle(self):
+        from unittest import mock
+        from routers import Solicitud_de_viajes_v4 as sol
+
+        with mock.patch.object(sol, "distancia_por_calle_km", return_value=19.4295):
+            r = sol.estimate_trip_price(23.0, -82.0, 23.1, -82.1, "basico")
+        self.assertAlmostEqual(r["distance_km"], 19.43, places=2)
+
+    def test_el_viaje_guarda_la_distancia_por_calle(self):
+        """El cobro real usa la distancia guardada al crear el viaje, no una
+        recalculada, para no cobrar distinto de lo que se estimo."""
+        import inspect
+        from routers.Solicitud_de_viajes_v4 import create_trip, complete_trip
+
+        crear = inspect.getsource(create_trip).lower()
+        completar = inspect.getsource(complete_trip).lower()
+        # Se crea con distancia por calle...
+        self.assertIn("distancia_por_calle_km(", crear)
+        # ...y se completa leyendo la distancia guardada.
+        self.assertIn('trip.get("distance_km")', completar)
+
+
 # ===================== ESPERA DE CORTESIA =====================
 
 class TestEsperaCortesia(unittest.TestCase):

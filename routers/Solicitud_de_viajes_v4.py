@@ -102,6 +102,72 @@ def _precio_km_por_zona(promo: dict, vehicle_type: str, lat: float, lng: float):
             return 1000.0
     return None
 
+
+# Distancia real POR CALLE entre dos puntos, para cobrar lo mismo que ve el
+# pasajero en el mapa. La distancia que se factura NO puede ser la linea recta
+# de PostGIS: en La Habana la recta y la calle pueden diferir en kilometros, y
+# el pasajero ve en pantalla la ruta de OSRM. Si se cobra con otra distancia,
+# el recibo no cuadra con el mapa y parece un abuso.
+#
+# Se consulta OSRM desde el backend (no desde el movil) porque desde Cuba el
+# host publico de OSRM es inestable y el backend ya tiene un canal fiable al
+# mismo sitio que usa `/api/routing/recalculate`. Si OSRM falla, se cae a la
+# recta de PostGIS para no dejar el viaje sin precio.
+OSRM_BASE_URL = os.getenv(
+    "OSRM_BASE_URL", "https://router.project-osrm.org/route/v1/driving")
+_OSRM_TIMEOUT_S = float(os.getenv("OSRM_TIMEOUT_S", "10"))
+
+
+def _osrm_distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Optional[float]:
+    """Distancia por calle (km) segun OSRM, o None si OSRM no responde."""
+    try:
+        url = (
+            f"{OSRM_BASE_URL}/{lng1},{lat1};{lng2},{lat2}"
+            "?overview=false&alternatives=false"
+        )
+        with urllib.request.urlopen(url, timeout=_OSRM_TIMEOUT_S) as resp:
+            cuerpo = json.loads(resp.read().decode("utf-8"))
+        rutas = cuerpo.get("routes") or []
+        if not rutas:
+            return None
+        metros = float(rutas[0].get("distance", 0.0))
+        if metros <= 0:
+            return None
+        return metros / 1000.0
+    except Exception:
+        logger.warning("OSRM no respondio; se usa distancia en linea recta",
+                       exc_info=True)
+        return None
+
+
+def distancia_por_calle_km(
+    request_lat: float, request_lng: float,
+    dropoff_lat: float, dropoff_lng: float,
+) -> float:
+    """Distancia facturable: por calle (OSRM) y, si falla, linea recta PostGIS."""
+    km = _osrm_distance_km(request_lat, request_lng, dropoff_lat, dropoff_lng)
+    if km is not None:
+        return km
+    return _distancia_recta_km(request_lat, request_lng, dropoff_lat, dropoff_lng)
+
+
+def _distancia_recta_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Distancia geodesica en linea recta (PostGIS), como respaldo."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT ST_Distance(
+                ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
+                ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
+            ) / 1000.0
+            """,
+            (lng1, lat1, lng2, lat2),
+        )
+        valor = float(cur.fetchone()[0] or 0.0)
+        cur.close()
+        return valor
+
 # ===================== Zona horaria Cuba =====================
 CUBA_TZ = ZoneInfo("America/Havana")
 
@@ -692,19 +758,8 @@ def estimate_trip_price(
     vehicle_type: str = "basico",
 ) -> dict:
     """Calcula la tarifa estimada sin crear el viaje (misma distancia y formula que create_trip)."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT ST_Distance(
-                ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
-                ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
-            ) / 1000.0 AS distance_km
-            """,
-            (request_lng, request_lat, dropoff_lng, dropoff_lat),
-        )
-        distance_km = float(cur.fetchone()[0] or 0.0)
-        cur.close()
+    distance_km = distancia_por_calle_km(
+        request_lat, request_lng, dropoff_lat, dropoff_lng)
     return _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
 # ===================== TRIPS =====================
 
@@ -734,13 +789,11 @@ def create_trip(
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         try:
-            cur.execute("""
-                SELECT ST_Distance(
-                    ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
-                    ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
-                ) / 1000.0 AS distance_km
-            """, (request_lng, request_lat, dropoff_lng, dropoff_lat))
-            distance_km = float(cur.fetchone()["distance_km"] or 0.0)
+            # Distancia por calle (OSRM) para que el precio coincida con la ruta
+            # que el pasajero ve en el mapa. Se guarda en el viaje para que el
+            # cobro real use EXACTAMENTE esta misma distancia y no una distinta.
+            distance_km = distancia_por_calle_km(
+                request_lat, request_lng, dropoff_lat, dropoff_lng)
 
             precio_estimado = calculate_estimated_price(distance_km, vehicle_type)
 
@@ -752,12 +805,12 @@ def create_trip(
                 INSERT INTO trips (
                     client_id, driver_id, status, request_location, dropoff_location,
                     equipaje, mascota, num_pasajes, vehicle_type,
-                    precio_estimado, base_fare, request_address, dropoff_address
+                    precio_estimado, base_fare, distance_km, request_address, dropoff_address
                 ) VALUES (
                     %s, %s, %s,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
-                    %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING trip_id;
                 """,
@@ -766,7 +819,7 @@ def create_trip(
                     request_lng, request_lat,
                     dropoff_lng, dropoff_lat,
                     equipaje, mascota, num_pasajes, vehicle_type,
-                    precio_estimado, base_fare,
+                    precio_estimado, base_fare, round(distance_km, 3),
                     request_address, dropoff_address
                 ),
             )
@@ -974,14 +1027,30 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 price_per_minute *= float(time_rule["price_per_minute_multiplier"])
                 applied_rule_desc = time_rule.get("description")
 
-            # 6. Calcular distancia real con PostGIS (entre pickup y dropoff).
-            #    Si el chofer no marco el punto de recogida, se usa la solicitada.
-            cur.execute("""
-                SELECT ST_Distance(COALESCE(pickup_location, request_location),
-                       ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, true) / 1000.0 AS distance_km
-                FROM trips WHERE trip_id = %s
-            """, (dropoff_lng, dropoff_lat, trip_id))
-            distance_km = float(cur.fetchone()["distance_km"] or 0.0)
+            # 6. Distancia real facturable.
+            #    Se usa la distancia POR CALLE que se guardo al crear el viaje
+            #    (OSRM), para que el cobro coincida con la ruta que el pasajero
+            #    vio en el mapa. Solo si no quedo guardada (viajes viejos) se
+            #    recalcula: primero por calle entre pickup y destino, y si OSRM
+            #    falla, la recta de PostGIS.
+            distance_km = trip.get("distance_km")
+            if distance_km is None or float(distance_km) <= 0:
+                # Punto de recogida real (o el solicitado si el chofer no lo marco)
+                cur.execute("""
+                    SELECT ST_Y(COALESCE(pickup_location, request_location)::geometry) AS lat,
+                           ST_X(COALESCE(pickup_location, request_location)::geometry) AS lng
+                    FROM trips WHERE trip_id = %s
+                """, (trip_id,))
+                p = cur.fetchone()
+                if p and p["lat"] is not None and p["lng"] is not None:
+                    distance_km = distancia_por_calle_km(
+                        float(p["lat"]), float(p["lng"]), dropoff_lat, dropoff_lng)
+                else:
+                    distance_km = _distancia_recta_km(
+                        trip["request_location"].y if hasattr(trip["request_location"], "y") else 0.0,
+                        trip["request_location"].x if hasattr(trip["request_location"], "x") else 0.0,
+                        dropoff_lat, dropoff_lng)
+            distance_km = float(distance_km or 0.0)
 
             # 7. Calcular duracion real (desde que se inicio el viaje)
             #
