@@ -56,9 +56,35 @@ def _punto_en_zona_especial(lat: float, lng: float, promo: dict) -> bool:
             coords = json.loads(coords)
         if not coords or len(coords) < 3:
             return False
-        poly = Polygon([(float(c[1]), float(c[0])) for c in coords])
+        # coords vienen como [[lat,lng], ...] desde JSON
+        pts = []
+        for c in coords:
+            if not c or len(c) < 2:
+                continue
+            pts.append((float(c[1]), float(c[0])))
+        if len(pts) < 3:
+            return False
+        try:
+            from shapely.geometry import Polygon as ShapelyPolygon, MultiPoint
+            # Intentar con orden original
+            poly = ShapelyPolygon(pts)
+            if not poly.is_valid:
+                # Reordenar por convex hull para evitar auto-intersección
+                poly = MultiPoint(pts).convex_hull
+        except Exception:
+            poly = Polygon(pts)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        # Si quedó como LineString o Point, intentar con polígono original corregido
+        try:
+            from shapely.geometry import Polygon as ShapelyPolygon
+            if poly.geom_type in ('LineString', 'Point', 'MultiPoint'):
+                poly = ShapelyPolygon(pts)
+                poly = poly.buffer(0)
+        except Exception:
+            pass
         p = Point(float(lng), float(lat))
-        return poly.contains(p) or poly.touches(p)
+        return poly.contains(p) or poly.covers(p) or poly.intersects(p) or poly.touches(p)
     except Exception:
         return False
 
