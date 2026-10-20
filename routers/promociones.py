@@ -114,7 +114,11 @@ ALTER_PROMOCIONES = """
             ADD COLUMN IF NOT EXISTS coef_medio_km NUMERIC(6,2) NOT NULL DEFAULT 10.0,
             ADD COLUMN IF NOT EXISTS coef_medio_valor NUMERIC(6,4) NOT NULL DEFAULT 0.6000,
             ADD COLUMN IF NOT EXISTS coef_largo_valor NUMERIC(6,4) NOT NULL DEFAULT 1.0000,
-            ADD COLUMN IF NOT EXISTS tiempo_espera_cortesia_minutos NUMERIC(6,2) NOT NULL DEFAULT 4.0;
+            ADD COLUMN IF NOT EXISTS tiempo_espera_cortesia_minutos NUMERIC(6,2) NOT NULL DEFAULT 4.0,
+            ADD COLUMN IF NOT EXISTS precio_por_minuto NUMERIC(12,2) DEFAULT 5.00,
+            ADD COLUMN IF NOT EXISTS precio_km_zona_basico NUMERIC(12,2) DEFAULT 1000.00,
+            ADD COLUMN IF NOT EXISTS precio_km_zona_confort NUMERIC(12,2) DEFAULT 1200.00,
+            ADD COLUMN IF NOT EXISTS zona_especial_coords JSONB;
     """
 
 
@@ -185,6 +189,15 @@ def leer_promocion() -> Dict[str, Any]:
         "coef_medio_valor": Decimal("0.6"),
         "coef_largo_valor": Decimal("1.0"),
         "tiempo_espera_cortesia_minutos": Decimal("4.0"),
+        "precio_por_minuto": Decimal("5.0"),
+        "precio_km_zona_basico": Decimal("1000.0"),
+        "precio_km_zona_confort": Decimal("1200.0"),
+        "zona_especial_coords": [
+            [23.001228, -82.416735],
+            [23.007982, -82.394788],
+            [22.989298, -82.413242],
+            [23.001007, -82.389251],
+        ],
         "actualizado_at": None,
         "actualizado_por": None,
     }
@@ -218,6 +231,15 @@ def leer_promocion() -> Dict[str, Any]:
             "coef_largo_valor": _a_decimal(fila.get("coef_largo_valor"), Decimal("1.0")),
             "tiempo_espera_cortesia_minutos": _a_decimal(
                 fila.get("tiempo_espera_cortesia_minutos"), Decimal("4.0")),
+            "precio_por_minuto": _a_decimal(fila.get("precio_por_minuto"), Decimal("5.0")),
+            "precio_km_zona_basico": _a_decimal(fila.get("precio_km_zona_basico"), Decimal("1000.0")),
+            "precio_km_zona_confort": _a_decimal(fila.get("precio_km_zona_confort"), Decimal("1200.0")),
+            "zona_especial_coords": fila.get("zona_especial_coords") or [
+                [23.001228, -82.416735],
+                [23.007982, -82.394788],
+                [22.989298, -82.413242],
+                [23.001007, -82.389251],
+            ],
             "actualizado_at": fila.get("actualizado_at"),
             "actualizado_por": fila.get("actualizado_por"),
         })
@@ -487,6 +509,14 @@ async def obtener_promocion(admin: dict = Depends(require_admin)):
     """Configuracion vigente, con los valores ya resueltos y las reglas de
     negocio ya aplicadas, para que el panel no tenga que reimplementarlas."""
     promo = leer_promocion()
+    # Asegura zona en formato JSON serializable
+    try:
+        z = promo.get("zona_especial_coords")
+        if isinstance(z, str):
+            import json
+            promo["zona_especial_coords"] = json.loads(z)
+    except Exception:
+        pass
     return _a_json(promo)
 
 
@@ -546,6 +576,17 @@ class TarifasEsperaIn(BaseModel):
         1.0, description="Por encima del tramo medio. Con 1.0 es el precio de siempre.")
     tiempo_espera_cortesia_minutos: Optional[float] = Field(
         4.0, description="Minutos gratis de espera. Lo que pase de ahi se paga al chofer.")
+    precio_por_minuto: Optional[float] = Field(5.0)
+    precio_km_zona_basico: Optional[float] = Field(1000.0)
+    precio_km_zona_confort: Optional[float] = Field(1200.0)
+    zona_especial_coords: Optional[Any] = Field(
+        default_factory=lambda: [
+            [23.001228, -82.416735],
+            [23.007982, -82.394788],
+            [22.989298, -82.413242],
+            [23.001007, -82.389251],
+        ],
+    )
 
 
 def _validar_tarifas(datos: "TarifasEsperaIn") -> Dict[str, Any]:

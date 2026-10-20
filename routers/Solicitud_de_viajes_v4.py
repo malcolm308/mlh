@@ -13,6 +13,13 @@ import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 from datetime import datetime, timedelta, date, timezone
 from zoneinfo import ZoneInfo
+
+try:
+    from shapely.geometry import Point, Polygon
+except Exception:
+    Point = None
+    Polygon = None
+from routers.promociones import calcular_descuento_cliente, coeficiente_por_distancia, excedente_espera, leer_promocion  # noqa
 from decimal import Decimal, ROUND_HALF_UP
 from bson import ObjectId
 from pymongo import MongoClient
@@ -29,9 +36,45 @@ logger = logging.getLogger(__name__)
 # aqui y no dentro de las funciones porque `routers.promociones` no importa este
 # modulo (usa `get_connection` por dentro, en tiempo de llamada), asi que no
 # queda ciclo.
-from routers.promociones import (calcular_descuento_cliente,  # noqa: E402
-                                 coeficiente_por_distancia, excedente_espera,
-                                 leer_promocion)
+# ===================== ZONA ESPECIAL =====================
+
+_ZONA_ESPECIAL_POR_DEFECTO = [
+    [23.001228, -82.416735],
+    [23.007982, -82.394788],
+    [22.989298, -82.413242],
+    [23.001007, -82.389251],
+]
+
+
+def _punto_en_zona_especial(lat: float, lng: float, promo: dict) -> bool:
+    if Point is None or Polygon is None:
+        return False
+    coords = promo.get("zona_especial_coords") or _ZONA_ESPECIAL_POR_DEFECTO
+    try:
+        if isinstance(coords, str):
+            import json
+            coords = json.loads(coords)
+        if not coords or len(coords) < 3:
+            return False
+        poly = Polygon([(float(c[1]), float(c[0])) for c in coords])
+        p = Point(float(lng), float(lat))
+        return poly.contains(p) or poly.touches(p)
+    except Exception:
+        return False
+
+
+def _precio_km_por_zona(promo: dict, vehicle_type: str, lat: float, lng: float):
+    if _punto_en_zona_especial(lat, lng, promo):
+        if str(vehicle_type).lower() == "confort":
+            try:
+                return float(promo.get("precio_km_zona_confort") or 1200.0)
+            except Exception:
+                return 1200.0
+        try:
+            return float(promo.get("precio_km_zona_basico") or 1000.0)
+        except Exception:
+            return 1000.0
+    return None
 
 # ===================== Zona horaria Cuba =====================
 CUBA_TZ = ZoneInfo("America/Havana")
@@ -518,18 +561,14 @@ def get_applicable_time_rule(vehicle_type: str, current_time: datetime) -> Optio
         cur.close()
         return dict(row) if row else None
 
-def _price_breakdown(distance_km: float, vehicle_type: str) -> dict:
+def _price_breakdown(distance_km: float, vehicle_type: str, pickup_lat=None, pickup_lng=None, dropoff_lat=None, dropoff_lng=None) -> dict:
     """Calcula los componentes de tarifa usando la tarifa vigente y la regla horaria.
 
-    El coeficiente por distancia se aplica SOLO al subtotal del kilometraje:
+    Fórmula exacta:
+        Precio_Final = Tarifa_Base + (Distancia_Km * Precio_Km_Aplicable * Coeficiente_Distancia) + (Tiempo_Total_Minutos * Precio_Por_Minuto)
 
-        precio = base_fare
-               + (distancia_km * price_per_km * coeficiente)
-               + (minutos_estimados * price_per_minute)
-
-    La tarifa base y el termino por tiempo van enteros: el coeficiente suaviza
-    el kilometraje de las carreras cortas porque ahi el precio por km pesa mas
-    sobre la tarifa final, y tocar la base bajaria el suelo de TODOS los viajes.
+    Precio_Km_Aplicable: zona especial si el DESTINO cae dentro del polígono (1000/1200) o precio estándar.
+    Tiempo_Total_Minutos incluye tiempo de viaje + excedente de espera (se calcula en complete_trip).
     """
     tariff = get_tariff(vehicle_type)
     if not tariff:
@@ -545,27 +584,53 @@ def _price_breakdown(distance_km: float, vehicle_type: str) -> dict:
         price_per_km *= float(time_rule["price_per_km_multiplier"])
         price_per_minute *= float(time_rule["price_per_minute_multiplier"])
 
-    promo = leer_promocion()
+    try:
+        promo = leer_promocion()
+        # Precio por minuto desde configuración global (promociones id=1)
+        ppm = promo.get("precio_por_minuto")
+        if ppm is not None:
+            price_per_minute = float(ppm)
+            if time_rule:
+                price_per_minute = price_per_minute * float(time_rule["price_per_minute_multiplier"])
+    except Exception:
+        promo = {}
+
     coeficiente = coeficiente_por_distancia(distance_km, promo)
 
-    # El coeficiente va aqui y en ningun otro sitio. Si se aplicara despues al
-    # total, bajaria tambien la base y el tiempo, que es justo lo que no se
-    # quiere.
+    precio_km_aplicable = _precio_km_por_zona(
+        promo, vehicle_type,
+        dropoff_lat if dropoff_lat is not None else pickup_lat,
+        dropoff_lng if dropoff_lng is not None else pickup_lng,
+    )
+    if precio_km_aplicable is not None:
+        price_per_km = float(precio_km_aplicable)
+
     distance_fare = distance_km * price_per_km * float(coeficiente)
     distance_fare_sin_coeficiente = distance_km * price_per_km
     time_fare = estimated_time_min * price_per_minute
+    precio_final = base_fare + distance_fare + time_fare
     return {
         "distance_km": round(distance_km, 2),
         "estimated_time_min": round(estimated_time_min, 1),
         "base_fare": round(base_fare, 2),
+        "tarifa_base": round(base_fare, 2),
         "coeficiente": float(coeficiente),
+        "coeficiente_distancia": float(coeficiente),
         "price_per_km": round(price_per_km, 4),
+        "precio_km_aplicable": round(price_per_km, 4),
+        "precio_por_minuto": round(price_per_minute, 4),
         "distance_fare": round(distance_fare, 2),
+        "costo_distancia": round(distance_fare, 2),
         "distance_fare_sin_coeficiente": round(distance_fare_sin_coeficiente, 2),
         "ahorro_por_coeficiente": round(distance_fare_sin_coeficiente - distance_fare, 2),
         "time_fare": round(time_fare, 2),
-        "precio_estimado": round(base_fare + distance_fare + time_fare, 2),
+        "costo_tiempo": round(time_fare, 2),
+        "precio_estimado": round(precio_final, 2),
+        "precio_final": round(precio_final, 2),
         "vehicle_type": vehicle_type,
+        "zona_especial_aplicada": _precio_km_por_zona(promo, vehicle_type,
+                                                       dropoff_lat if dropoff_lat is not None else pickup_lat,
+                                                       dropoff_lng if dropoff_lng is not None else pickup_lng) is not None,
     }
 
 
@@ -614,7 +679,7 @@ def estimate_trip_price(
         )
         distance_km = float(cur.fetchone()[0] or 0.0)
         cur.close()
-    return _price_breakdown(distance_km, vehicle_type)
+    return _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
 # ===================== TRIPS =====================
 
 def create_trip(
@@ -964,28 +1029,34 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             #
             # La promocion se lee AQUI, antes de tocar el dinero. Antes se leia
             # dos lineas mas abajo, despues de haber calculado el precio, y el
-            # coeficiente que se aplica ahora necesita de ella. Si se deja mas
-            # abajo, el coeficiente del cierre sale de otra lectura y el precio
-            # que ve el pasajero al pedir no es el que se le cobra.
+            # coeficiente que se aplica ahora necesita de ella.
             promo = leer_promocion()
 
-            # El coeficiente por distancia se aplica aqui y en la estimacion,
-            # que es `_price_breakdown`. Los dos caminos tienen que usar la misma
-            # funcion (`coeficiente_por_distancia`) o el pasajero acepta un
-            # precio que luego no se le cobra.
-            #
-            # Solo toca el kilometraje: la base y el tiempo se cobran enteros, y
-            # bajarlos seria bajar el suelo de todos los viajes.
+            # Precio por minuto desde configuración global (id=1)
+            try:
+                ppm = promo.get("precio_por_minuto")
+                if ppm is not None:
+                    price_per_minute = float(ppm)
+                    if time_rule:
+                        price_per_minute = price_per_minute * float(time_rule["price_per_minute_multiplier"])
+            except Exception:
+                pass
+
+            # Zona especial según DESTINO
+            precio_km_aplicable_zona = _precio_km_por_zona(
+                promo, vehicle_type,
+                dropoff_lat, dropoff_lng,
+            )
+            if precio_km_aplicable_zona is not None:
+                price_per_km = float(precio_km_aplicable_zona)
+
+            # El coeficiente por distancia se aplica aqui y en la estimacion
             coeficiente = coeficiente_por_distancia(distance_km, promo)
             distance_fare = distance_km * price_per_km * float(coeficiente)
             distance_fare_sin_coeficiente = distance_km * price_per_km
             time_fare = duration_min * price_per_minute
 
-            # `precio_bruto` es lo que costaria el viaje sin promociones. Todo lo
-            # que viene despues se calcula sobre el, NUNCA sobre `total_fare` ya
-            # descontado: si la comision se calculara sobre el precio rebajado,
-            # el chofer perderia la diferencia entre el 15% del precio entero y el
-            # 15% del precio con descuento, y ese dinero es suyo.
+            # `precio_bruto` es lo que costaria el viaje sin promociones.
             precio_bruto = base_fare + distance_fare + time_fare + tip
 
             # 8b. Descuento al cliente con la promocion ya leida.
@@ -1094,15 +1165,21 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                                  if trip.get("hora_llegada") else None),
                 "hora_inicio_viaje": (started.isoformat() if started else None),
                 "base_fare": float(updated_trip["base_fare"]),
+                "tarifa_base": float(updated_trip["base_fare"]),
                 "distance_fare": float(updated_trip["distance_fare"]),
-                # Lo que habria costado el kilometraje sin coeficiente. Se manda
-                # para que el chofer vea de cuanto le bajo el tramo corto en vez
-                # de encontrarse un numero menor sin explicacion.
+                "costo_distancia": float(updated_trip["distance_fare"]),
                 "distance_fare_sin_coeficiente": round(distance_fare_sin_coeficiente, 2),
                 "coeficiente_aplicado": float(coeficiente),
+                "coeficiente_distancia": float(coeficiente),
+                "precio_km_aplicable": round(price_per_km, 4),
+                "precio_por_minuto": round(price_per_minute, 4),
                 "time_fare": round(time_fare, 2),
+                "costo_tiempo": round(time_fare, 2),
+                "costo_tiempo_total": round(time_fare, 2),
+                "tiempo_total_minutos": round(duration_min, 4),
                 "tip": float(updated_trip["tip"]),
                 "precio_bruto": round(float(precio_bruto), 2),
+                "precio_final": float(updated_trip["total_fare"]),
                 "descuento_cliente": float(descuento_cliente),
                 "total_fare": float(updated_trip["total_fare"]),
                 "commission": commission,
