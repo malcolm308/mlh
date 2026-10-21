@@ -926,13 +926,13 @@ def _punto_mas_cercano_a(docs: List[Dict], lat: float, lng: float):
 
 def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
                         centro_lat: float, centro_lng: float) -> List[Dict]:
-    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=400,
+    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=300,
                                                               centro_lat=centro_lat,
                                                               centro_lng=centro_lng),
                                          centro_lat, centro_lng, RADIO_USUARIO_M)
 
     def _buscar_laterales(nombre):
-        docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=400,
+        docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=300,
                                                        centro_lat=centro_lat,
                                                        centro_lng=centro_lng),
                                    centro_lat, centro_lng, RADIO_LATERAL_M)
@@ -940,13 +940,13 @@ def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
             return docs
         sin = _sin_tipo(nombre)
         if sin and sin != nombre:
-            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=400,
+            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=300,
                                                            centro_lat=centro_lat,
                                                            centro_lng=centro_lng),
                                        centro_lat, centro_lng, RADIO_LATERAL_M)
         if not docs:
-            docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=600),
-                                       centro_lat, centro_lng, 15000.0)
+            docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=500),
+                                       centro_lat, centro_lng, 10000.0)
         return docs
 
     docsa = _buscar_laterales(calle_a)
@@ -955,16 +955,13 @@ def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
         return []
 
     geom = _union_lineas(docs_principal)
-    line_a = _union_lineas(docsa)
-    line_b = _union_lineas(docsb)
-    if geom is None or line_a is None or line_b is None:
+    if geom is None:
         return []
 
-    from shapely.geometry import Point
     from shapely.ops import nearest_points
     try:
-        p1 = nearest_points(geom, line_a)[0]
-        p2 = nearest_points(geom, line_b)[0]
+        p1 = nearest_points(geom, _union_lineas(docsa))[0]
+        p2 = nearest_points(geom, _union_lineas(docsb))[0]
         d1 = geom.project(p1)
         d2 = geom.project(p2)
     except Exception:
