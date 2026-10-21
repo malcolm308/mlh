@@ -1318,5 +1318,4 @@ def _buscar_entre_mongo_geointersects(principal: str, calle_a: str, calle_b: str
         except Exception:
             continue
     return []
-#   f o r c e  
- 
+# force
