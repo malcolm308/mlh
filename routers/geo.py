@@ -19,11 +19,17 @@ import time
 import unicodedata
 from typing import Dict, List, Optional, Tuple
 
+import httpx
 import requests
 from fastapi import APIRouter, Query
 from pymongo import MongoClient
 
 sys.path.insert(0, "E:\\Taxi_Rapid")
+
+try:
+    from shapely.geometry import Point
+except Exception:  # la busqueda normal sigue funcionando sin shapely
+    Point = None
 
 router = APIRouter()
 
@@ -41,6 +47,36 @@ OVERPASS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 USER_AGENT = "TaxiRapid/1.0 (apps de taxi)"
+
+# ---- Geocodificacion por texto (buscador de direcciones) ----
+# Photon es gratis y no pide clave. Se consulta desde el backend (no desde el
+# movil) porque desde Cuba los hosts publicos de geocoding son poco fiables; el
+# movil habla con nuestro backend y el backend con Photon.
+PHOTON = os.getenv("PHOTON_URL", "https://photon.komoot.io/api/")
+# OpenCage solo se usa si Photon no responde. Su clave va por entorno, como el
+# resto de secretos del backend (nunca en la base ni en el repositorio).
+OPENCAGE = "https://api.opencagedata.com/geocode/v1/json"
+OPENCAGE_API_KEY = os.getenv("OPENCAGE_API_KEY", "")
+# Centro y radio por defecto para sesgar los resultados hacia La Habana cuando
+# la app no manda coordenadas actuales.
+GEO_CENTRO = (23.1136, -82.3666)
+GEO_RADIO_M = 30000
+GEO_TIMEOUT_S = float(os.getenv("GEO_TIMEOUT_S", "10"))
+# Radio (metros) dentro del cual una calle cuenta como "de la interseccion"
+# cuando el usuario escribe "Calle A entre Calle B y Calle C".
+ENTRE_RADIO_M = 100.0
+# Radio (metros) alrededor del usuario/centro dentro del cual se buscan las
+# calles del "entre". Evita que numeros repetidos ("23", "11") elijan una
+# esquina en otra parte de la ciudad.
+RADIO_USUARIO_M = 3000.0
+# Las calles laterales ("entre X y Y") pueden estar algo mas lejos: la principal
+# es la que debe estar cerca del usuario.
+RADIO_LATERAL_M = 8000.0
+# Tolerancia (metros) para dar por valida la esquina B-C en el respaldo Photon.
+ESQUINA_TOL_M = 50.0
+# Radio ampliado (metros) para el "entre" cuando OSM no registra el cruce
+# exacto pero las calles si pasan cerca: se devuelve una coordenada aproximada.
+APROX_RADIO_M = 800.0
 
 # Se buscan vias cuyo punto medio caiga en este radio; luego se mide la
 # distancia real al segmento, asi que el margen extra es porprecision.
@@ -469,6 +505,673 @@ def _en_mapa(lat: float, lon: float) -> bool:
 
 
 # --------------------------------------------------------------------------
+# Geocodificacion por texto: Photon (+ OpenCage de respaldo)
+# --------------------------------------------------------------------------
+def _separar_entre(texto: str) -> Optional[Tuple[str, str, str]]:
+    """Descompone "Calle A entre Calle B y Calle C".
+
+    Devuelve (principal, calle_A, calle_B) o None si no hay "entre".
+    Se acepta "entre ... y ..." y "entre ... e ..." (delante de i- o hi-).
+    """
+    m = re.search(r"\bentre\b", texto, flags=re.IGNORECASE)
+    if not m:
+        return None
+    principal = texto[:m.start()].strip(" ,.")
+    resto = texto[m.end():]
+    partes = re.split(r"\s+(?:y|e)\s+", resto, maxsplit=1, flags=re.IGNORECASE)
+    if len(partes) != 2:
+        return None
+    calle_a = partes[0].strip(" ,.")
+    calle_b = partes[1].strip(" ,.")
+    if not principal or not calle_a or not calle_b:
+        return None
+    return principal, calle_a, calle_b
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distancia en metros entre dos puntos (para el filtro de 100 m)."""
+    r = 6371008.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _props(entrada: Dict) -> Dict:
+    """Propiedades de una feature de Photon u OpenCage, ya aplanadas."""
+    return entrada.get("properties") or {}
+
+
+def _texto_desde_props(p: Dict, fallback: str = "") -> Tuple[str, str]:
+    """(nombre corto, nombre largo) legibles de las propiedades de Photon."""
+    nombre = p.get("name") or ""
+    calle = p.get("street") or ""
+    ciudad = p.get("city") or p.get("district") or ""
+    pais = p.get("country") or ""
+    corto = ", ".join([x for x in (nombre or calle, ciudad) if x]).strip(", ")
+    largo = ", ".join([x for x in (nombre or calle, p.get("street"), ciudad, pais)
+                       if x]).strip(", ")
+    return (corto or fallback, largo or fallback)
+
+
+def _tipos_via_photon() -> set:
+    """Tipos de vía de Photon que cuentan como calle circulable."""
+    return {"street", "highway", "residential", "primary", "secondary",
+            "tertiary", "unclassified", "service", "living_street", "road",
+            "footway", "pedestrian", "path", "trunk", "motorway"}
+
+
+def _es_relevante(p: Dict) -> bool:
+    """Si el resultado es una calle o un lugar útil (no un límite administrativo)."""
+    tipo = (p.get("type") or "").lower()
+    if tipo in {"house", "locality", "district", "city", "state", "country",
+                "county", "postcode"}:
+        return False
+    return bool(p.get("name") or p.get("street"))
+
+
+async def _photon(q: str, lat: float, lon: float, limit: int) -> List[Dict]:
+    """Consulta Photon y devuelve sus features. Lista vacía si falla."""
+    params = {
+        "q": q,
+        "lat": "%.5f" % lat,
+        "lon": "%.5f" % lon,
+        "limit": str(max(1, min(limit * 3, 30))),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=GEO_TIMEOUT_S) as cliente:
+            resp = await cliente.get(PHOTON, params=params,
+                                     headers={"User-Agent": USER_AGENT})
+        if resp.status_code != 200:
+            return []
+        return (resp.json() or {}).get("features") or []
+    except Exception:
+        return []
+
+
+async def _opencage(q: str, lat: float, lon: float, limit: int) -> List[Dict]:
+    """Respaldo de Photon. Sin clave configurada no se intenta."""
+    if not OPENCAGE_API_KEY:
+        return []
+    params = {
+        "q": q,
+        "key": OPENCAGE_API_KEY,
+        "limit": str(max(1, min(limit, 10))),
+        "language": "es",
+        "countrycode": "cu",
+        "proximity": "%.5f,%.5f" % (lat, lon),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=GEO_TIMEOUT_S) as cliente:
+            resp = await cliente.get(OPENCAGE, params=params,
+                                     headers={"User-Agent": USER_AGENT})
+        if resp.status_code != 200:
+            return []
+        return (resp.json() or {}).get("results") or []
+    except Exception:
+        return []
+
+
+def _a_resultado(lat: float, lon: float, corto: str, largo: str,
+                 extra: Optional[Dict] = None) -> Dict:
+    r = {"lat": round(lat, 6), "lng": round(lon, 6),
+         "display_name": largo or corto, "short_label": corto or largo}
+    if extra:
+        r.update(extra)
+    return r
+
+
+def _desde_photon(features: List[Dict]) -> List[Dict]:
+    resultados = []
+    for f in features:
+        geom = f.get("geometry") or {}
+        coords = geom.get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        p = _props(f)
+        if not _es_relevante(p):
+            continue
+        corto, largo = _texto_desde_props(p)
+        resultados.append(_a_resultado(coords[1], coords[0], corto, largo))
+    return resultados
+
+
+def _desde_opencage(results: List[Dict]) -> List[Dict]:
+    salida = []
+    for r in results:
+        geom = r.get("geometry") or {}
+        lat, lng = geom.get("lat"), geom.get("lng")
+        if lat is None or lng is None:
+            continue
+        comp = r.get("components") or {}
+        nombre = (comp.get("road") or comp.get("neighbourhood")
+                  or comp.get("suburb") or "")
+        ciudad = comp.get("city") or comp.get("town") or comp.get("county") or ""
+        corto = ", ".join([x for x in (nombre, ciudad) if x]).strip(", ")
+        largo = r.get("formatted") or corto
+        salida.append(_a_resultado(lat, lng, corto or largo, largo))
+    return salida
+
+
+def _dedup(resultados: List[Dict], limit: int) -> List[Dict]:
+    """Quita duplicados por nombre+cercanía y recorta a `limit`."""
+    vistos, salida = [], []
+    for r in resultados:
+        repetido = any(
+            abs(r["lat"] - v["lat"]) < 1e-4 and abs(r["lng"] - v["lng"]) < 1e-4
+            for v in vistos)
+        if repetido:
+            continue
+        vistos.append(r)
+        salida.append(r)
+        if len(salida) >= limit:
+            break
+    return salida
+
+
+# --------------------------------------------------------------------------
+# Busqueda en la base LOCAL de calles (la malla cubana no esta en Photon)
+# --------------------------------------------------------------------------
+# Photon y OpenCage casi no tienen las calles de La Habana: indexan POIs
+# ("Hotel Nacional") pero no la malla "Virtudes", "Industria", "Salud". Esa
+# malla SI esta en MongoDB (Geo.calles, la misma que usa el reverse). Por eso
+# el buscador mira primero aqui y solo cae a Photon para lo que no tenga.
+def _tokens_calle(texto: str) -> List[str]:
+    """Palabras significativas de un nombre de calle, sin el tipo ("calle","avenida").
+
+    Se descartan tambien los terminos de barrio/ciudad que el usuario añade
+    ("calle 23 vedado" -> ["23"]) porque no forman parte del nombre de la via.
+    """
+    sin_tipo = _sin_tipo(texto)
+    ruido = {"la", "habana", "el", "los", "las", "de", "del"}
+    return [t for t in _normaliza(sin_tipo).split() if t and t not in ruido]
+
+
+def _puntua_calle(nombre_db: str, tokens: List[str]) -> int:
+    """Cuanto se parece el nombre de la via a lo buscado. 0 = no sirve.
+
+    Coincidencia exacta gana siempre; si no, se exige que TODAS las palabras
+    buscadas aparezcan en el nombre (asi 'industria' no confunde con 'Zona
+    Industrial de Berroa' cuando se busca la calle 'Industria'... bueno, esa
+    si aparece; se ordena por nombre mas corto para preferir la mas parecida).
+    """
+    nb = _normaliza(_sin_tipo(nombre_db))
+    norm_tokens = _normaliza(" ".join(tokens))
+    if nb == norm_tokens:
+        return 1000
+    palabras = set(nb.split())
+    if all(t in palabras for t in tokens):
+        # mas palabras de mas = peor; nombre exacto corto = mejor
+        return 500 - len(palabras)
+    if norm_tokens and norm_tokens in nb:
+        return 200
+    return 0
+
+
+def _buscar_calles_mongo(texto: str, limit: int,
+                         centro_lat: float = None, centro_lng: float = None) -> List[Dict]:
+    """Calles cuyo nombre coincide con [texto], de la base local."""
+    tokens = _tokens_calle(texto)
+    if not tokens:
+        return []
+    patron = "|".join(re.escape(t) for t in tokens)
+    docs = list(_calles.find({"nombre": {"$regex": patron, "$options": "i"}})
+                .limit(400))
+    puntuados = []
+    for d in docs:
+        p = _puntua_calle(d.get("nombre") or "", tokens)
+        if p > 0:
+            puntuados.append((p, d))
+    if not puntuados and len(tokens) > 1:
+        # El usuario añadio ruido delante ("calle 23 vedado"). Se reintenta con
+        # el primer token que sea un numero o nombre corto, que suele ser la via.
+        for t in tokens:
+            if t.isdigit():
+                return _buscar_calles_mongo(t, limit, centro_lat, centro_lng)
+    if centro_lat is not None and centro_lng is not None:
+        puntuados.sort(key=lambda x: (_haversine_m(
+            centro_lat, centro_lng,
+            (x[1].get("punto") or {}).get("coordinates", [0, 0])[1],
+            (x[1].get("punto") or {}).get("coordinates", [0, 0])[0]), -x[0]))
+    else:
+        puntuados.sort(key=lambda x: -x[0])
+    salida = []
+    for _, d in puntuados[:limit]:
+        coords = (d.get("punto") or {}).get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        lng, lat = float(coords[0]), float(coords[1])
+        salida.append(_a_resultado(lat, lng, d.get("nombre") or texto,
+                                   "%s, La Habana" % (d.get("nombre") or texto)))
+    return salida
+
+
+def _calles_coincidentes(texto: str, tope: int = 400,
+                         centro_lat: float = None,
+                         centro_lng: float = None) -> List[Dict]:
+    """Docs de calles cuyo nombre puntua > 0 para [texto], mejor primero.
+
+    Se ordena por parecido del nombre y, en empate, por cercania al centro
+    (util para "23", "11", "12", repetidos por toda la ciudad).
+    """
+    tokens = _tokens_calle(texto)
+    if not tokens:
+        return []
+    patron = "|".join(re.escape(t) for t in tokens)
+    docs = list(_calles.find({"nombre": {"$regex": patron, "$options": "i"}})
+                .limit(tope))
+    puntuados = []
+    for d in docs:
+        p = _puntua_calle(d.get("nombre") or "", tokens)
+        if p <= 0:
+            continue
+        if centro_lat is not None and centro_lng is not None:
+            coords = (d.get("punto") or {}).get("coordinates") or [0, 0]
+            dist = _haversine_m(centro_lat, centro_lng,
+                                float(coords[1]), float(coords[0]))
+        else:
+            dist = 0.0
+        puntuados.append((-p, dist, d))
+    puntuados.sort(key=lambda x: (x[0], x[1]))
+    return [d for _, _, d in puntuados]
+
+
+def _linea_de(doc: Dict):
+    """LineString (shapely) de la geometria de una calle, o None.
+
+    Ojo: `geom` guarda las coordenadas como [lat, lon], mientras que `punto`
+    es GeoJSON [lon, lat]. shapely usa (x=lon, y=lat).
+    """
+    geom = doc.get("geom") or []
+    puntos = []
+    for p in geom:
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            try:
+                puntos.append((float(p[1]), float(p[0])))
+            except (TypeError, ValueError):
+                continue
+    if len(puntos) < 2:
+        return None
+    from shapely.geometry import LineString
+    return LineString(puntos)
+
+
+def _punto_cruce(docs_a: List[Dict], docs_b: List[Dict]) -> Optional[Tuple[float, float]]:
+    """Punto (lat, lng) de referencia entre dos calles.
+
+    La malla llega segmentada, asi que dos calles pueden casi tocarse sin
+    compartir vertice. Se busca el par de segmentos globalmente mas cercano:
+    si se cruzan, se usa el cruce; si no, el punto medio del tramo mas corto.
+    """
+    if not docs_a or not docs_b:
+        return None
+    lineas_a = [l for l in (_linea_de(d) for d in docs_a) if l is not None]
+    lineas_b = [l for l in (_linea_de(d) for d in docs_b) if l is not None]
+    if not lineas_a or not lineas_b:
+        return None
+
+    mejor_d = None
+    mejor_pt = None
+    for la in lineas_a:
+        for lb in lineas_b:
+            inter = la.intersection(lb)
+            if not inter.is_empty:
+                p = inter
+                while hasattr(p, "geoms"):
+                    geoms = list(p.geoms)
+                    if not geoms:
+                        break
+                    p = geoms[0]
+                if hasattr(p, "x") and hasattr(p, "y"):
+                    mejor_pt = (p.y, p.x)
+                    mejor_d = 0.0
+                    break
+            d = la.distance(lb)
+            if mejor_d is None or d < mejor_d:
+                mejor_d = d
+                pa = la.interpolate(la.project(lb.interpolate(lb.length / 2)))
+                pb = lb.interpolate(lb.project(la.interpolate(la.length / 2)))
+                mejor_pt = ((pa.y + pb.y) / 2.0, (pa.x + pb.x) / 2.0)
+        if mejor_d == 0.0:
+            break
+    return mejor_pt
+
+
+def _ancla_cerca_centro(docs: List[Dict], centro_lat: float, centro_lng: float,
+                        radio_m: float = GEO_RADIO_M) -> List[Dict]:
+    """Se queda con los docs dentro del radio de busqueda, mas cercanos primero.
+
+    Se mide la distancia del tramo completo a [centro], no del centroide: un
+    segmento largo puede pasar por delante del usuario con su punto medio lejos.
+    """
+    from shapely.geometry import Point
+    objetivo = Point(centro_lng, centro_lat)
+    dentro = []
+    for d in docs:
+        coords = (d.get("punto") or {}).get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        linea = _linea_de(d)
+        if linea is not None:
+            dist = linea.distance(objetivo) * 111320.0
+        else:
+            lng, lat = float(coords[0]), float(coords[1])
+            dist = _haversine_m(centro_lat, centro_lng, lat, lng)
+        if dist <= radio_m:
+            dentro.append((dist, d))
+    dentro.sort(key=lambda x: x[0])
+    return [d for _, d in dentro]
+
+
+def _union_lineas(docs: List[Dict]):
+    """Une los segmentos de varias medidas de una calle en una sola geometria."""
+    from shapely.ops import unary_union
+    lineas = [l for l in (_linea_de(d) for d in docs) if l is not None]
+    if not lineas:
+        return None
+    return unary_union(lineas)
+
+
+def _interseccion_estricta(docs_a: List[Dict], docs_b: List[Dict]):
+    """Punto (lat, lng) donde A y B se cruzan de verdad, o None.
+
+    La malla llega segmentada y los vertices de dos vias no siempre coinciden,
+    asi que se acepta como esquina un par de segmentos a menos de ESQUINA_TOL_M.
+    Un "casi cruce" mas lejano se descarta para no inventar esquinas.
+    """
+    lineas_a = [l for l in (_linea_de(d) for d in docs_a) if l is not None]
+    lineas_b = [l for l in (_linea_de(d) for d in docs_b) if l is not None]
+    from shapely.ops import nearest_points
+    mejor = None
+    for la in lineas_a:
+        for lb in lineas_b:
+            inter = la.intersection(lb)
+            if not inter.is_empty:
+                p = inter
+                while hasattr(p, "geoms"):
+                    geoms = list(p.geoms)
+                    if not geoms:
+                        break
+                    p = geoms[0]
+                if hasattr(p, "x") and hasattr(p, "y"):
+                    return (p.y, p.x)
+                if hasattr(p, "interpolate"):
+                    q = p.interpolate(p.length / 2)
+                    return (q.y, q.x)
+            d = la.distance(lb)
+            if mejor is None or d < mejor[0]:
+                mejor = (d, la, lb)
+    if mejor is None:
+        return None
+    dist, la, lb = mejor
+    if dist * 111320.0 > ESQUINA_TOL_M:
+        return None
+    pa, pb = nearest_points(la, lb)
+    return ((pa.y + pb.y) / 2.0, (pa.x + pb.x) / 2.0)
+
+
+def _punto_mas_cercano_a(docs: List[Dict], lat: float, lng: float):
+    """Punto (lat, lng) del conjunto de [docs] mas cercano a (lat, lng)."""
+    from shapely.geometry import Point
+    objetivo = Point(lng, lat)
+    geom = _union_lineas(docs)
+    if geom is None:
+        return None
+    from shapely.ops import nearest_points
+    p = nearest_points(geom, objetivo)[0]
+    return (p.y, p.x)
+
+
+def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
+                        centro_lat: float, centro_lng: float) -> List[Dict]:
+    """Resuelve "Calle A entre Calle B y Calle C" con la base local.
+
+    Validacion topologica: la principal debe cruzar de verdad con B por un
+    extremo y con C por el otro. Si no cruza con alguna, o cruza en el mismo
+    punto, la direccion no existe y se devuelve vacio (nunca se inventa una
+    direccion). La direccion es el punto de la principal entre ambos cruces.
+
+    Nota: B y C no tienen por que cruzarse entre si (tipico en "Virtudes entre
+    Industria y Salud": son paralelas y Virtudes las cruza a las dos).
+    """
+    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=200,
+                                                              centro_lat=centro_lat,
+                                                              centro_lng=centro_lng),
+                                         centro_lat, centro_lng, RADIO_USUARIO_M)
+    # Las laterales pueden estar un poco mas lejos (OSM fragmentado), pero
+    # la principal SI debe estar cerca del usuario para evitar elegir otra
+    # zona de la ciudad con el mismo numero de calle.
+    docsa = _ancla_cerca_centro(_calles_coincidentes(calle_a, tope=200,
+                                                    centro_lat=centro_lat,
+                                                    centro_lng=centro_lng),
+                                centro_lat, centro_lng, RADIO_LATERAL_M)
+    docsb = _ancla_cerca_centro(_calles_coincidentes(calle_b, tope=200,
+                                                    centro_lat=centro_lat,
+                                                    centro_lng=centro_lng),
+                                centro_lat, centro_lng, RADIO_LATERAL_M)
+    if not docs_principal or not docsa or not docsb:
+        return []
+
+def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
+                        centro_lat: float, centro_lng: float) -> List[Dict]:
+    """Resuelve "Calle A entre Calle B y Calle C" con la base local.
+
+    La principal debe cruzar con al menos una de las laterales dentro del
+    área del usuario. Se intenta con 100m, luego 150m, luego 200m.
+    """
+    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=300,
+                                                              centro_lat=centro_lat,
+                                                              centro_lng=centro_lng),
+                                         centro_lat, centro_lng, RADIO_USUARIO_M)
+    # Probar con nombres originales y sin prefijos
+    def _buscar_laterales(nombre):
+        docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=300,
+                                                       centro_lat=centro_lat,
+                                                       centro_lng=centro_lng),
+                                   centro_lat, centro_lng, RADIO_LATERAL_M)
+        if docs:
+            return docs
+        # Intentar sin tipo
+        sin = _sin_tipo(nombre)
+        if sin and sin != nombre:
+            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=300,
+                                                           centro_lat=centro_lat,
+                                                           centro_lng=centro_lng),
+                                       centro_lat, centro_lng, RADIO_LATERAL_M)
+        return docs
+
+    docsa = _buscar_laterales(calle_a)
+    docsb = _buscar_laterales(calle_b)
+    if not docs_principal:
+        return []
+
+    geom = _union_lineas(docs_principal)
+    if geom is None:
+        return []
+
+    def _mejor_cruce(docs_lat):
+        if not docs_lat:
+            return None, None
+        for tol in (ENTRE_RADIO_M, 150.0, 200.0, 250.0, 300.0, 400.0, 500.0):
+            p = _punto_sobre(docs_principal, docs_lat, tol)
+            if p is not None:
+                d = geom.project(Point(p[1], p[0]))
+                return p, d
+        return None, None
+
+    cruce_a, d_a = _mejor_cruce(docsa)
+    cruce_b, d_b = _mejor_cruce(docsb)
+    if cruce_a is None and cruce_b is None:
+        from shapely.ops import nearest_points
+        if docsa and geom:
+            l=_union_lineas(docsa)
+            if l:
+                try:
+                    p=nearest_points(geom,l)[0]; cruce_a=(p.y,p.x); d_a=geom.project(p)
+                except: pass
+        if docsb and geom:
+            l=_union_lineas(docsb)
+            if l:
+                try:
+                    p=nearest_points(geom,l)[0]; cruce_b=(p.y,p.x); d_b=geom.project(p)
+                except: pass
+    if cruce_a is None or cruce_b is None:
+        return []
+
+    if d_a is None or d_b is None:
+        return []
+    try:
+        if abs(float(d_a)-float(d_b)) < 0.00001:
+            return []
+    except Exception:
+        pass
+    try:
+        medio = geom.interpolate((float(d_a) + float(d_b)) / 2.0)
+    except Exception:
+        return []
+    nombre = _nombre_principal(principal, centro_lat, centro_lng)
+    corto = "%s entre %s y %s" % (_sin_tipo(nombre), _sin_tipo(calle_a),
+                                  _sin_tipo(calle_b))
+    return [_a_resultado(medio.y, medio.x, corto,
+                         "%s entre %s y %s, La Habana"
+                         % (nombre, calle_a, calle_b))]
+
+
+def _punto_sobre(principal_docs: List[Dict], lateral_docs: List[Dict],
+                 tolerancia_m: float):
+    """Punto (lat, lng) de la principal donde cruza la lateral, o None.
+
+    Vale si comparte un punto con la lateral o si pasa a menos de
+    [tolerancia_m] de ella.
+    """
+    geom = _union_lineas(principal_docs)
+    lateral = _union_lineas(lateral_docs)
+    if geom is None or lateral is None:
+        return None
+    inter = geom.intersection(lateral)
+    if not inter.is_empty:
+        p = inter
+        while hasattr(p, "geoms"):
+            geoms = list(p.geoms)
+            if not geoms:
+                break
+            p = geoms[0]
+        if hasattr(p, "x") and hasattr(p, "y"):
+            return (p.y, p.x)
+        if hasattr(p, "interpolate"):
+            q = p.interpolate(p.length / 2)
+            return (q.y, q.x)
+    if geom.distance(lateral) * 111320.0 > tolerancia_m:
+        return None
+    from shapely.ops import nearest_points
+    p = nearest_points(geom, lateral)[0]
+    return (p.y, p.x)
+
+
+def _nombre_principal(texto: str, centro_lat: float = None,
+                      centro_lng: float = None) -> str:
+    """Nombre canonico de la via buscada, si esta en la base; si no, el texto."""
+    docs = _calles_coincidentes(texto, tope=10, centro_lat=centro_lat,
+                                centro_lng=centro_lng)
+    return docs[0].get("nombre") if docs else texto
+
+
+async def _buscar_entre(principal: str, calle_a: str, calle_b: str,
+                        lat: float, lon: float, limit: int) -> List[Dict]:
+    """Respaldo Photon de "Calle A entre Calle B y Calle C".
+
+    Photon no tiene la malla cubana, pero sirve para direcciones que si indexa.
+    Validacion estricta: B y C deben geocodificar a menos de ESQUINA_TOL_M uno
+    del otro (esquina real) y A debe pasar a menos de ENTRE_RADIO_M de ella.
+    """
+    res_a = _desde_photon(await _photon("%s La Habana" % calle_a, lat, lon, 3))
+    res_b = _desde_photon(await _photon("%s La Habana" % calle_b, lat, lon, 3))
+    if not res_a or not res_b:
+        return []
+    pa, pb = res_a[0], res_b[0]
+    if _haversine_m(pa["lat"], pa["lng"], pb["lat"], pb["lng"]) > ESQUINA_TOL_M:
+        return []
+    esp_lat = (pa["lat"] + pb["lat"]) / 2.0
+    esp_lng = (pa["lng"] + pb["lng"]) / 2.0
+
+    candidatos = _desde_photon(
+        await _photon("%s La Habana" % principal, lat, lon, limit * 3))
+    cercanos = [c for c in candidatos
+                if _haversine_m(esp_lat, esp_lng, c["lat"], c["lng"]) <= ENTRE_RADIO_M]
+    for c in cercanos:
+        c["display_name"] = "%s entre %s y %s" % (principal, calle_a, calle_b)
+        c["short_label"] = "%s entre %s y %s" % (
+            _sin_tipo(principal), _sin_tipo(calle_a), _sin_tipo(calle_b))
+    return cercanos
+
+
+@router.get("/geo/buscar")
+async def buscar(q: str = Query(..., min_length=2),
+                 lat: Optional[float] = Query(None, ge=-90, le=90),
+                 lon: Optional[float] = Query(None, ge=-180, le=180),
+                 limit: int = Query(8, ge=1, le=20)):
+    """Busca direcciones por texto ("Calle 23 entre 11 y 12").
+
+    Mira primero la base local de calles (la malla de La Habana no esta en
+    Photon), resuelve el "entre" con las geometrias y, para lo que no tenga,
+    cae a Photon y luego a OpenCage.
+    """
+    texto = (q or "").strip()
+    if len(texto) < 2:
+        return {"ok": False, "resultados": [], "origen": "vacio",
+                "motivo": "texto demasiado corto"}
+
+    centro_lat = lat if lat is not None else GEO_CENTRO[0]
+    centro_lng = lon if lon is not None else GEO_CENTRO[1]
+    if not _en_mapa(centro_lat, centro_lng):
+        centro_lat, centro_lng = GEO_CENTRO
+
+    entre = _separar_entre(texto)
+    if entre:
+        principal, calle_a, calle_b = entre
+        resultados = []
+        try:
+            resultados = _buscar_entre_mongo_geointersects(principal, calle_a, calle_b, limit,
+                                                          centro_lat, centro_lng)
+        except Exception:
+            resultados = []
+        if not resultados:
+            try:
+                resultados = _buscar_entre_mongo(principal, calle_a, calle_b, limit,
+                                                 centro_lat, centro_lng)
+            except Exception:
+                resultados = []
+        if not resultados:
+            resultados = await _buscar_entre(principal, calle_a, calle_b,
+                                             centro_lat, centro_lng, limit)
+        resultados = _dedup(resultados, limit)
+        if not resultados:
+            return {"ok": False, "resultados": [], "origen": "sin-resultados",
+                    "motivo": "direccion no encontrada"}
+        return {"ok": True, "resultados": resultados, "origen": "mongo-entre"}
+
+    resultados = _buscar_calles_mongo(texto, limit, centro_lat, centro_lng)
+    origen = "mongo" if resultados else None
+
+    if not resultados:
+        # No esta en la base local: Photon (POIs, calles no importadas).
+        resultados = _desde_photon(
+            await _photon(texto, centro_lat, centro_lng, limit))
+        origen = "photon" if resultados else None
+
+    if not resultados:
+        resultados = _desde_opencage(
+            await _opencage(texto, centro_lat, centro_lng, limit))
+        origen = "opencage" if resultados else "sin-resultados"
+
+    resultados = _dedup(resultados, limit)
+    return {"ok": bool(resultados), "resultados": resultados,
+            "origen": origen or "sin-resultados"}
+
+
+# --------------------------------------------------------------------------
 # endpoints
 # --------------------------------------------------------------------------
 @router.get("/geo/direccion")
@@ -550,3 +1253,129 @@ def estado():
         "cuadros_totales": CUADROS_ESPERADOS,
         "listo": importadas > 0 and verificadas >= CUADROS_ESPERADOS,
     }
+
+
+def _buscar_calles_mongo_por_nombre(nombre: str, limit: int = 50,
+                                   centro_lat: float = None, centro_lng: float = None) -> List[Dict]:
+    docs = _calles_coincidentes(nombre, tope=limit, centro_lat=centro_lat, centro_lng=centro_lng)
+    return docs
+
+
+def _buscar_entre_mongo_geointersects(principal: str, calle_a: str, calle_b: str, limit: int,
+                                      centro_lat: float, centro_lng: float) -> List[Dict]:
+    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=200,
+                                                              centro_lat=centro_lat,
+                                                              centro_lng=centro_lng),
+                                         centro_lat, centro_lng, RADIO_USUARIO_M)
+    if not docs_principal:
+        return []
+
+    def _bl(n):
+        docs = _ancla_cerca_centro(_calles_coincidentes(n, tope=200,
+                                                       centro_lat=centro_lat,
+                                                       centro_lng=centro_lng),
+                                   centro_lat, centro_lng, RADIO_LATERAL_M)
+        if docs:
+            return docs
+        sin = _sin_tipo(n)
+        if sin and sin != n:
+            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=200,
+                                                           centro_lat=centro_lat,
+                                                           centro_lng=centro_lng),
+                                       centro_lat, centro_lng, RADIO_LATERAL_M)
+        if not docs:
+            docs = _ancla_cerca_centro(_calles_coincidentes(n, tope=400),
+                                       centro_lat, centro_lng, 12000.0)
+        return docs
+
+    docsa = _bl(calle_a)
+    docsb = _bl(calle_b)
+    if not docsa or not docsb:
+        return []
+
+    from shapely.geometry import LineString
+    try:
+        p_b_c = _punto_cruce(docsb, docsa)
+    except Exception:
+        p_b_c = None
+    if p_b_c is None:
+        return []
+
+    pb_pt = _punto_mas_cercano_a(docsb, p_b_c[0], p_b_c[1]) or p_b_c
+    pc_pt = _punto_mas_cercano_a(docsa, p_b_c[0], p_b_c[1]) or p_b_c
+    try:
+        ls = LineString([(pb_pt[1], pb_pt[0]), (pc_pt[1], pc_pt[0])])
+    except Exception:
+        return []
+
+    try:
+        candidatos = list(_calles.find({
+            'geom_geojson': {'': {'': ls.__geo_interface__}}
+        }).limit(200))
+    except Exception:
+        candidatos = []
+
+    tokens_p = _tokens_calle(principal)
+    mejor = []
+    for c in candidatos:
+        pscore = _puntua_calle(c.get('nombre') or '', tokens_p)
+        if pscore <= 0:
+            continue
+        mejor.append((pscore, c))
+    mejor.sort(key=lambda x: -x[0])
+
+    if not mejor:
+        mejores_princ = _calles_coincidentes(principal, tope=50, centro_lat=centro_lat, centro_lng=centro_lng)
+        for mp in mejores_princ:
+            try:
+                lj = mp.get('geom_geojson')
+                if not lj:
+                    continue
+                from shapely.geometry import shape
+                shp = shape(lj)
+                if shp.intersects(ls):
+                    try:
+                        inter = shp.intersection(ls)
+                        if inter.is_empty:
+                            continue
+                        pt = inter
+                        while hasattr(pt, 'geoms'):
+                            gs = list(pt.geoms)
+                            if not gs: break
+                            pt = gs[0]
+                        if hasattr(pt, 'x') and hasattr(pt, 'y'):
+                            nombre = _nombre_principal(principal, centro_lat, centro_lng)
+                            corto = '%s entre %s y %s' % (_sin_tipo(nombre), _sin_tipo(calle_a), _sin_tipo(calle_b))
+                            return [_a_resultado(pt.y, pt.x, corto, '%s entre %s y %s, La Habana' % (nombre, calle_a, calle_b))]
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return []
+
+    for _, mc in mejor[:15]:
+        try:
+            lj = mc.get('geom_geojson')
+            if not lj:
+                continue
+            from shapely.geometry import shape
+            shp = shape(lj)
+            if shp.intersects(ls):
+                try:
+                    inter = shp.intersection(ls)
+                    if inter.is_empty:
+                        continue
+                    pt = inter
+                    while hasattr(pt, 'geoms'):
+                        gs = list(pt.geoms)
+                        if not gs: break
+                        pt = gs[0]
+                    if hasattr(pt, 'x') and hasattr(pt, 'y'):
+                        nombre = _nombre_principal(principal, centro_lat, centro_lng)
+                        corto = '%s entre %s y %s' % (_sin_tipo(nombre), _sin_tipo(calle_a), _sin_tipo(calle_b))
+                        return [_a_resultado(pt.y, pt.x, corto, '%s entre %s y %s, La Habana' % (nombre, calle_a, calle_b))]
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return []
