@@ -926,117 +926,59 @@ def _punto_mas_cercano_a(docs: List[Dict], lat: float, lng: float):
 
 def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
                         centro_lat: float, centro_lng: float) -> List[Dict]:
-    """Resuelve "Calle A entre Calle B y Calle C" con la base local.
-
-    Validacion topologica: la principal debe cruzar de verdad con B por un
-    extremo y con C por el otro. Si no cruza con alguna, o cruza en el mismo
-    punto, la direccion no existe y se devuelve vacio (nunca se inventa una
-    direccion). La direccion es el punto de la principal entre ambos cruces.
-
-    Nota: B y C no tienen por que cruzarse entre si (tipico en "Virtudes entre
-    Industria y Salud": son paralelas y Virtudes las cruza a las dos).
-    """
-    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=200,
+    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=400,
                                                               centro_lat=centro_lat,
                                                               centro_lng=centro_lng),
                                          centro_lat, centro_lng, RADIO_USUARIO_M)
-    # Las laterales pueden estar un poco mas lejos (OSM fragmentado), pero
-    # la principal SI debe estar cerca del usuario para evitar elegir otra
-    # zona de la ciudad con el mismo numero de calle.
-    docsa = _ancla_cerca_centro(_calles_coincidentes(calle_a, tope=200,
-                                                    centro_lat=centro_lat,
-                                                    centro_lng=centro_lng),
-                                centro_lat, centro_lng, RADIO_LATERAL_M)
-    docsb = _ancla_cerca_centro(_calles_coincidentes(calle_b, tope=200,
-                                                    centro_lat=centro_lat,
-                                                    centro_lng=centro_lng),
-                                centro_lat, centro_lng, RADIO_LATERAL_M)
-    if not docs_principal or not docsa or not docsb:
-        return []
 
-def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
-                        centro_lat: float, centro_lng: float) -> List[Dict]:
-    """Resuelve "Calle A entre Calle B y Calle C" con la base local.
-
-    La principal debe cruzar con al menos una de las laterales dentro del
-    área del usuario. Se intenta con 100m, luego 150m, luego 200m.
-    """
-    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=300,
-                                                              centro_lat=centro_lat,
-                                                              centro_lng=centro_lng),
-                                         centro_lat, centro_lng, RADIO_USUARIO_M)
-    # Probar con nombres originales y sin prefijos
     def _buscar_laterales(nombre):
-        docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=300,
+        docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=400,
                                                        centro_lat=centro_lat,
                                                        centro_lng=centro_lng),
                                    centro_lat, centro_lng, RADIO_LATERAL_M)
         if docs:
             return docs
-        # Intentar sin tipo
         sin = _sin_tipo(nombre)
         if sin and sin != nombre:
-            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=300,
+            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=400,
                                                            centro_lat=centro_lat,
                                                            centro_lng=centro_lng),
                                        centro_lat, centro_lng, RADIO_LATERAL_M)
+        if not docs:
+            docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=600),
+                                       centro_lat, centro_lng, 15000.0)
         return docs
 
     docsa = _buscar_laterales(calle_a)
     docsb = _buscar_laterales(calle_b)
-    if not docs_principal:
+    if not docs_principal or not docsa or not docsb:
         return []
 
     geom = _union_lineas(docs_principal)
-    if geom is None:
+    line_a = _union_lineas(docsa)
+    line_b = _union_lineas(docsb)
+    if geom is None or line_a is None or line_b is None:
         return []
 
-    def _mejor_cruce(docs_lat):
-        if not docs_lat:
-            return None, None
-        for tol in (ENTRE_RADIO_M, 150.0, 200.0, 250.0, 300.0, 400.0, 500.0):
-            p = _punto_sobre(docs_principal, docs_lat, tol)
-            if p is not None:
-                d = geom.project(Point(p[1], p[0]))
-                return p, d
-        return None, None
-
-    cruce_a, d_a = _mejor_cruce(docsa)
-    cruce_b, d_b = _mejor_cruce(docsb)
-    if cruce_a is None and cruce_b is None:
-        from shapely.ops import nearest_points
-        if docsa and geom:
-            l=_union_lineas(docsa)
-            if l:
-                try:
-                    p=nearest_points(geom,l)[0]; cruce_a=(p.y,p.x); d_a=geom.project(p)
-                except: pass
-        if docsb and geom:
-            l=_union_lineas(docsb)
-            if l:
-                try:
-                    p=nearest_points(geom,l)[0]; cruce_b=(p.y,p.x); d_b=geom.project(p)
-                except: pass
-    if cruce_a is None or cruce_b is None:
-        return []
-
-    if d_a is None or d_b is None:
-        return []
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
     try:
-        if abs(float(d_a)-float(d_b)) < 0.00001:
-            return []
+        p1 = nearest_points(geom, line_a)[0]
+        p2 = nearest_points(geom, line_b)[0]
+        d1 = geom.project(p1)
+        d2 = geom.project(p2)
     except Exception:
-        pass
+        return []
+    if abs(float(d1) - float(d2)) < 0.00001:
+        return []
     try:
-        medio = geom.interpolate((float(d_a) + float(d_b)) / 2.0)
+        m = geom.interpolate((float(d1) + float(d2)) / 2.0)
     except Exception:
         return []
     nombre = _nombre_principal(principal, centro_lat, centro_lng)
-    corto = "%s entre %s y %s" % (_sin_tipo(nombre), _sin_tipo(calle_a),
-                                  _sin_tipo(calle_b))
-    return [_a_resultado(medio.y, medio.x, corto,
-                         "%s entre %s y %s, La Habana"
-                         % (nombre, calle_a, calle_b))]
+    corto = "%s entre %s y %s" % (_sin_tipo(nombre), _sin_tipo(calle_a), _sin_tipo(calle_b))
+    return [_a_resultado(m.y, m.x, corto, "%s entre %s y %s, La Habana" % (nombre, calle_a, calle_b))]
+
 
 
 def _punto_sobre(principal_docs: List[Dict], lateral_docs: List[Dict],
