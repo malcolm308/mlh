@@ -1075,19 +1075,16 @@ async def buscar(q: str = Query(..., min_length=2),
         principal, calle_a, calle_b = entre
         resultados = []
         try:
-            resultados = _buscar_entre_mongo_geointersects(principal, calle_a, calle_b, limit,
-                                                          centro_lat, centro_lng)
+            resultados = _buscar_entre_mongo(principal, calle_a, calle_b, limit,
+                                             centro_lat, centro_lng)
         except Exception:
             resultados = []
         if not resultados:
             try:
-                resultados = _buscar_entre_mongo(principal, calle_a, calle_b, limit,
-                                                 centro_lat, centro_lng)
+                resultados = await _buscar_entre(principal, calle_a, calle_b,
+                                                 centro_lat, centro_lng, limit)
             except Exception:
                 resultados = []
-        if not resultados:
-            resultados = await _buscar_entre(principal, calle_a, calle_b,
-                                             centro_lat, centro_lng, limit)
         resultados = _dedup(resultados, limit)
         if not resultados:
             return {"ok": False, "resultados": [], "origen": "sin-resultados",
