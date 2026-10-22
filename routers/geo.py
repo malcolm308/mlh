@@ -66,12 +66,13 @@ GEO_TIMEOUT_S = float(os.getenv("GEO_TIMEOUT_S", "10"))
 # cuando el usuario escribe "Calle A entre Calle B y Calle C".
 ENTRE_RADIO_M = 100.0
 # Radio (metros) alrededor del usuario/centro dentro del cual se buscan las
-# calles del "entre". Evita que numeros repetidos ("23", "11") elijan una
-# esquina en otra parte de la ciudad.
-RADIO_USUARIO_M = 3000.0
+# calles del "entre". El usuario puede pedir una direccion lejos de donde esta
+# (va en un taxi a otra zona), asi que el radio es amplio: el desempate lo
+# hace el cruce real y, a igualdad, la esquina mas cercana al usuario.
+RADIO_USUARIO_M = float(os.getenv("GEO_RADIO_USUARIO_M", "15000"))
 # Las calles laterales ("entre X y Y") pueden estar algo mas lejos: la principal
 # es la que debe estar cerca del usuario.
-RADIO_LATERAL_M = 8000.0
+RADIO_LATERAL_M = float(os.getenv("GEO_RADIO_LATERAL_M", "15000"))
 # Tolerancia (metros) para dar por valida la esquina B-C en el respaldo Photon.
 ESQUINA_TOL_M = 50.0
 # Separacion maxima (m) entre las dos esquinas de "A entre B y C". En La
@@ -829,6 +830,13 @@ def _regex_palabra(token: str) -> str:
     return "".join(partes)
 
 
+def _palabra_limites():
+    # MongoDB regex (PCRE) no reconoce \b tras letras acentuadas; usamos
+    # un lookaround con alfabeto unicode.
+    cls = r"[0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]"
+    return r"(?<!%s)" % cls, r"(?!%s)" % cls
+
+
 def _patron_tokens(texto: str, alias: Optional[str] = None) -> str:
     """Regex de Mongo que busca los nombres que contienen [texto] completo.
 
@@ -839,6 +847,7 @@ def _patron_tokens(texto: str, alias: Optional[str] = None) -> str:
     tokens = _tokens_calle(texto)
     if not tokens:
         return ""
+    izq, der = _palabra_limites()
     partes = []
     for t in tokens:
         if t.isdigit():
@@ -848,7 +857,7 @@ def _patron_tokens(texto: str, alias: Optional[str] = None) -> str:
             else:
                 partes.append(r"(?<![0-9])%s(?![0-9])" % re.escape(t))
         else:
-            partes.append(r"\b%s\b" % _regex_palabra(t))
+            partes.append(r"%s%s%s" % (izq, _regex_palabra(t), der))
     return "|".join(partes)
 
 
@@ -1312,8 +1321,8 @@ def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
          direccion no existe.
     """
     grupos_p = _grupos_nombre(principal, centro_lat, centro_lng, max_grupos=6)
-    grupos_a = _grupos_nombre(calle_a, centro_lat, centro_lng, max_grupos=8)
-    grupos_b = _grupos_nombre(calle_b, centro_lat, centro_lng, max_grupos=8)
+    grupos_a = _grupos_nombre(calle_a, centro_lat, centro_lng, max_grupos=16)
+    grupos_b = _grupos_nombre(calle_b, centro_lat, centro_lng, max_grupos=16)
     if not grupos_p or not grupos_a or not grupos_b:
         return []
 
