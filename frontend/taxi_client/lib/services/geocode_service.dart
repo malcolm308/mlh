@@ -52,10 +52,10 @@ class GeocodeService {
     if (trimmed.length < 2) return const [];
     final nearLat = near?.latitude;
     final nearLon = near?.longitude;
-    final key = trimmed.toLowerCase() + '|' + (nearLat?.toString() ?? '') + '|' + (nearLon?.toString() ?? '') + '|' + limit.toString();
+    final key = '${trimmed.toLowerCase()}|${nearLat ?? ''}|${nearLon ?? ''}|$limit';
     if (_cache.containsKey(key)) return _cache[key]!;
 
-    final uri = Uri.parse(ApiConfig.baseUrl + '/geo/buscar').replace(
+    final uri = Uri.parse('${ApiConfig.baseUrl}/geo/buscar').replace(
       queryParameters: {
         'q': trimmed,
         if (nearLat != null) 'lat': nearLat.toString(),
@@ -65,7 +65,9 @@ class GeocodeService {
     );
 
     try {
-      final resp = await http.get(uri, headers: {'Accept': 'application/json'});
+      final resp = await http
+          .get(uri, headers: {'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 12));
       if (resp.statusCode != 200) {
         throw http.ClientException('HTTP ${resp.statusCode} en /geo/buscar');
       }

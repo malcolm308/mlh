@@ -74,6 +74,10 @@ RADIO_USUARIO_M = 3000.0
 RADIO_LATERAL_M = 8000.0
 # Tolerancia (metros) para dar por valida la esquina B-C en el respaldo Photon.
 ESQUINA_TOL_M = 50.0
+# Separacion maxima (m) entre las dos esquinas de "A entre B y C". En La
+# Habana las calles numeradas van cada 100-200 m; si los dos cruces
+# quedan mas lejos, no es la misma direccion.
+MAX_ENTRE_SEPARACION_M = float(os.getenv("GEO_MAX_ENTRE_SEP_M", "350"))
 # Radio ampliado (metros) para el "entre" cuando OSM no registra el cruce
 # exacto pero las calles si pasan cerca: se devuelve una coordenada aproximada.
 APROX_RADIO_M = 800.0
@@ -678,79 +682,214 @@ def _dedup(resultados: List[Dict], limit: int) -> List[Dict]:
 # ("Hotel Nacional") pero no la malla "Virtudes", "Industria", "Salud". Esa
 # malla SI esta en MongoDB (Geo.calles, la misma que usa el reverse). Por eso
 # el buscador mira primero aqui y solo cae a Photon para lo que no tenga.
+# Barrios de La Habana. El usuario los anade al final de la direccion
+# ("calle 23 vedado", "avenida 26 entre 23 y 25 centro") y no forman parte
+# del nombre de la via, asi que se descartan al buscar en la base de calles.
+BARRIOS = {
+    "vedado", "centro", "habana vieja", "miramar", "playa", "marianao",
+    "cerro", "la vibora", "vibora", "jesus del monte", "jesus maria",
+    "purisima", "capurro", "san miguel", "new york", "regla", "guanabacoa",
+    "guiteras", "habana del este", "reina", "sevillana", "santa fe",
+    "cristina", "luis marquez", "pintores", "arango", "paseo de marti",
+    "marti", "bellsa", "arleta", "arleta este", "concepcion", "laustralia",
+    "manteca", "friki", "nuevo vedado", "villa mia", "villa moria",
+    "las mesas", "las palmas", "el prado", "prado", "arboleda", "palmilla",
+    "pueblito", "pueblo nuevo", "jesus del monte", "villa moria",
+}
+
+
+# Barrios de La Habana. El usuario los anade al final de la direccion
+# ("calle 23 vedado", "avenida 26 entre 23 y 25 centro") y no forman parte
+# del nombre de la via, asi que se descartan al buscar en la base de calles.
+BARRIOS = {
+    "vedado", "centro", "habana vieja", "miramar", "playa", "marianao",
+    "cerro", "la vibora", "vibora", "jesus del monte", "jesus maria",
+    "purisima", "capurro", "san miguel", "new york", "regla", "guanabacoa",
+    "guiteras", "habana del este", "reina", "sevillana", "santa fe",
+    "cristina", "luis marquez", "pintores", "arango", "paseo de marti",
+    "marti", "bellsa", "arleta", "arleta este", "concepcion", "laustralia",
+    "manteca", "friki", "nuevo vedado", "villa mia", "villa moria",
+    "las mesas", "las palmas", "el prado", "prado", "arboleda", "palmilla",
+    "pueblito", "pueblo nuevo",
+}
+
+# Tipos de via que puede escribir el usuario.
+TIPOS_AVENIDA = {"avenida", "av", "ave", "avda", "aven", "ave.", "avenida."}
+TIPOS_VIA = TIPOS_AVENIDA | {
+    "calle", "callejon", "callejón", "pasaje", "paseo", "ruta", "carretera",
+    "boulevard", "carril", "lateral", "autopista", "circunvalacion",
+    "circunvalación", "malecon", "malecón", "quinta", "parque", "finca",
+}
+
+
+def _tipo_buscado(texto: str) -> str:
+    """Tipo de via que escribio el usuario ("avenida", "calle", "" si no)."""
+    palabras = (texto or "").split()
+    if not palabras:
+        return ""
+    t = _normaliza(palabras[0])
+    return t if t in TIPOS_VIA else ""
+
+
+def _alias_avenida(texto: str) -> Optional[str]:
+    """Alias de nombre para las avenidas del Vedado.
+
+    Los datos de Yahoo (los que trae OSM en La Habana) nombran esas vias con
+    un "1" pegado: "Avenida 26" esta como "126". Sin este alias, "avenida 26
+    entre calle 25 y calle 23" (Vedado) no se encuentra nunca.
+    """
+    if _tipo_buscado(texto) not in TIPOS_AVENIDA:
+        return None
+    tokens = _tokens_calle(texto)
+    for t in tokens:
+        if t.isdigit() and len(t) == 2:
+            return "1" + t
+    return None
+
+
 def _tokens_calle(texto: str) -> List[str]:
     """Palabras significativas de un nombre de calle, sin el tipo ("calle","avenida").
 
-    Se descartan tambien los terminos de barrio/ciudad que el usuario añade
+    Se descartan tambien los terminos de barrio/ciudad que el usuario anade
     ("calle 23 vedado" -> ["23"]) porque no forman parte del nombre de la via.
     """
     sin_tipo = _sin_tipo(texto)
-    ruido = {"la", "habana", "el", "los", "las", "de", "del"}
-    return [t for t in _normaliza(sin_tipo).split() if t and t not in ruido]
+    ruido = {"la", "habana", "el", "los", "las", "de", "del", "ciudad", "en"}
+    palabras = [t for t in _normaliza(sin_tipo).split() if t and t not in ruido]
+    # Los barrios de varias palabras ("jesus del monte") se quitan por frase.
+    frase = " ".join(palabras)
+    for b in sorted(BARRIOS, key=len, reverse=True):
+        if len(b.split()) < 2:
+            continue
+        if (" " + b + " ") in (" " + frase + " "):
+            frase = frase.replace(b, " ")
+    resultado = [t for t in frase.split() if t and t not in BARRIOS]
+    if not resultado:
+        # "San Miguel" es a la vez un barrio y una calle: si al quitar el barrio
+        # no queda nada, el nombre es el de la calle y se conserva.
+        return palabras
+    return resultado
 
 
-def _puntua_calle(nombre_db: str, tokens: List[str]) -> int:
+def _coincide_palabra(palabra: str, token: str, alias: Optional[str] = None) -> bool:
+    """True si [token] es la palabra [palabra] y no una parte de otra.
+
+    Importa con los numeros: "25" NO es "250" ni "225" ni "126", pero si es
+    "25" y "25a" (la calle 25A es la misma via con un sufijo).
+    """
+    if not palabra or not token:
+        return False
+    if token.isdigit():
+        numeros = re.findall(r"\d+", palabra)
+        if token in numeros:
+            return True
+        return bool(alias) and alias in numeros
+    if palabra == token:
+        return True
+    return len(token) >= 4 and token in palabra
+
+
+def _puntua_calle(nombre_db: str, tokens: List[str],
+                  alias: Optional[str] = None) -> int:
     """Cuanto se parece el nombre de la via a lo buscado. 0 = no sirve.
 
     Coincidencia exacta gana siempre; si no, se exige que TODAS las palabras
-    buscadas aparezcan en el nombre (asi 'industria' no confunde con 'Zona
-    Industrial de Berroa' cuando se busca la calle 'Industria'... bueno, esa
-    si aparece; se ordena por nombre mas corto para preferir la mas parecida).
+    buscadas aparezcan en el nombre como palabras completas (asi 'industria' no
+    confunde con 'Zona Industrial de Berroa' cuando se busca la calle
+    'Industria'... bueno, esa si aparece; se ordena por nombre mas corto para
+    preferir la mas parecida).
     """
     nb = _normaliza(_sin_tipo(nombre_db))
     norm_tokens = _normaliza(" ".join(tokens))
     if nb == norm_tokens:
         return 1000
-    palabras = set(nb.split())
-    if all(t in palabras for t in tokens):
+    palabras = nb.split()
+    if all(any(_coincide_palabra(p, t, alias) for p in palabras) for t in tokens):
         # mas palabras de mas = peor; nombre exacto corto = mejor
         return 500 - len(palabras)
-    if norm_tokens and norm_tokens in nb:
-        return 200
     return 0
 
 
+# Variantes con acento de cada letra: la regex de Mongo no sabe de acentos,
+# asi que "malecón" tiene que encontrar "Malecón" y "malecon" tambien.
+_VARIANTES = {
+    "a": "aáàäâã", "e": "eéèëê", "i": "iíìïî", "o": "oóòöôõ",
+    "u": "uúùüû", "n": "nñ", "c": "cç", "y": "yý",
+}
+
+
+def _regex_palabra(token: str) -> str:
+    """Regex que acepta el token con o sin acentos."""
+    partes = []
+    for ch in token:
+        if ch in _VARIANTES:
+            partes.append("[%s]" % _VARIANTES[ch])
+        else:
+            partes.append(re.escape(ch))
+    return "".join(partes)
+
+
+def _patron_tokens(texto: str, alias: Optional[str] = None) -> str:
+    """Regex de Mongo que busca los nombres que contienen [texto] completo.
+
+    Para los numeros se exige que el numero no sea parte de otro ("25" no
+    aparece en "250" ni en "225"), asi que la busqueda en la base no trae de
+    mas las calles parecidas.
+    """
+    tokens = _tokens_calle(texto)
+    if not tokens:
+        return ""
+    partes = []
+    for t in tokens:
+        if t.isdigit():
+            if alias and t != alias:
+                partes.append(r"(?<![0-9])(?:%s|%s)(?![0-9])" % (
+                    re.escape(t), re.escape(alias)))
+            else:
+                partes.append(r"(?<![0-9])%s(?![0-9])" % re.escape(t))
+        else:
+            partes.append(r"\b%s\b" % _regex_palabra(t))
+    return "|".join(partes)
+
+
 def _buscar_calles_mongo(texto: str, limit: int,
-                         centro_lat: float = None, centro_lng: float = None) -> List[Dict]:
+                         centro_lat: float = None,
+                         centro_lng: float = None) -> List[Dict]:
     """Calles cuyo nombre coincide con [texto], de la base local."""
     tokens = _tokens_calle(texto)
     if not tokens:
         return []
-    patron = "|".join(re.escape(t) for t in tokens)
+    alias = _alias_avenida(texto)
+    patron = _patron_tokens(texto, alias)
     docs = list(_calles.find({"nombre": {"$regex": patron, "$options": "i"}})
                 .limit(400))
-    puntuados = []
-    for d in docs:
-        p = _puntua_calle(d.get("nombre") or "", tokens)
-        if p > 0:
-            puntuados.append((p, d))
+    puntuados = _puntuar_docs(docs, tokens, centro_lat, centro_lng, alias)
     if not puntuados and len(tokens) > 1:
-        # El usuario añadio ruido delante ("calle 23 vedado"). Se reintenta con
-        # el primer token que sea un numero o nombre corto, que suele ser la via.
-        for t in tokens:
-            if t.isdigit():
-                return _buscar_calles_mongo(t, limit, centro_lat, centro_lng)
-    if centro_lat is not None and centro_lng is not None:
-        puntuados.sort(key=lambda x: (_haversine_m(
-            centro_lat, centro_lng,
-            (x[1].get("punto") or {}).get("coordinates", [0, 0])[1],
-            (x[1].get("punto") or {}).get("coordinates", [0, 0])[0]), -x[0]))
-    else:
-        puntuados.sort(key=lambda x: -x[0])
+        # El usuario anadio el barrio al final ("calle 23 vedado"). Se reintenta
+        # quitando tokens de la derecha, que suelen ser el barrio.
+        for k in range(len(tokens) - 1, 0, -1):
+            sub = tokens[:k]
+            if not sub:
+                continue
+            patron2 = _patron_tokens(" ".join(sub), alias)
+            docs2 = list(_calles.find(
+                {"nombre": {"$regex": patron2, "$options": "i"}}).limit(400))
+            puntuados = _puntuar_docs(docs2, sub, centro_lat, centro_lng, alias)
+            if puntuados:
+                break
+    puntuados.sort(key=lambda x: (x[0], x[1]))
     salida = []
-    for _, d in puntuados[:limit]:
-        coords = (d.get("punto") or {}).get("coordinates") or []
-        if len(coords) < 2:
-            continue
-        lng, lat = float(coords[0]), float(coords[1])
-        salida.append(_a_resultado(lat, lng, d.get("nombre") or texto,
-                                   "%s, La Habana" % (d.get("nombre") or texto)))
+    for _, _, d in puntuados[:limit]:
+        coords = (d.get("punto") or {}).get("coordinates") or [0, 0]
+        salida.append(_a_resultado(coords[1], coords[0], d.get("nombre") or texto,
+                                    "%s, La Habana" % (d.get("nombre") or texto)))
     return salida
 
 
 def _calles_coincidentes(texto: str, tope: int = 400,
                          centro_lat: float = None,
-                         centro_lng: float = None) -> List[Dict]:
+                         centro_lng: float = None,
+                         alias: Optional[str] = None) -> List[Dict]:
     """Docs de calles cuyo nombre puntua > 0 para [texto], mejor primero.
 
     Se ordena por parecido del nombre y, en empate, por cercania al centro
@@ -759,23 +898,61 @@ def _calles_coincidentes(texto: str, tope: int = 400,
     tokens = _tokens_calle(texto)
     if not tokens:
         return []
-    patron = "|".join(re.escape(t) for t in tokens)
+    if alias is None:
+        alias = _alias_avenida(texto)
+    patron = _patron_tokens(texto, alias)
     docs = list(_calles.find({"nombre": {"$regex": patron, "$options": "i"}})
                 .limit(tope))
-    puntuados = []
-    for d in docs:
-        p = _puntua_calle(d.get("nombre") or "", tokens)
-        if p <= 0:
-            continue
-        if centro_lat is not None and centro_lng is not None:
-            coords = (d.get("punto") or {}).get("coordinates") or [0, 0]
-            dist = _haversine_m(centro_lat, centro_lng,
-                                float(coords[1]), float(coords[0]))
-        else:
-            dist = 0.0
-        puntuados.append((-p, dist, d))
+    puntuados = _puntuar_docs(docs, tokens, centro_lat, centro_lng, alias)
+    if not puntuados and len(tokens) > 1:
+        # El usuario anadio el barrio al final ("calle 23 vedado"). Se reintenta
+        # quitando tokens de la derecha, que suelen ser el barrio.
+        for k in range(len(tokens) - 1, 0, -1):
+            sub = tokens[:k]
+            if not sub:
+                continue
+            patron2 = _patron_tokens(" ".join(sub), alias)
+            docs2 = list(_calles.find(
+                {"nombre": {"$regex": patron2, "$options": "i"}}).limit(tope))
+            sub_p = _puntuar_docs(docs2, sub, centro_lat, centro_lng, alias)
+            if sub_p:
+                puntuados = sub_p
+                break
     puntuados.sort(key=lambda x: (x[0], x[1]))
     return [d for _, _, d in puntuados]
+
+
+def _puntuar_docs(docs: List[Dict], tokens: List[str],
+                   centro_lat: float = None,
+                   centro_lng: float = None,
+                   alias: Optional[str] = None) -> List[Tuple]:
+    """Puntua [docs] contra [tokens]: devuelve (-puntaje, distancia, doc)."""
+    salida = []
+    for d in docs:
+        p = _puntua_calle(d.get("nombre") or "", tokens, alias)
+        if p <= 0:
+            continue
+        salida.append((-p, _dist_al_centro(d, centro_lat, centro_lng), d))
+    return salida
+
+
+def _dist_al_centro(doc: Dict, centro_lat: float = None,
+                    centro_lng: float = None) -> float:
+    """Distancia (m) del tramo de la calle al punto de referencia."""
+    if centro_lat is None or centro_lng is None:
+        return 0.0
+    coords = (doc.get("punto") or {}).get("coordinates") or []
+    if len(coords) < 2:
+        return 0.0
+    linea = _linea_de(doc)
+    try:
+        if linea is not None:
+            from shapely.geometry import Point
+            return linea.distance(Point(centro_lng, centro_lat)) * 111320.0
+        return _haversine_m(centro_lat, centro_lng, float(coords[1]),
+                            float(coords[0]))
+    except Exception:
+        return 0.0
 
 
 def _linea_de(doc: Dict):
@@ -796,47 +973,6 @@ def _linea_de(doc: Dict):
         return None
     from shapely.geometry import LineString
     return LineString(puntos)
-
-
-def _punto_cruce(docs_a: List[Dict], docs_b: List[Dict]) -> Optional[Tuple[float, float]]:
-    """Punto (lat, lng) de referencia entre dos calles.
-
-    La malla llega segmentada, asi que dos calles pueden casi tocarse sin
-    compartir vertice. Se busca el par de segmentos globalmente mas cercano:
-    si se cruzan, se usa el cruce; si no, el punto medio del tramo mas corto.
-    """
-    if not docs_a or not docs_b:
-        return None
-    lineas_a = [l for l in (_linea_de(d) for d in docs_a) if l is not None]
-    lineas_b = [l for l in (_linea_de(d) for d in docs_b) if l is not None]
-    if not lineas_a or not lineas_b:
-        return None
-
-    mejor_d = None
-    mejor_pt = None
-    for la in lineas_a:
-        for lb in lineas_b:
-            inter = la.intersection(lb)
-            if not inter.is_empty:
-                p = inter
-                while hasattr(p, "geoms"):
-                    geoms = list(p.geoms)
-                    if not geoms:
-                        break
-                    p = geoms[0]
-                if hasattr(p, "x") and hasattr(p, "y"):
-                    mejor_pt = (p.y, p.x)
-                    mejor_d = 0.0
-                    break
-            d = la.distance(lb)
-            if mejor_d is None or d < mejor_d:
-                mejor_d = d
-                pa = la.interpolate(la.project(lb.interpolate(lb.length / 2)))
-                pb = lb.interpolate(lb.project(la.interpolate(la.length / 2)))
-                mejor_pt = ((pa.y + pb.y) / 2.0, (pa.x + pb.x) / 2.0)
-        if mejor_d == 0.0:
-            break
-    return mejor_pt
 
 
 def _ancla_cerca_centro(docs: List[Dict], centro_lat: float, centro_lng: float,
@@ -924,58 +1060,282 @@ def _punto_mas_cercano_a(docs: List[Dict], lat: float, lng: float):
     return (p.y, p.x)
 
 
-def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
-                        centro_lat: float, centro_lng: float) -> List[Dict]:
-    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=300,
-                                                              centro_lat=centro_lat,
-                                                              centro_lng=centro_lng),
-                                         centro_lat, centro_lng, RADIO_USUARIO_M)
+def _geojson_de(docs: List[Dict]) -> Optional[Dict]:
+    """GeoJSON MultiLineString con la geometria de un conjunto de calles."""
+    tramos = []
+    for d in docs:
+        g = d.get("geom_geojson")
+        if not g:
+            continue
+        if g.get("type") == "LineString":
+            coords = g.get("coordinates") or []
+            if len(coords) >= 2:
+                tramos.append(coords)
+        elif g.get("type") == "MultiLineString":
+            for c in g.get("coordinates") or []:
+                if len(c) >= 2:
+                    tramos.append(c)
+    if not tramos:
+        return None
+    return {"type": "MultiLineString", "coordinates": tramos}
 
-    def _buscar_laterales(nombre):
-        docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=300,
-                                                       centro_lat=centro_lat,
-                                                       centro_lng=centro_lng),
-                                   centro_lat, centro_lng, RADIO_LATERAL_M)
-        if docs:
-            return docs
-        sin = _sin_tipo(nombre)
-        if sin and sin != nombre:
-            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=300,
-                                                           centro_lat=centro_lat,
-                                                           centro_lng=centro_lng),
-                                       centro_lat, centro_lng, RADIO_LATERAL_M)
-        if not docs:
-            docs = _ancla_cerca_centro(_calles_coincidentes(nombre, tope=500),
-                                       centro_lat, centro_lng, 10000.0)
-        return docs
 
-    docsa = _buscar_laterales(calle_a)
-    docsb = _buscar_laterales(calle_b)
-    if not docs_principal or not docsa or not docsb:
+def _cruza_en_mongo(geom_principal: Dict, nombres: List[str]) -> List[Dict]:
+    """Docs de esas vias que intersectan de verdad la geometria principal.
+
+    Esta es la prueba dura: Mongo decide (con $geoIntersects) si las dos vias
+    se cruzan de verdad o no. Sin cruce real no hay direccion, por muy parecidas
+    que sean las lineas.
+    """
+    if geom_principal is None or not nombres:
         return []
-
-    geom = _union_lineas(docs_principal)
-    if geom is None:
+    try:
+        docs = list(_calles.find({
+            "geom_geojson": {"$geoIntersects": {"$geometry": geom_principal}},
+            "nombre": {"$in": nombres},
+        }).limit(600))
+    except Exception:
         return []
+    return docs
 
+
+def _puntos_cruce(docs_principal: List[Dict], docs_lateral: List[Dict],
+                  centro_lat: float, centro_lng: float,
+                  tope: int = 30) -> List[Tuple[float, float]]:
+    """Puntos donde la principal cruza a la lateral, los mas cercanos primero."""
+    gp = _union_lineas(docs_principal)
+    gl = _union_lineas(docs_lateral)
+    if gp is None or gl is None:
+        return []
+    try:
+        inter = gp.intersection(gl)
+    except Exception:
+        return []
+    if inter.is_empty:
+        return []
+    puntos = []
+    try:
+        geoms = list(inter.geoms)
+    except AttributeError:
+        geoms = [inter]
+    for g in geoms:
+        if hasattr(g, "x") and hasattr(g, "y"):
+            puntos.append((g.y, g.x))
+        elif hasattr(g, "geoms"):
+            for gg in g.geoms:
+                if hasattr(gg, "x") and hasattr(gg, "y"):
+                    puntos.append((gg.y, gg.x))
+    unicos = []
+    for p in puntos:
+        if all(_haversine_m(p[0], p[1], q[0], q[1]) > 5.0 for q in unicos):
+            unicos.append(p)
+    unicos.sort(key=lambda p: _haversine_m(p[0], p[1], centro_lat, centro_lng))
+    return unicos[:tope]
+
+
+# Distancia maxima (m) a la que se acepta que dos vias se cruzen aunque la
+# malla tenga un hueco (segmentos que no comparten vertice).
+MAX_APROX_M = float(os.getenv("GEO_MAX_APROX_M", "500"))
+
+
+def _direccion_en(docs: List[Dict], lat: float, lng: float) -> Optional[float]:
+    """Rumbo (grados) del tramo de [docs] mas cercano a (lat, lng)."""
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
+    objetivo = Point(lng, lat)
+    mejor = None
+    for d in docs:
+        linea = _linea_de(d)
+        if linea is None:
+            continue
+        try:
+            p = nearest_points(linea, objetivo)[0]
+            pos = linea.project(p)
+            a = linea.interpolate(max(0.0, pos - 0.0005))
+            b = linea.interpolate(min(linea.length, pos + 0.0005))
+        except Exception:
+            continue
+        if a.x == b.x and a.y == b.y:
+            continue
+        ang = math.degrees(math.atan2(b.y - a.y, b.x - a.x))
+        dist = linea.distance(objetivo)
+        if mejor is None or dist < mejor[0]:
+            mejor = (dist, ang)
+    return mejor[1] if mejor else None
+
+
+def _se_cruzan(docs_a: List[Dict], docs_b: List[Dict], lat: float,
+               lng: float) -> bool:
+    """True si las dos vias se cruzan de verdad y no van paralelas.
+
+    Calle y avenida paralelas (Virtudes, Industria y Salud) nunca se cruzan:
+    por mucho que se acerquen, "Virtudes entre Industria y Salud" no es una
+    direccion que exista.
+    """
+    ang_a = _direccion_en(docs_a, lat, lng)
+    ang_b = _direccion_en(docs_b, lat, lng)
+    if ang_a is None or ang_b is None:
+        return False
+    dif = abs((ang_a - ang_b + 180.0) % 360.0 - 180.0)
+    return 30.0 <= dif <= 150.0
+
+
+def _punto_aproximado(docs_principal: List[Dict], docs_lateral: List[Dict],
+                      centro_lat: float, centro_lng: float) -> List[Tuple[float, float]]:
+    """Punto de la principal mas cercano a la lateral, si se cruzan de verdad.
+
+    Respaldo para cuando Mongo $geoIntersects no ve el cruce porque la malla
+    esta segmentada y los segmentos no comparten vertice. Si las dos vias van
+    paralelas, no se acepta: no hay esquina.
+    """
+    gp = _union_lineas(docs_principal)
+    gl = _union_lineas(docs_lateral)
+    if gp is None or gl is None:
+        return []
     from shapely.ops import nearest_points
     try:
-        p1 = nearest_points(geom, _union_lineas(docsa))[0]
-        p2 = nearest_points(geom, _union_lineas(docsb))[0]
-        d1 = geom.project(p1)
-        d2 = geom.project(p2)
+        p1, p2 = nearest_points(gp, gl)
     except Exception:
         return []
-    if abs(float(d1) - float(d2)) < 0.00001:
+    dist = p1.distance(p2) * 111320.0
+    if dist > MAX_APROX_M:
         return []
-    try:
-        m = geom.interpolate((float(d1) + float(d2)) / 2.0)
-    except Exception:
+    lat, lng = p1.y, p1.x
+    if not _se_cruzan(docs_principal, docs_lateral, lat, lng):
         return []
-    nombre = _nombre_principal(principal, centro_lat, centro_lng)
-    corto = "%s entre %s y %s" % (_sin_tipo(nombre), _sin_tipo(calle_a), _sin_tipo(calle_b))
-    return [_a_resultado(m.y, m.x, corto, "%s entre %s y %s, La Habana" % (nombre, calle_a, calle_b))]
+    return [(lat, lng)]
 
+
+def _grupos_nombre(texto: str, centro_lat: float, centro_lng: float,
+                   max_grupos: int = 6) -> List[Tuple[str, List[Dict]]]:
+    """Docs de la via buscada agrupados por nombre canonico.
+
+    Un mismo numero puede estar en varias zonas de la ciudad ("23" en el
+    Vedado y en Guanabacoa), asi que se agrupa por nombre y se prueban los
+    grupos por orden de parecido y cercania.
+    """
+    tokens = _tokens_calle(texto)
+    if not tokens:
+        return []
+    alias = _alias_avenida(texto)
+    docs = _calles_coincidentes(texto, tope=600, centro_lat=centro_lat,
+                                centro_lng=centro_lng, alias=alias)
+    grupos = {}
+    for d in docs:
+        p = _puntua_calle(d.get("nombre") or "", tokens, alias)
+        if p <= 0:
+            continue
+        grupos.setdefault(d.get("nombre") or "", []).append(d)
+    # Se descartan los tramos lejanos: para resolver un "entre" solo cuentan
+    # las vias de la zona del usuario, y ademas la geometria se manejaria
+    # mucho mejor (y la respuesta seria mas rapida).
+    radio = RADIO_USUARIO_M if max_grupos <= 6 else RADIO_LATERAL_M
+    salida = []
+    for nombre, ds in grupos.items():
+        pmax = max(_puntua_calle(d.get("nombre") or "", tokens, alias) for d in ds)
+        cercanos = [d for d in ds
+                    if _dist_al_centro(d, centro_lat, centro_lng) <= radio]
+        if not cercanos:
+            continue
+        dmin = min(_dist_al_centro(d, centro_lat, centro_lng) for d in cercanos)
+        salida.append((-pmax, dmin, nombre, cercanos))
+    salida.sort(key=lambda x: (x[0], x[1]))
+    if not salida:
+        return []
+    return [(nombre, ds) for _, _, nombre, ds in salida[:max_grupos]]
+
+
+def _resolver_entre(docs_principal: List[Dict], grupos_a: List[Tuple[str, List[Dict]]],
+                    grupos_b: List[Tuple[str, List[Dict]]],
+                    centro_lat: float, centro_lng: float) -> Optional[Dict]:
+    """Cruces reales entre la principal y las dos laterales. None si no hay."""
+    geom_principal = _geojson_de(docs_principal)
+    if geom_principal is None:
+        return None
+    nombres_lateral = [n for n, _ in grupos_a] + [n for n, _ in grupos_b]
+    if not nombres_lateral:
+        return None
+    cruzan = _cruza_en_mongo(geom_principal, list(dict.fromkeys(nombres_lateral)))
+    if not cruzan:
+        return None
+    por_nombre = {}
+    for d in cruzan:
+        por_nombre.setdefault(d.get("nombre") or "", []).append(d)
+
+    def _puntos_de(grupos):
+        salida = {}
+        for nombre, docs in grupos:
+            cruz = por_nombre.get(nombre) or []
+            if cruz:
+                pts = _puntos_cruce(docs_principal, cruz, centro_lat, centro_lng)
+            else:
+                # La malla tiene un hueco: se busca el punto mas cercano, pero
+                # solo si las dos vias se cruzan de verdad (no van paralelas).
+                pts = _punto_aproximado(docs_principal, docs, centro_lat,
+                                        centro_lng)
+            if pts:
+                salida[nombre] = pts
+        return salida
+
+    pts_a = _puntos_de(grupos_a)
+    pts_b = _puntos_de(grupos_b)
+    if not pts_a or not pts_b:
+        return None
+
+    mejor = None
+    for nombre_a, lista_a in pts_a.items():
+        for nombre_b, lista_b in pts_b.items():
+            for pa in lista_a:
+                for pb in lista_b:
+                    sep = _haversine_m(pa[0], pa[1], pb[0], pb[1])
+                    if sep > MAX_ENTRE_SEPARACION_M:
+                        continue
+                    mid = ((pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0)
+                    dist = _haversine_m(mid[0], mid[1], centro_lat, centro_lng)
+                    if mejor is None or dist < mejor["dist"]:
+                        mejor = {"lat": mid[0], "lng": mid[1], "dist": dist,
+                                 "sep": sep, "lateral_a": nombre_a,
+                                 "lateral_b": nombre_b}
+    return mejor
+
+
+def _buscar_entre_mongo(principal: str, calle_a: str, calle_b: str, limit: int,
+                        centro_lat: float, centro_lng: float) -> List[Dict]:
+    """Resuelve "A entre B y C" con las geometrias reales de las calles.
+
+    Reglas:
+      1. A, B y C tienen que existir de verdad (por nombre, en la ciudad).
+      2. A tiene que CRUZAR a B y a C (Mongo $geoIntersects sobre las
+         geometrias de la base).
+      3. Las dos esquinas tienen que estar cerca la una de la otra; si estan
+         a cientos de metros, "A entre B y C" no describe un solo punto y la
+         direccion no existe.
+    """
+    grupos_p = _grupos_nombre(principal, centro_lat, centro_lng, max_grupos=6)
+    grupos_a = _grupos_nombre(calle_a, centro_lat, centro_lng, max_grupos=8)
+    grupos_b = _grupos_nombre(calle_b, centro_lat, centro_lng, max_grupos=8)
+    if not grupos_p or not grupos_a or not grupos_b:
+        return []
+
+    mejor = None
+    for nombre_p, docs_p in grupos_p:
+        r = _resolver_entre(docs_p, grupos_a, grupos_b, centro_lat, centro_lng)
+        if r is None:
+            continue
+        r["nombre_principal"] = nombre_p
+        if mejor is None or r["dist"] < mejor["dist"]:
+            mejor = r
+    if mejor is None:
+        return []
+
+    nombre = mejor["nombre_principal"]
+    corto = "%s entre %s y %s" % (_nombre_limpio(nombre),
+                                 _nombre_limpio(mejor["lateral_a"]),
+                                 _nombre_limpio(mejor["lateral_b"]))
+    largo = "%s entre %s y %s, La Habana" % (nombre,
+                                              _nombre_limpio(mejor["lateral_a"]),
+                                              _nombre_limpio(mejor["lateral_b"]))
+    return [_a_resultado(mejor["lat"], mejor["lng"], corto, largo)]
 
 
 def _punto_sobre(principal_docs: List[Dict], lateral_docs: List[Dict],
@@ -1011,10 +1371,43 @@ def _punto_sobre(principal_docs: List[Dict], lateral_docs: List[Dict],
 
 def _nombre_principal(texto: str, centro_lat: float = None,
                       centro_lng: float = None) -> str:
-    """Nombre canonico de la via buscada, si esta en la base; si no, el texto."""
-    docs = _calles_coincidentes(texto, tope=10, centro_lat=centro_lat,
+    """Nombre canonico de la via buscada, si esta en la base; si no, el texto.
+
+    Se prefiere el nombre que coincide exactamente con lo pedido ("Avenida 26"
+    antes que "126" o "Avenida 26 de Julio"), y a igualdad el mas cercano.
+    """
+    tokens = _tokens_calle(texto)
+    if not tokens:
+        return texto
+    objetivo = " ".join(tokens)
+    docs = _calles_coincidentes(texto, tope=600, centro_lat=centro_lat,
                                 centro_lng=centro_lng)
-    return docs[0].get("nombre") if docs else texto
+    exactos = [d for d in docs
+               if _normaliza(_sin_tipo(d.get("nombre") or "")) == objetivo]
+    if exactos:
+        # Si el usuario escribio el tipo de via ("avenida 26"), se prefiere la
+        # calle con ese mismo tipo ("Avenida 26" antes que "Calle 26").
+        palabras = texto.split()
+        tipo = _normaliza(palabras[0]) if palabras else ""
+        if tipo in TIPOS_VIA:
+            mismo_tipo = [d for d in exactos
+                          if _normaliza((d.get("nombre") or "").split()[0]
+                                         if (d.get("nombre") or "").split()
+                                         else "") == tipo]
+            if mismo_tipo:
+                exactos = mismo_tipo
+        return exactos[0].get("nombre")
+    if docs:
+        return docs[0].get("nombre")
+    return texto
+
+
+def _nombre_limpio(texto: str) -> str:
+    """Nombre de via sin el barrio ni el tipo ("calle 23 vedado" -> "23")."""
+    tokens = _tokens_calle(texto)
+    if not tokens:
+        return _sin_tipo(texto)
+    return " ".join(tokens)
 
 
 async def _buscar_entre(principal: str, calle_a: str, calle_b: str,
@@ -1071,22 +1464,28 @@ async def buscar(q: str = Query(..., min_length=2),
     if entre:
         principal, calle_a, calle_b = entre
         resultados = []
+        origen = None
         try:
             resultados = _buscar_entre_mongo(principal, calle_a, calle_b, limit,
                                              centro_lat, centro_lng)
+            if resultados:
+                origen = "mongo-entre"
         except Exception:
             resultados = []
         if not resultados:
             try:
                 resultados = await _buscar_entre(principal, calle_a, calle_b,
                                                  centro_lat, centro_lng, limit)
+                if resultados:
+                    origen = "photon-entre"
             except Exception:
                 resultados = []
         resultados = _dedup(resultados, limit)
         if not resultados:
             return {"ok": False, "resultados": [], "origen": "sin-resultados",
-                    "motivo": "direccion no encontrada"}
-        return {"ok": True, "resultados": resultados, "origen": "mongo-entre"}
+                    "motivo": "Direccion no encontrada"}
+        return {"ok": True, "resultados": resultados,
+                "origen": origen or "mongo-entre"}
 
     resultados = _buscar_calles_mongo(texto, limit, centro_lat, centro_lng)
     origen = "mongo" if resultados else None
@@ -1173,146 +1572,3 @@ def direccion(lat: float = Query(..., ge=-90, le=90),
     }
     _a_cache(clave, respuesta)
     return respuesta
-
-
-@router.get("/geo/estado")
-def estado():
-    """Como esta la base local de calles (util para el panel y el import)."""
-    importadas = _calles.estimated_document_count()
-    cajas = _progreso.count_documents({})
-    verificadas = _progreso.count_documents({"completa": True})
-    return {
-        "ok": importadas > 0,
-        "calles": importadas,
-        "cuadros_importados": cajas,
-        "cuadros_verificados": verificadas,
-        "cuadros_totales": CUADROS_ESPERADOS,
-        "listo": importadas > 0 and verificadas >= CUADROS_ESPERADOS,
-    }
-
-
-def _buscar_calles_mongo_por_nombre(nombre: str, limit: int = 50,
-                                   centro_lat: float = None, centro_lng: float = None) -> List[Dict]:
-    docs = _calles_coincidentes(nombre, tope=limit, centro_lat=centro_lat, centro_lng=centro_lng)
-    return docs
-
-
-def _buscar_entre_mongo_geointersects(principal: str, calle_a: str, calle_b: str, limit: int,
-                                      centro_lat: float, centro_lng: float) -> List[Dict]:
-    docs_principal = _ancla_cerca_centro(_calles_coincidentes(principal, tope=200,
-                                                              centro_lat=centro_lat,
-                                                              centro_lng=centro_lng),
-                                         centro_lat, centro_lng, RADIO_USUARIO_M)
-    if not docs_principal:
-        return []
-
-    def _bl(n):
-        docs = _ancla_cerca_centro(_calles_coincidentes(n, tope=200,
-                                                       centro_lat=centro_lat,
-                                                       centro_lng=centro_lng),
-                                   centro_lat, centro_lng, RADIO_LATERAL_M)
-        if docs:
-            return docs
-        sin = _sin_tipo(n)
-        if sin and sin != n:
-            docs = _ancla_cerca_centro(_calles_coincidentes(sin, tope=200,
-                                                           centro_lat=centro_lat,
-                                                           centro_lng=centro_lng),
-                                       centro_lat, centro_lng, RADIO_LATERAL_M)
-        if not docs:
-            docs = _ancla_cerca_centro(_calles_coincidentes(n, tope=400),
-                                       centro_lat, centro_lng, 12000.0)
-        return docs
-
-    docsa = _bl(calle_a)
-    docsb = _bl(calle_b)
-    if not docsa or not docsb:
-        return []
-
-    from shapely.geometry import LineString
-    try:
-        p_b_c = _punto_cruce(docsb, docsa)
-    except Exception:
-        p_b_c = None
-    if p_b_c is None:
-        return []
-
-    pb_pt = _punto_mas_cercano_a(docsb, p_b_c[0], p_b_c[1]) or p_b_c
-    pc_pt = _punto_mas_cercano_a(docsa, p_b_c[0], p_b_c[1]) or p_b_c
-    try:
-        ls = LineString([(pb_pt[1], pb_pt[0]), (pc_pt[1], pc_pt[0])])
-    except Exception:
-        return []
-
-    try:
-        candidatos = list(_calles.find({
-            'geom_geojson': {'': {'': ls.__geo_interface__}}
-        }).limit(200))
-    except Exception:
-        candidatos = []
-
-    tokens_p = _tokens_calle(principal)
-    mejor = []
-    for c in candidatos:
-        pscore = _puntua_calle(c.get('nombre') or '', tokens_p)
-        if pscore <= 0:
-            continue
-        mejor.append((pscore, c))
-    mejor.sort(key=lambda x: -x[0])
-
-    if not mejor:
-        mejores_princ = _calles_coincidentes(principal, tope=50, centro_lat=centro_lat, centro_lng=centro_lng)
-        for mp in mejores_princ:
-            try:
-                lj = mp.get('geom_geojson')
-                if not lj:
-                    continue
-                from shapely.geometry import shape
-                shp = shape(lj)
-                if shp.intersects(ls):
-                    try:
-                        inter = shp.intersection(ls)
-                        if inter.is_empty:
-                            continue
-                        pt = inter
-                        while hasattr(pt, 'geoms'):
-                            gs = list(pt.geoms)
-                            if not gs: break
-                            pt = gs[0]
-                        if hasattr(pt, 'x') and hasattr(pt, 'y'):
-                            nombre = _nombre_principal(principal, centro_lat, centro_lng)
-                            corto = '%s entre %s y %s' % (_sin_tipo(nombre), _sin_tipo(calle_a), _sin_tipo(calle_b))
-                            return [_a_resultado(pt.y, pt.x, corto, '%s entre %s y %s, La Habana' % (nombre, calle_a, calle_b))]
-                    except Exception:
-                        continue
-            except Exception:
-                continue
-        return []
-
-    for _, mc in mejor[:15]:
-        try:
-            lj = mc.get('geom_geojson')
-            if not lj:
-                continue
-            from shapely.geometry import shape
-            shp = shape(lj)
-            if shp.intersects(ls):
-                try:
-                    inter = shp.intersection(ls)
-                    if inter.is_empty:
-                        continue
-                    pt = inter
-                    while hasattr(pt, 'geoms'):
-                        gs = list(pt.geoms)
-                        if not gs: break
-                        pt = gs[0]
-                    if hasattr(pt, 'x') and hasattr(pt, 'y'):
-                        nombre = _nombre_principal(principal, centro_lat, centro_lng)
-                        corto = '%s entre %s y %s' % (_sin_tipo(nombre), _sin_tipo(calle_a), _sin_tipo(calle_b))
-                        return [_a_resultado(pt.y, pt.x, corto, '%s entre %s y %s, La Habana' % (nombre, calle_a, calle_b))]
-                except Exception:
-                    continue
-        except Exception:
-            continue
-    return []
-# force

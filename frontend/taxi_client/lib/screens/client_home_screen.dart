@@ -247,7 +247,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     // 2) "entre" incompleto: no se llama al backend, se pide completar.
     if (_tieneEntreIncompleto(trimmed)) {
       setState(() {
-        _searchHelp = 'Completa la direccion: calle A entre calle B y calle C';
+        _searchHelp = 'Completa la dirección: calle A entre calle B y calle C';
       });
       return;
     }
@@ -262,7 +262,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           _searching = false;
           _searchError = null;
           if (results.isEmpty) {
-            _searchError = 'Direccion no encontrada';
+            _searchError = 'Dirección no encontrada';
           }
         });
       } catch (_) {
@@ -271,7 +271,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         setState(() {
           _suggestions = const [];
           _searching = false;
-          _searchError = 'Error de conexion. Intenta de nuevo';
+          _searchError = 'Error de conexión. Intenta de nuevo';
         });
       }
     });
