@@ -74,6 +74,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   final TextEditingController _searchController = TextEditingController();
   final Map<String, String> _reverseCache = {};
   List<GeoPlace> _suggestions = const [];
+  String? _searchError;
+  String? _searchHelp;
   bool _searching = false;
   Timer? _searchDebounce;
 
@@ -231,22 +233,63 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     _searchDebounce?.cancel();
     _searchController.text = text;
     final trimmed = text.trim();
-    if (trimmed.length < 3) {
+
+    // 1) Limpiar siempre: nada de sugerencias "fantasmas" de una busqueda previa.
+    setState(() {
+      _suggestions = const [];
+      _searching = false;
+      _searchError = null;
+      _searchHelp = null;
+    });
+
+    if (trimmed.length < 3) return;
+
+    // 2) "entre" incompleto: no se llama al backend, se pide completar.
+    if (_tieneEntreIncompleto(trimmed)) {
       setState(() {
-        _suggestions = const [];
-        _searching = false;
+        _searchHelp = 'Completa la direccion: calle A entre calle B y calle C';
       });
       return;
     }
+
     setState(() => _searching = true);
     _searchDebounce = Timer(const Duration(milliseconds: 450), () async {
-      final results = await GeocodeService.search(trimmed, near: _myLoc);
-      if (!mounted || _searchController.text.trim() != trimmed) return;
-      setState(() {
-        _suggestions = results;
-        _searching = false;
-      });
+      try {
+        final results = await GeocodeService.search(trimmed, near: _myLoc);
+        if (!mounted || _searchController.text.trim() != trimmed) return;
+        setState(() {
+          _suggestions = results;
+          _searching = false;
+          _searchError = null;
+          if (results.isEmpty) {
+            _searchError = 'Direccion no encontrada';
+          }
+        });
+      } catch (_) {
+        // 3) Fallo de red: mensaje rojo, el buscador no se queda congelado.
+        if (!mounted || _searchController.text.trim() != trimmed) return;
+        setState(() {
+          _suggestions = const [];
+          _searching = false;
+          _searchError = 'Error de conexion. Intenta de nuevo';
+        });
+      }
     });
+  }
+
+  /// True si la direccion usa "entre" pero todavia no trae las dos calles.
+  bool _tieneEntreIncompleto(String texto) {
+    final partes = texto.split(RegExp(r'\s+'));
+    final idx = partes.indexWhere(
+        (p) => p.toLowerCase().replaceAll('[^a-z]', '') == 'entre');
+    if (idx == -1) return false;
+    if (idx == 0) return true;
+    final resto = partes.sublist(idx + 1).join(' ').trim();
+    if (resto.isEmpty) return true;
+    final tieneY = RegExp(r'\by\b', caseSensitive: false).hasMatch(resto) ||
+        RegExp(r'\be\b', caseSensitive: false).hasMatch(resto);
+    final palabras = resto.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    return !tieneY || palabras < 3;
   }
 
   void _onSuggestionSelected(GeoPlace place) {
@@ -256,6 +299,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     setState(() {
       _suggestions = const [];
       _searching = false;
+      _searchError = null;
+      _searchHelp = null;
       if (_pinMode == _PinMode.pickup) {
         _pickup = place.point;
         _myLoc = place.point;
@@ -885,6 +930,8 @@ onTap: () => setState(() {
                                   setState(() {
                                     _suggestions = const [];
                                     _searching = false;
+                                    _searchError = null;
+                                    _searchHelp = null;
                                   });
                                 },
                               )
@@ -920,6 +967,30 @@ onTap: () => setState(() {
                     ),
                   ),
                 ],
+                if (_searchHelp != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, left: 4, right: 4),
+                    child: Text(
+                      _searchHelp!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade800,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                if (_searchError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, left: 4, right: 4),
+                    child: Text(
+                      _searchError!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.red,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 Text(
                   _pinMode == _PinMode.pickup

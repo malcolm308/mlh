@@ -1,12 +1,13 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../api_config.dart';
 import 'api_client.dart';
 
-/// Lugar devuelto por una búsqueda de direcciones (geocodificación directa).
+/// Lugar devuelto por una búsqueda de direcciones
 class GeoPlace {
   final String displayName;
   final String? shortLabel;
@@ -24,15 +25,12 @@ class GeoPlace {
 }
 
 /// Servicio de geocodificación basado en backend propio (/geo/buscar).
-///
-/// Mantiene cache y rate limit para evitar abusos, sin tocar la UI ni MapLibre.
 class GeocodeService {
   static final Map<String, List<GeoPlace>> _cache = {};
 
   static DateTime _lastRequest = DateTime.fromMillisecondsSinceEpoch(0);
   static Future<void> _pending = Future.value();
 
-  /// Serializa las llamadas y las separa >= 500 ms.
   static Future<T> _guarded<T>(Future<T> Function() action) {
     final run = _pending.then((_) async {
       var waitMs = 500 - DateTime.now().difference(_lastRequest).inMilliseconds;
@@ -44,7 +42,6 @@ class GeocodeService {
     return run;
   }
 
-  /// Busca direcciones por texto (ej. "calle 23 vedado", "virtudes entre industria y salud").
   static Future<List<GeoPlace>> search(
     String query, {
     LatLng? near,
@@ -55,10 +52,10 @@ class GeocodeService {
     if (trimmed.length < 2) return const [];
     final nearLat = near?.latitude;
     final nearLon = near?.longitude;
-    final key = '$trimmed|$nearLat|$nearLon|$limit';
+    final key = trimmed.toLowerCase() + '|' + (nearLat?.toString() ?? '') + '|' + (nearLon?.toString() ?? '') + '|' + limit.toString();
     if (_cache.containsKey(key)) return _cache[key]!;
 
-    final uri = Uri.parse('${ApiConfig.baseUrl}/geo/buscar').replace(
+    final uri = Uri.parse(ApiConfig.baseUrl + '/geo/buscar').replace(
       queryParameters: {
         'q': trimmed,
         if (nearLat != null) 'lat': nearLat.toString(),
@@ -68,39 +65,31 @@ class GeocodeService {
     );
 
     try {
-      final res = await _guarded(() => ApiClient.getUri(uri));
-      if (res is! Map<String, dynamic>) return const [];
-      final ok = res['ok'] == true;
-      final resultados = res['resultados'] as List<dynamic>? ?? [];
-      if (!ok || resultados.isEmpty) {
-        _cache[key] = const [];
-        return const [];
+      final resp = await http.get(uri, headers: {'Accept': 'application/json'});
+      if (resp.statusCode != 200) {
+        throw http.ClientException('HTTP ${resp.statusCode} en /geo/buscar');
       }
-      final places = resultados.map<GeoPlace>((r) {
-        if (r is! Map<String, dynamic>) return null;
-        final lat = (r['lat'] as num?)?.toDouble();
-        final lng = (r['lng'] as num?)?.toDouble();
-        if (lat == null || lng == null) return null;
-        final displayName = r['display_name']?.toString() ?? '';
-        final shortLabel = r['short_label']?.toString();
-        return GeoPlace(
-          lat: lat,
-          lng: lng,
-          displayName: displayName.isEmpty
-              ? '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}'
-              : displayName,
-          shortLabel: shortLabel,
-        );
-      }).whereType<GeoPlace>().toList();
+      final json = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (json['ok'] != true) return const [];
+      final resultados = json['resultados'] as List? ?? const [];
+      final places = <GeoPlace>[];
+      for (final r in resultados) {
+        if (r is! Map) continue;
+        final latv = (r['lat'] as num?)?.toDouble();
+        final lngv = (r['lng'] as num?)?.toDouble();
+        if (latv == null || lngv == null) continue;
+        final short = r['short_label']?.toString() ?? r['display_name']?.toString();
+        final display = r['display_name']?.toString() ?? short ?? '';
+        places.add(GeoPlace(lat: latv, lng: lngv, displayName: display, shortLabel: short));
+      }
       _cache[key] = places;
       return places;
-    } on ApiException {
-      _cache[key] = const [];
-      return const [];
+    } catch (e) {
+      // Se propaga el error para que la UI pueda avisar al usuario.
+      throw GeocodeException('No se pudo consultar el servidor: $e');
     }
   }
 
-  /// Convierte unas coordenadas en una dirección corta de calles.
   static Future<String?> reverse(LatLng p) async {
     if (!ApiConfig.inMapArea(p)) return null;
     try {
@@ -115,4 +104,12 @@ class GeocodeService {
       return null;
     }
   }
+}
+
+/// Error de red al consultar el backend de geocodificacion.
+class GeocodeException implements Exception {
+  final String message;
+  GeocodeException(this.message);
+  @override
+  String toString() => message;
 }
