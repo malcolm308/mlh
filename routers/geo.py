@@ -769,6 +769,14 @@ def _tokens_calle(texto: str) -> List[str]:
         # "San Miguel" es a la vez un barrio y una calle: si al quitar el barrio
         # no queda nada, el nombre es el de la calle y se conserva.
         return palabras
+    if len(resultado) >= 3:
+        # Articulo/preposicion suelta en medio ("Enlace a Paseo"): no aporta y
+        # hace que la busqueda traiga media ciudad. Al final si importa
+        # ("Calle 11 A").
+        sin_sueltas = [t for i, t in enumerate(resultado)
+                       if not (len(t) == 1 and 0 < i < len(resultado) - 1)]
+        if sin_sueltas:
+            resultado = sin_sueltas
     return resultado
 
 
@@ -837,28 +845,39 @@ def _palabra_limites():
     return r"(?<!%s)" % cls, r"(?!%s)" % cls
 
 
-def _patron_tokens(texto: str, alias: Optional[str] = None) -> str:
-    """Regex de Mongo que busca los nombres que contienen [texto] completo.
+def _patron_token(token: str, alias: Optional[str] = None) -> str:
+    """Regex de Mongo para un solo token (numero exacto o palabra con acentos)."""
+    if token.isdigit():
+        if alias and token != alias:
+            return r"(?<![0-9])(?:%s|%s)(?![0-9])" % (
+                re.escape(token), re.escape(alias))
+        return r"(?<![0-9])%s(?![0-9])" % re.escape(token)
+    izq, der = _palabra_limites()
+    return r"%s%s%s" % (izq, _regex_palabra(token), der)
 
-    Para los numeros se exige que el numero no sea parte de otro ("25" no
-    aparece en "250" ni en "225"), asi que la busqueda en la base no trae de
-    mas las calles parecidas.
+
+def _filtro_nombre(texto: str, alias: Optional[str] = None) -> Optional[Dict]:
+    """Filtro Mongo que exige TODOS los tokens del nombre (AND), no cualquiera.
+
+    Con OR, un token corto como "a" ("Enlace a Paseo") trae cientos de calles
+    y el limite de documentos deja fuera la calle correcta.
     """
     tokens = _tokens_calle(texto)
     if not tokens:
+        return None
+    patrones = [_patron_token(t, alias) for t in tokens]
+    if len(patrones) == 1:
+        return {"nombre": {"$regex": patrones[0], "$options": "i"}}
+    return {"$and": [{"nombre": {"$regex": p, "$options": "i"}}
+                     for p in patrones]}
+
+
+def _patron_tokens(texto: str, alias: Optional[str] = None) -> str:
+    """Regex de Mongo que busca los nombres que contienen algun token."""
+    tokens = _tokens_calle(texto)
+    if not tokens:
         return ""
-    izq, der = _palabra_limites()
-    partes = []
-    for t in tokens:
-        if t.isdigit():
-            if alias and t != alias:
-                partes.append(r"(?<![0-9])(?:%s|%s)(?![0-9])" % (
-                    re.escape(t), re.escape(alias)))
-            else:
-                partes.append(r"(?<![0-9])%s(?![0-9])" % re.escape(t))
-        else:
-            partes.append(r"%s%s%s" % (izq, _regex_palabra(t), der))
-    return "|".join(partes)
+    return "|".join(_patron_token(t, alias) for t in tokens)
 
 
 def _buscar_calles_mongo(texto: str, limit: int,
@@ -869,9 +888,10 @@ def _buscar_calles_mongo(texto: str, limit: int,
     if not tokens:
         return []
     alias = _alias_avenida(texto)
-    patron = _patron_tokens(texto, alias)
-    docs = list(_calles.find({"nombre": {"$regex": patron, "$options": "i"}})
-                .limit(400))
+    filtro = _filtro_nombre(texto, alias)
+    if filtro is None:
+        return []
+    docs = list(_calles.find(filtro).limit(400))
     puntuados = _puntuar_docs(docs, tokens, centro_lat, centro_lng, alias)
     if not puntuados and len(tokens) > 1:
         # El usuario anadio el barrio al final ("calle 23 vedado"). Se reintenta
@@ -880,9 +900,10 @@ def _buscar_calles_mongo(texto: str, limit: int,
             sub = tokens[:k]
             if not sub:
                 continue
-            patron2 = _patron_tokens(" ".join(sub), alias)
-            docs2 = list(_calles.find(
-                {"nombre": {"$regex": patron2, "$options": "i"}}).limit(400))
+            filtro2 = _filtro_nombre(" ".join(sub), alias)
+            if filtro2 is None:
+                continue
+            docs2 = list(_calles.find(filtro2).limit(400))
             puntuados = _puntuar_docs(docs2, sub, centro_lat, centro_lng, alias)
             if puntuados:
                 break
@@ -909,9 +930,10 @@ def _calles_coincidentes(texto: str, tope: int = 400,
         return []
     if alias is None:
         alias = _alias_avenida(texto)
-    patron = _patron_tokens(texto, alias)
-    docs = list(_calles.find({"nombre": {"$regex": patron, "$options": "i"}})
-                .limit(tope))
+    filtro = _filtro_nombre(texto, alias)
+    if filtro is None:
+        return []
+    docs = list(_calles.find(filtro).limit(tope))
     puntuados = _puntuar_docs(docs, tokens, centro_lat, centro_lng, alias)
     if not puntuados and len(tokens) > 1:
         # El usuario anadio el barrio al final ("calle 23 vedado"). Se reintenta
@@ -920,9 +942,10 @@ def _calles_coincidentes(texto: str, tope: int = 400,
             sub = tokens[:k]
             if not sub:
                 continue
-            patron2 = _patron_tokens(" ".join(sub), alias)
-            docs2 = list(_calles.find(
-                {"nombre": {"$regex": patron2, "$options": "i"}}).limit(tope))
+            filtro2 = _filtro_nombre(" ".join(sub), alias)
+            if filtro2 is None:
+                continue
+            docs2 = list(_calles.find(filtro2).limit(tope))
             sub_p = _puntuar_docs(docs2, sub, centro_lat, centro_lng, alias)
             if sub_p:
                 puntuados = sub_p
@@ -1075,6 +1098,18 @@ def _geojson_de(docs: List[Dict]) -> Optional[Dict]:
     for d in docs:
         g = d.get("geom_geojson")
         if not g:
+            # Base sin migrar (produccion): se arma desde `geom`, que siempre
+            # esta. Asi el buscador no depende de que la migracion haya corrido.
+            geom = d.get("geom") or []
+            coords = []
+            for p in geom:
+                if isinstance(p, (list, tuple)) and len(p) >= 2:
+                    try:
+                        coords.append([float(p[1]), float(p[0])])
+                    except (TypeError, ValueError):
+                        continue
+            if len(coords) >= 2:
+                tramos.append(coords)
             continue
         if g.get("type") == "LineString":
             coords = g.get("coordinates") or []
@@ -1143,8 +1178,10 @@ def _puntos_cruce(docs_principal: List[Dict], docs_lateral: List[Dict],
 
 
 # Distancia maxima (m) a la que se acepta que dos vias se cruzen aunque la
-# malla tenga un hueco (segmentos que no comparten vertice).
-MAX_APROX_M = float(os.getenv("GEO_MAX_APROX_M", "500"))
+# malla tenga un hueco (segmentos que no comparten vertice). Un hueco de malla
+# es de metros, no de cientos: con 150 m no se cuelan calles distintas que
+# pasan cerca sin tocarse (p. ej. "Calle 23 entre 11 y 12" en el Vedado).
+MAX_APROX_M = float(os.getenv("GEO_MAX_APROX_M", "150"))
 
 
 def _direccion_en(docs: List[Dict], lat: float, lng: float) -> Optional[float]:
@@ -1265,8 +1302,8 @@ def _resolver_entre(docs_principal: List[Dict], grupos_a: List[Tuple[str, List[D
     if not nombres_lateral:
         return None
     cruzan = _cruza_en_mongo(geom_principal, list(dict.fromkeys(nombres_lateral)))
-    if not cruzan:
-        return None
+    # Si Mongo no puede filtrar (base sin indice 2dsphere/geom_geojson) se
+    # sigue igual: el cruce real se comprueba en Python mas abajo.
     por_nombre = {}
     for d in cruzan:
         por_nombre.setdefault(d.get("nombre") or "", []).append(d)
@@ -1275,9 +1312,12 @@ def _resolver_entre(docs_principal: List[Dict], grupos_a: List[Tuple[str, List[D
         salida = {}
         for nombre, docs in grupos:
             cruz = por_nombre.get(nombre) or []
-            if cruz:
-                pts = _puntos_cruce(docs_principal, cruz, centro_lat, centro_lng)
-            else:
+            # `_puntos_cruce` cruza las geometrias en Python: vale aunque
+            # Mongo no tenga el indice 2dsphere o geom_geojson (base sin
+            # migrar). El filtro de Mongo solo acelera el caso normal.
+            pts = _puntos_cruce(docs_principal, cruz or docs,
+                                centro_lat, centro_lng)
+            if not pts:
                 # La malla tiene un hueco: se busca el punto mas cercano, pero
                 # solo si las dos vias se cruzan de verdad (no van paralelas).
                 pts = _punto_aproximado(docs_principal, docs, centro_lat,
@@ -1446,6 +1486,59 @@ async def _buscar_entre(principal: str, calle_a: str, calle_b: str,
         c["short_label"] = "%s entre %s y %s" % (
             _sin_tipo(principal), _sin_tipo(calle_a), _sin_tipo(calle_b))
     return cercanos
+
+
+def asegurar_geometrias(lote: int = 2000) -> Dict:
+    """Deja lista la base para el "entre": campo geom_geojson + indice 2dsphere.
+
+    Es idempotente y esta pensado para correr en el arranque del servidor: en
+    produccion la base puede tener `geom` (lat, lon) pero no `geom_geojson`
+    (lon, lat), y sin ese campo/indice `$geoIntersects` no devuelve nada y el
+    buscador diria que no existe ninguna direccion.
+    """
+    from pymongo import UpdateOne
+    resumen = {"migrados": 0, "pendientes": 0, "indice": False}
+    try:
+        resumen["pendientes"] = _calles.count_documents(
+            {"geom_geojson": {"$exists": False}})
+    except Exception:
+        return resumen
+    if resumen["pendientes"]:
+        bulk = []
+        try:
+            for doc in _calles.find({"geom_geojson": {"$exists": False}},
+                                    {"geom": 1}):
+                geom = doc.get("geom") or []
+                coords = []
+                for p in geom:
+                    if isinstance(p, (list, tuple)) and len(p) >= 2:
+                        try:
+                            coords.append([float(p[1]), float(p[0])])
+                        except (TypeError, ValueError):
+                            continue
+                if len(coords) >= 2:
+                    bulk.append(UpdateOne(
+                        {"_id": doc["_id"]},
+                        {"$set": {"geom_geojson": {
+                            "type": "LineString", "coordinates": coords}}}))
+                    if len(bulk) >= lote:
+                        _calles.bulk_write(bulk, ordered=False)
+                        resumen["migrados"] += len(bulk)
+                        bulk = []
+            if bulk:
+                _calles.bulk_write(bulk, ordered=False)
+                resumen["migrados"] += len(bulk)
+        except Exception:
+            pass
+    try:
+        nombres = _calles.index_information()
+        if "geom_geojson_2dsphere" not in nombres:
+            _calles.create_index([("geom_geojson", "2dsphere")],
+                                 name="geom_geojson_2dsphere")
+        resumen["indice"] = True
+    except Exception:
+        pass
+    return resumen
 
 
 @router.get("/geo/buscar")

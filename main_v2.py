@@ -214,6 +214,23 @@ async def startup_event():
     # Traccar listener (lo que ya tenias)
     asyncio.create_task(listen_traccar())
 
+    # Base de calles lista para el buscador "entre": en produccion puede faltar
+    # geom_geojson/indice 2dsphere (la migracion se corre aqui, sin bloquear).
+    async def _migrar_calles():
+        while True:
+            try:
+                resumen = await asyncio.to_thread(geo.asegurar_geometrias)
+                if not resumen.get("pendientes"):
+                    logger.info("Geo.calles lista: %s", resumen)
+                    return
+                logger.warning("Geo.calles migrando: %s", resumen)
+            except Exception:
+                logger.warning("No se pudo migrar Geo.calles; reintento",
+                               exc_info=True)
+            await asyncio.sleep(30)
+
+    asyncio.create_task(_migrar_calles())
+
     # Indice unico del vinculo con Telegram. Se asegura aqui y no al importar el
     # modulo: si el indice no se puede crear por datos duplicados, el bot sigue
     # funcionando y solo queda el aviso en el log.
