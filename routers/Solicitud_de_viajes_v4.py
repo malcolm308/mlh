@@ -1004,7 +1004,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
         try:
             # 1. Obtener el viaje actual
-            cur.execute("SELECT * FROM trips WHERE trip_id = %s", (trip_id,))
+            cur.execute("SELECT * FROM trips WHERE trip_id = %s FOR UPDATE", (trip_id,))
             trip = cur.fetchone()
             if not trip:
                 raise ValueError("Viaje no encontrado")
@@ -1078,15 +1078,17 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             #    mientras que `now` es *aware* (UTC). Restar uno de otro es un
             #    TypeError directo. Como lo que se guarda en esas columnas es
             #    `datetime.now(timezone.utc)`, el valor ES UTC: solo hay que
-            #    volver a pegarle la zona. Es el mismo criterio que ya usa
-            #    `_offer_secs_left`.
+            #    volver a pegarle la zona.
             started = trip["started_at"] or trip["requested_at"]
             if started is None:
                 duration_secs = 0
             else:
-                if started.tzinfo is None:
+                if getattr(started, "tzinfo", None) is None:
                     started = started.replace(tzinfo=timezone.utc)
-                duration_secs = max(0, int((now - started).total_seconds()))
+                now_cmp = now
+                if getattr(now_cmp, "tzinfo", None) is None:
+                    now_cmp = now_cmp.replace(tzinfo=timezone.utc)
+                duration_secs = max(0, int((now_cmp - started).total_seconds()))
 
 # --- 7b. Tiempo de espera de cortesía ---
             #
