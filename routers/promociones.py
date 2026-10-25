@@ -790,16 +790,26 @@ def _conexion():
 
 
 @router.post("/init-usd-prices")
-def admin_init_usd_prices(admin: dict = Depends(require_admin)):
+def admin_init_usd_prices(admin: dict = Depends(require_admin), body: Optional[Dict] = None):
     """FASE 1 (EJECUTAR UNA SOLA VEZ): calcula y guarda los precios USD.
 
     Los precios en CUP no cambian. Se anaden las columnas `_usd` si no existen
     y se rellenan con `cup_actual / tasa_hoy`.
+
+    Body opcional: {"rate": 350}  <- tasa manual si las APIs fallan.
     """
-    try:
-        tasa = _obtener_tasa_usd()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"No se pudo obtener tasa: {e}")
+    body = body or {}
+    tasa_manual = body.get("rate")
+    if tasa_manual and float(tasa_manual) > 0:
+        tasa = float(tasa_manual)
+        logger.info("Fase 1: tasa manual %.4f (pasada por body)", tasa)
+    else:
+        try:
+            tasa = _obtener_tasa_usd()
+        except Exception as e:
+            raise HTTPException(status_code=502,
+                detail=f"No se pudo obtener tasa automatica: {e}. "
+                       f"Reintenta pasando body: {{\"rate\": <tasa_de_hoy>}}")
 
     alter_tarifas = """
         ALTER TABLE tariffs
