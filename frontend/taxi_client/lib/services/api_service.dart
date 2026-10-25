@@ -174,6 +174,21 @@ class ApiService {
     });
   }
 
+  /// Calcula precios para los 4 vehículos en una sola llamada.
+  Future<Map<String, dynamic>> estimateAll({
+    required double requestLat,
+    required double requestLng,
+    required double dropoffLat,
+    required double dropoffLng,
+  }) async {
+    return _map('POST', '/trips/estimate-all', body: {
+      'request_lat': requestLat,
+      'request_lng': requestLng,
+      'dropoff_lat': dropoffLat,
+      'dropoff_lng': dropoffLng,
+    });
+  }
+
   /// Minutos de espera que el pasajero no paga.
   ///
   /// No hace falta administrador: es un dato público, como la tarifa base, y el

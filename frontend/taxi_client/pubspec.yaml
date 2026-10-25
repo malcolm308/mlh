@@ -38,6 +38,7 @@ dependencies:
   latlong2: ^0.10.1
   maplibre_gl: 0.27.1
   shared_preferences: ^2.5.5
+  flutter_svg: ^2.0.17
 
 dev_dependencies:
   flutter_test:
@@ -63,6 +64,7 @@ flutter:
 
   assets:
     - assets/images/login_bg.png
+    - assets/icons/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

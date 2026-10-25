@@ -14,6 +14,7 @@ import '../services/geocode_service.dart';
 import '../services/location_service.dart';
 import '../services/osrm_service.dart';
 import '../widgets/client_map_view.dart';
+import '../widgets/vehicle_selector_sheet.dart';
 import 'history_screen.dart';
 import 'trip_screen.dart';
 
@@ -79,11 +80,14 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   bool _searching = false;
   Timer? _searchDebounce;
 
-  /// Tarifas del backend (GET /api/tariffs). Sin datos, el dropdown queda
-  /// deshabilitado para no ofrecer un tipo de vehículo inexistente.
+  /// Tarifas del backend (GET /api/tariffs).
   List<Tariff> _tarifas = const [];
-  bool _tarifasCargando = true;
-  bool _tarifasError = false;
+
+  // Flujo 2 pasos: vehículos disponibles y seleccionado
+  List<VehicleOption> _vehicles = [];
+  VehicleOption? _selectedVehicle;
+  String? _etaText;
+  String _paymentMethod = 'Efectivo';
 
   /// Estado del GPS del dispositivo.
   LocationPermissionState? _gpsState;
@@ -359,24 +363,40 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     final pickup = _pickup;
     final dropoff = _dropoff;
     if (pickup == null || dropoff == null || pickup == dropoff) return;
-    if (_vehicleType.isEmpty) return;
     final req = ++_estReq;
     setState(() => _estFareBusy = true);
     try {
-      final res = await widget.api.estimateTrip(
+      final res = await widget.api.estimateAll(
         requestLat: pickup.latitude,
         requestLng: pickup.longitude,
         dropoffLat: dropoff.latitude,
         dropoffLng: dropoff.longitude,
-        vehicleType: _vehicleType,
       );
       if (!mounted || req != _estReq) return;
+      final vehiclesList = (res['vehicles'] as List)
+          .map((v) => VehicleOption.fromApi(Map<String, dynamic>.from(v as Map)))
+          .toList();
       setState(() {
         _estFareBusy = false;
         _estFareError = false;
-        _backendFare = (res['precio_estimado'] ?? 0).toDouble();
-        _detalleFare = res;
+        _vehicles = vehiclesList;
+        _etaText = res['eta_text'] as String? ?? '--';
+        _paymentMethod = res['payment_method'] as String? ?? 'Efectivo';
+        // Seleccionar el primero por defecto (o mantener el anterior si existe)
+        if (_selectedVehicle == null && vehiclesList.isNotEmpty) {
+          _selectedVehicle = vehiclesList.first;
+        } else if (_selectedVehicle != null) {
+          // Mantener el tipo seleccionado si sigue existiendo
+          final stillExists = vehiclesList.any((v) => v.type == _selectedVehicle!.type);
+          if (!stillExists) {
+            _selectedVehicle = vehiclesList.first;
+          }
+        }
       });
+      // Mostrar el BottomSheet automáticamente cuando hay estimación
+      if (mounted && vehiclesList.isNotEmpty) {
+        _showVehicleSelector();
+      }
     } catch (_) {
       if (!mounted || req != _estReq) return;
       setState(() {
@@ -386,6 +406,38 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     }
   }
 
+  void _showVehicleSelector() {
+    if (_vehicles.isEmpty || _selectedVehicle == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      enableDrag: true,
+      builder: (ctx) => VehicleSelectorSheet(
+        pickupAddress: _pickupAddr ?? 'Ubicación actual',
+        dropoffAddress: _dropoffAddr ?? 'Destino',
+        distanceKm: _routeKm ?? 0,
+        etaText: _etaText ?? '--',
+        paymentMethod: _paymentMethod,
+        vehicles: _vehicles,
+        selectedVehicle: _selectedVehicle!,
+        onVehicleSelected: (vehicle) {
+          Navigator.of(ctx).pop();
+          setState(() => _selectedVehicle = vehicle);
+          // Reabrir con el nuevo seleccionado
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _showVehicleSelector();
+          });
+        },
+        onConfirmTrip: () {
+          Navigator.of(ctx).pop();
+          _requestTrip();
+        },
+        isLoading: _loading,
+      ),
+    );
+  }
+
   Future<void> _requestTrip() async {
     final pickup = _pickup;
     final dropoff = _dropoff;
@@ -393,8 +445,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       _showError('Define recogida y destino en el mapa');
       return;
     }
-    if (_vehicleType.isEmpty) {
-      _showError('No se pudieron cargar las tarifas');
+    if (_selectedVehicle == null) {
+      _showError('Selecciona un tipo de vehículo');
       return;
     }
     setState(() {
@@ -408,7 +460,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         requestLng: pickup.longitude,
         dropoffLat: dropoff.latitude,
         dropoffLng: dropoff.longitude,
-        vehicleType: _vehicleType,
+        vehicleType: _selectedVehicle!.type,
         requestAddress: _pickupAddr,
         dropoffAddress: _dropoffAddr,
       );
@@ -572,10 +624,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   /// Si no hay red, usa la última lista cacheada para que el dropdown nunca se
   /// quede vacío (y nunca ofrezca un tipo de vehículo inexistente).
   Future<void> _loadTarifas() async {
-    setState(() {
-      _tarifasCargando = true;
-      _tarifasError = false;
-    });
     try {
       final tarifas = await widget.api.getTariffs();
       if (!mounted) return;
@@ -586,12 +634,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       );
       setState(() {
         _tarifas = tarifas;
-        _tarifasCargando = false;
         _vehicleType = _vehicleTypeMarcado(tarifas);
       });
       _loadEstimate();
-      // La cortesía se pide aparte y sin esperar: si falla, la pantalla sigue
-      // mostrando el precio igual, solo que sin el aviso de la espera.
       unawaited(_loadCortesia());
     } catch (_) {
       if (!mounted) return;
@@ -608,15 +653,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         } catch (_) {}
       }
       if (!mounted) return;
-      setState(() {
-        if (tarifas != null) {
-          _tarifas = tarifas;
+      if (tarifas != null) {
+        setState(() {
+          _tarifas = tarifas!;
           _vehicleType = _vehicleTypeMarcado(tarifas);
-        } else {
-          _tarifasError = true;
-        }
-        _tarifasCargando = false;
-      });
+        });
+      }
     }
   }
 
@@ -631,9 +673,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   }
 
   /// Tipos de vehículo disponibles, tal y como los publica el backend.
-  List<String> get _vehicleTypes =>
-      _tarifas.map((t) => t.vehicleType).toList();
-
   Widget _buildRouteStats(ColorScheme scheme) {
     final fare = _estimatedFare;
     return Column(
@@ -1055,52 +1094,13 @@ onTap: () => setState(() {
                   _buildRouteStats(scheme),
                 ],
                 const SizedBox(height: 12),
-                if (_tarifasCargando)
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  )
-                else if (_tarifasError)
-                  Row(
-                    children: [
-                      const Icon(Icons.error_outline,
-                          size: 18, color: Color(0xFFB91C1C)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text('No se pudieron cargar las tarifas.',
-                            style: TextStyle(
-                                fontSize: 13, color: const Color(0xFFB91C1C))),
-                      ),
-                      TextButton(
-                        onPressed: _loadTarifas,
-                        child: const Text('Reintentar'),
-                      ),
-                    ],
-                  )
-                else
-                  DropdownButtonFormField<String>(
-                    initialValue: _vehicleType,
-                    decoration: const InputDecoration(
-                      labelText: 'Tipo de vehículo',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    items: _vehicleTypes
-                        .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null && v != _vehicleType) {
-                        setState(() => _vehicleType = v);
-                        _loadEstimate();
-                      }
-                    },
-                  ),
-                const SizedBox(height: 12),
                 FilledButton.icon(
-                  onPressed: (!bothSet || _loading) ? null : _requestTrip,
-                  icon: _loading
+                  onPressed: (!bothSet || _estFareBusy || _loading)
+                      ? null
+                      : _vehicles.isEmpty
+                          ? _loadEstimate
+                          : _requestTrip,
+                  icon: _estFareBusy || _loading
                       ? const SizedBox(
                           width: 18,
                           height: 18,
@@ -1109,7 +1109,11 @@ onTap: () => setState(() {
                       : const Icon(Icons.local_taxi),
                   label: Text(_loading
                       ? 'Solicitando...'
-                      : (bothSet ? 'Solicitar viaje' : 'Define el destino')),
+                      : _estFareBusy
+                          ? 'Calculando...'
+                          : _vehicles.isEmpty
+                              ? 'Confirmar ruta'
+                              : 'Solicitar viaje'),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(48),
                   ),

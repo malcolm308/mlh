@@ -518,10 +518,17 @@ double? _rumboParaFlecha() {
 
   Future<void> _loadTodayEarnings() async {
     try {
+      print('Cargando ganancias para ${widget.driverId}...');
       final e = await widget.api.getTodayEarnings(widget.driverId);
+      print('Ganancias recibidas: ${e.totalEarnings}');
       if (!mounted) return;
-      setState(() => _todayEarnings = e.totalEarnings);
-    } catch (_) {}
+      setState(() {
+        _todayEarnings = e.totalEarnings;
+        print('_todayEarnings actualizado a: $_todayEarnings');
+      });
+    } catch (e) {
+      print('Error cargando ganancias: $e');
+    }
   }
 
   @override
@@ -1742,7 +1749,10 @@ _route = [];
       await _showCompleted(done);
       await _tick();
       await _refreshRoutes();
+      // Esperar un momento para que la BD confirme el cambio
+      await Future.delayed(const Duration(seconds: 2));
       await _loadTodayEarnings();
+      await _refrescarSaldo();
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -2705,8 +2715,18 @@ String _fmtCoord(LatLng p) =>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    const Text('Ganancias de hoy',
-                        style: TextStyle(color: secondaryText, fontSize: 13)),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        const Text('Ganancias de hoy',
+                            style: TextStyle(color: secondaryText, fontSize: 13)),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          onTap: _loadTodayEarnings,
+                          child: const Icon(Icons.refresh, size: 16, color: secondaryText),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       '${_todayEarnings.toStringAsFixed(0)} CUP',
