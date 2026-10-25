@@ -746,42 +746,73 @@ def _a_json(promo: Dict[str, Any]) -> Dict[str, Any]:
 # precios anclados a USD. Se protegen con `require_admin` igual que el resto
 # del panel. Una vez ejecutados, conviene eliminarlos del codigo.
 
+EL_TOQUE_TRML = "https://tasas.eltoque.com/v1/trml"
 EL_TOQUE_PUBLIC = "https://www.eltoque.com/api/currencies/latest"
 EL_TOQUE_API = "https://api.eltoque.com/currencies/latest"
 
 
 def _obtener_tasa_usd() -> float:
-    """Tasa USD->CUP de hoy desde El Toque. Lanza en caso de fallo."""
+    """Tasa USD->CUP de hoy desde El Toque. Lanza excepcion si falla.
+    
+    Prioriza el endpoint TRML (tasas.eltoque.com) que devuelve formato:
+    {"date": "...", "tasas": {"USD": 835.0, ...}}
+    """
     api_key = os.getenv("API_KEY_TOQUE")
-    headers = {"Accept": "application/json"}
+    
+    # Intento 1: endpoint TRML oficial de El Toque
+    try:
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            headers = {"Accept": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            r = client.get(EL_TOQUE_TRML, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            tasas = data.get("tasas") or {}
+            tasa = tasas.get("USD")
+            if tasa and float(tasa) > 0:
+                return float(tasa)
+    except Exception as e:
+        logger.warning("Fallo endpoint TRML: %s", e)
+
+    # Intento 2: endpoint alternativo con API key
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-        url = EL_TOQUE_API
-    else:
-        url = EL_TOQUE_PUBLIC
-        headers["User-Agent"] = "RapiTaxi/1.0"
+        try:
+            with httpx.Client(timeout=30, follow_redirects=True) as client:
+                r = client.get(EL_TOQUE_API, headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"})
+                r.raise_for_status()
+                data = r.json()
+                usd = data.get("USD") or data.get("usd") or {}
+                if isinstance(usd, dict):
+                    tasa = usd.get("sell") or usd.get("buy") or usd.get("rate") or usd.get("value")
+                elif isinstance(usd, (int, float)):
+                    tasa = usd
+                else:
+                    tasa = None
+                if tasa and float(tasa) > 0:
+                    return float(tasa)
+        except Exception as e:
+            logger.warning("Fallo endpoint API: %s", e)
 
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        r = client.get(url, headers=headers)
-        r.raise_for_status()
-        data = r.json()
+    # Intento 3: endpoint publico
+    try:
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            r = client.get(EL_TOQUE_PUBLIC, headers={"User-Agent": "RapiTaxi/1.0"})
+            r.raise_for_status()
+            data = r.json()
+            usd = data.get("USD") or data.get("usd") or data.get("dolar") or {}
+            if isinstance(usd, dict):
+                tasa = usd.get("sell") or usd.get("buy") or usd.get("rate") or usd.get("value")
+            elif isinstance(usd, (int, float)):
+                tasa = usd
+            else:
+                tasa = None
+            if tasa and float(tasa) > 0:
+                return float(tasa)
+    except Exception as e:
+        logger.warning("Fallo endpoint publico: %s", e)
 
-    usd = data.get("USD") or data.get("usd") or data.get("dolar") or {}
-    if isinstance(usd, dict):
-        tasa = usd.get("sell") or usd.get("buy") or usd.get("rate") or usd.get("value")
-    elif isinstance(usd, (int, float)):
-        tasa = usd
-    else:
-        for key in ("USD", "usd", "dolar", "Dolar"):
-            if key in data and isinstance(data[key], (int, float)):
-                tasa = data[key]
-                break
-        else:
-            raise ValueError(f"Estructura de respuesta inesperada: {data}")
-
-    if not tasa or float(tasa) <= 0:
-        raise ValueError(f"Tasa invalida o ausente: {tasa}")
-    return float(tasa)
+    raise ValueError("No se pudo obtener tasa USD de ninguna fuente de El Toque")
 
 
 def _conexion():
