@@ -2931,6 +2931,12 @@ async def find_nearby_drivers(
 
 @router.get("/drivers/{driver_id}/earnings")
 async def api_driver_earnings(driver_id: str, from_date: Optional[date] = None, to_date: Optional[date] = None):
+    # Si no se pasan fechas, usar hoy en Cuba. El frontend puede enviar fechas
+    # en zona horaria incorrecta, así que forzamos Cuba como referencia.
+    if from_date is None or to_date is None:
+        today_cuba = datetime.now(CUBA_TZ).date()
+        from_date = from_date or today_cuba
+        to_date = to_date or today_cuba
     row = get_driver_earnings(driver_id, from_date, to_date)
     # Los agregados de Postgres vienen como Decimal; la app espera float.
     return {
