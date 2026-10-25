@@ -1570,7 +1570,9 @@ def get_daily_trip_count(driver_id: str) -> int:
         # Usar zona horaria de Cuba para el corte del dia
         now_cuba = datetime.now(CUBA_TZ)
         today_start_cuba = now_cuba.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_start_utc = today_start_cuba.astimezone(timezone.utc)
+        # Postgres `completed_at` es TIMESTAMP WITHOUT TIME ZONE, asi que le
+        # quitamos la zona antes de comparar (el valor ya esta en UTC).
+        today_start_naive = today_start_cuba.astimezone(timezone.utc).replace(tzinfo=None)
 
         cur.execute(
             """
@@ -1580,7 +1582,7 @@ def get_daily_trip_count(driver_id: str) -> int:
               AND status = 'completed'
               AND completed_at >= %s
             """,
-            (driver_id, today_start_utc),
+            (driver_id, today_start_naive),
         )
         count = cur.fetchone()[0]
         cur.close()
@@ -2708,20 +2710,31 @@ async def api_complete_trip(trip_id: str, body: TripComplete, background: Backgr
             ),
         )
 
-    driver_id = result["driver_id"]
-    await set_driver_status(driver_id, "available")
-    await publish_trip_event(trip_id, "trip_completed", {
-        "total_fare": result["total_fare"],
-        "currency": result["currency"]
-    })
-
-    # Verificar bonificacion diaria
-    try:
-        bonus_result = apply_daily_bonus(driver_id)
-        if bonus_result["bonus_applied"]:
-            result["bonus"] = bonus_result
-    except Exception as e:
-        logger.exception("Error aplicando bono a %s: %s", driver_id, e)
+    # Los pasos siguientes (comision, bono, status del chofer) se ejecutan
+    # DESPUES de que el viaje ya esta 'completed' en BD. Si alguno falla, el
+    # viaje sigue cerrado: no hay que devolver 500 al chofer por eso.
+    driver_id = result.get("driver_id")
+    if driver_id:
+        try:
+            await set_driver_status(driver_id, "available")
+        except Exception as e:
+            logger.warning("No se pudo poner chofer %s en available: %s", driver_id, e)
+        try:
+            await publish_trip_event(trip_id, "trip_completed", {
+                "total_fare": result.get("total_fare"),
+                "currency": result.get("currency")
+            })
+        except Exception as e:
+            logger.warning("No se pudo publicar trip_completed para %s: %s", trip_id, e)
+        # Verificar bonificacion diaria
+        try:
+            bonus_result = apply_daily_bonus(driver_id)
+            if bonus_result.get("bonus_applied"):
+                result["bonus"] = bonus_result
+        except Exception as e:
+            logger.exception("Error aplicando bono a %s: %s", driver_id, e)
+    else:
+        logger.warning("complete_trip no devolvio driver_id para viaje %s", trip_id)
 
     # Metricas diarias en background para no bloquear la respuesta
     background.add_task(daily_trip_metrics)
