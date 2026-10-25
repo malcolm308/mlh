@@ -1231,40 +1231,52 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             #     que el conteo del dia ya lo incluye y resolve_commission
             #     sabe si este es el tercero.
             driver_id_str = updated_trip["driver_id"]
-            comision = resolve_commission(driver_id_str, promo["comision_porcentaje"])
-            comision_nominal = float(
-                (Decimal(str(precio_bruto)) * comision["rate"]).quantize(
-                    Decimal("0.01"), rounding=ROUND_HALF_UP))
-            commission = max(0.0, round(comision_nominal - float(descuento_cliente), 2))
-            commit_commission(
-                driver_id_str,
-                commission,
-                comision["discount_applied"],
-                comision["discount_date"],
-            )
+            comision = {"rate": float(promo["comision_porcentaje"]), "label": _etiqueta_tasa(promo["comision_porcentaje"]),
+                        "discount_applied": False, "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d")}
+            comision_nominal = None
+            commission = None
+            try:
+                comision = resolve_commission(driver_id_str, promo["comision_porcentaje"])
+                comision_nominal = float(
+                    (Decimal(str(precio_bruto)) * comision["rate"]).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP))
+                commission = max(0.0, round(comision_nominal - float(descuento_cliente), 2))
+                commit_commission(
+                    driver_id_str,
+                    commission,
+                    comision["discount_applied"],
+                    comision["discount_date"],
+                )
 
-            # La comision nominal queda guardada junto al descuento para que el
-            # calculo sea auditable despues: sin esto no habria forma de saber
-            # de donde salio lo que se desconto del fondo.
-            cur.execute(
-                "UPDATE trips SET comision_nominal = %s WHERE trip_id = %s",
-                (comision_nominal, trip_id))
-            conn.commit()
+                # La comision nominal queda guardada junto al descuento para que el
+                # calculo sea auditable despues: sin esto no habria forma de saber
+                # de donde salio lo que se desconto del fondo.
+                cur.execute(
+                    "UPDATE trips SET comision_nominal = %s WHERE trip_id = %s",
+                    (comision_nominal, trip_id))
+                conn.commit()
+            except Exception:
+                # Si falla la comision, el viaje ya esta 'completed' con precio.
+                # No se deshace: logueamos y seguimos.
+                logger.exception("complete_trip: fallo en comision para viaje %s", trip_id)
+                comision_nominal = None
+                commission = None
 
             # 11. Retornar el viaje completo con informacion adicional
+            completed_at_iso = None
+            try:
+                completed_at_iso = updated_trip["completed_at"].isoformat() if updated_trip.get("completed_at") else None
+            except Exception:
+                completed_at_iso = None
             return {
                 "trip_id": updated_trip["trip_id"],
                 "client_id": updated_trip["client_id"],
                 "driver_id": updated_trip["driver_id"],
                 "status": updated_trip["status"],
-                "distance_km": round(float(updated_trip["distance_km"]), 2),
-                "duration_secs": updated_trip["duration_secs"],
+                "distance_km": round(float(updated_trip.get("distance_km") or 0), 2),
+                "duration_secs": updated_trip.get("duration_secs"),
                 "espera_secs": espera_secs,
                 "excedente_espera_secs": excedente_secs,
-                # Alias con los nombres que consumen las apps. Se mandan los dos
-                # porque el receipt ya usa `espera_secs` y las apps leen
-                # `espera_segundos`; un solo nombre habria hecho tocar el receipt
-                # por un cambio de la app.
                 "espera_segundos": espera_secs,
                 "excedente_espera_segundos": excedente_secs,
                 "espera_cortesia_minutos": cortesia_min,
@@ -1272,10 +1284,10 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "hora_llegada": (trip["hora_llegada"].isoformat()
                                  if trip.get("hora_llegada") else None),
                 "hora_inicio_viaje": (started.isoformat() if started else None),
-                "base_fare": float(updated_trip["base_fare"]),
-                "tarifa_base": float(updated_trip["base_fare"]),
-                "distance_fare": float(updated_trip["distance_fare"]),
-                "costo_distancia": float(updated_trip["distance_fare"]),
+                "base_fare": float(updated_trip.get("base_fare") or 0),
+                "tarifa_base": float(updated_trip.get("base_fare") or 0),
+                "distance_fare": float(updated_trip.get("distance_fare") or 0),
+                "costo_distancia": float(updated_trip.get("distance_fare") or 0),
                 "distance_fare_sin_coeficiente": round(distance_fare_sin_coeficiente, 2),
                 "coeficiente_aplicado": float(coeficiente),
                 "coeficiente_distancia": float(coeficiente),
@@ -1285,20 +1297,20 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "costo_tiempo": round(time_fare, 2),
                 "costo_tiempo_total": round(time_fare, 2),
                 "tiempo_total_minutos": round(duration_min, 4),
-                "tip": float(updated_trip["tip"]),
+                "tip": float(updated_trip.get("tip") or 0),
                 "precio_bruto": round(float(precio_bruto), 2),
-                "precio_final": float(updated_trip["total_fare"]),
+                "precio_final": float(updated_trip.get("total_fare") or 0),
                 "descuento_cliente": float(descuento_cliente),
-                "total_fare": float(updated_trip["total_fare"]),
+                "total_fare": float(updated_trip.get("total_fare") or 0),
                 "commission": commission,
                 "commission_nominal": comision_nominal,
-                "commission_rate": comision["rate"],
-                "commission_label": comision["label"],
-                "commission_discount": comision["discount_applied"],
-                "currency": updated_trip["currency"],
+                "commission_rate": comision.get("rate") if isinstance(comision, dict) else None,
+                "commission_label": comision.get("label") if isinstance(comision, dict) else None,
+                "commission_discount": comision.get("discount_applied") if isinstance(comision, dict) else None,
+                "currency": updated_trip.get("currency") or "CUP",
                 "vehicle_type": vehicle_type,
                 "applied_rule": applied_rule_desc,
-                "completed_at": updated_trip["completed_at"].isoformat()
+                "completed_at": completed_at_iso
             }
 
         except Exception as e:
