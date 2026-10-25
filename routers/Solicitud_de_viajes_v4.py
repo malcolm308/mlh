@@ -1515,11 +1515,14 @@ def get_driver_earnings(driver_id: str, from_date: Optional[date] = None, to_dat
         where = "WHERE driver_id = %s AND status = 'completed'"
         params: list = [driver_id]
 
+        # Filtrar por `completed_at` (cuando se cerro el viaje), no por
+        # `requested_at` (cuando se pidio). Un viaje pedido ayer pero completado
+        # hoy debe contar en las ganancias de hoy.
         if from_date:
-            where += " AND requested_at >= %s"
+            where += " AND completed_at >= %s"
             params.append(from_date)
         if to_date:
-            where += " AND requested_at < %s"
+            where += " AND completed_at < %s"
             params.append(to_date + timedelta(days=1))
 
         cur.execute(
