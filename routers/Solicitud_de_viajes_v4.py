@@ -1515,14 +1515,14 @@ def get_driver_earnings(driver_id: str, from_date: Optional[date] = None, to_dat
         where = "WHERE driver_id = %s AND status = 'completed'"
         params: list = [driver_id]
 
-        # Filtrar por `completed_at` (cuando se cerro el viaje), no por
-        # `requested_at` (cuando se pidio). Un viaje pedido ayer pero completado
-        # hoy debe contar en las ganancias de hoy.
+        # `completed_at` se guarda en UTC, pero from_date/to_date son fechas
+        # locales de Cuba. Convertimos a hora Cuba antes de comparar para que
+        # el corte del dia coincida con la medianoche de Cuba, no con UTC.
         if from_date:
-            where += " AND completed_at >= %s"
+            where += " AND (completed_at AT TIME ZONE 'America/Havana')::date >= %s"
             params.append(from_date)
         if to_date:
-            where += " AND completed_at < %s"
+            where += " AND (completed_at AT TIME ZONE 'America/Havana')::date < %s"
             params.append(to_date + timedelta(days=1))
 
         cur.execute(
@@ -1582,12 +1582,9 @@ def _etiqueta_tasa(rate) -> str:
 def get_daily_trip_count(driver_id: str) -> int:
     with get_connection() as conn:
         cur = conn.cursor()
-        # Usar zona horaria de Cuba para el corte del dia
-        now_cuba = datetime.now(CUBA_TZ)
-        today_start_cuba = now_cuba.replace(hour=0, minute=0, second=0, microsecond=0)
-        # Postgres `completed_at` es TIMESTAMP WITHOUT TIME ZONE, asi que le
-        # quitamos la zona antes de comparar (el valor ya esta en UTC).
-        today_start_naive = today_start_cuba.astimezone(timezone.utc).replace(tzinfo=None)
+        # `completed_at` se guarda en UTC, pero queremos contar los viajes
+        # completados en el día local de Cuba. Convertimos en SQL.
+        today_cuba = datetime.now(CUBA_TZ).strftime('%Y-%m-%d')
 
         cur.execute(
             """
@@ -1595,9 +1592,9 @@ def get_daily_trip_count(driver_id: str) -> int:
             FROM trips
             WHERE driver_id = %s
               AND status = 'completed'
-              AND completed_at >= %s
+              AND (completed_at AT TIME ZONE 'America/Havana')::date = %s
             """,
-            (driver_id, today_start_naive),
+            (driver_id, today_cuba),
         )
         count = cur.fetchone()[0]
         cur.close()
@@ -2934,7 +2931,15 @@ async def find_nearby_drivers(
 
 @router.get("/drivers/{driver_id}/earnings")
 async def api_driver_earnings(driver_id: str, from_date: Optional[date] = None, to_date: Optional[date] = None):
-    return get_driver_earnings(driver_id, from_date, to_date)
+    row = get_driver_earnings(driver_id, from_date, to_date)
+    # Los agregados de Postgres vienen como Decimal; la app espera float.
+    return {
+        "total_trips": int(row.get("total_trips") or 0),
+        "total_earnings": float(row.get("total_earnings") or 0),
+        "avg_fare": float(row.get("avg_fare") or 0),
+        "total_distance_km": float(row.get("total_distance_km") or 0),
+        "total_duration_secs": int(row.get("total_duration_secs") or 0),
+    }
 
 
 @router.post("/drivers/{driver_id}/bonus")
