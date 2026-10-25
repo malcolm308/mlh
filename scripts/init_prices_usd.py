@@ -30,45 +30,69 @@ log = logging.getLogger("init_usd")
 # 1. Obtener tasa de cambio de HOY
 # ---------------------------------------------------------------------------
 
+EL_TOQUE_TRML = "https://tasas.eltoque.com/v1/trml"
 EL_TOQUE_PUBLIC = "https://www.eltoque.com/api/currencies/latest"
 EL_TOQUE_API = "https://api.eltoque.com/currencies/latest"
 
 
 def obtener_tasa_usd_hoy() -> float:
-    """Devuelve la tasa USD->CUP de hoy."""
+    """Devuelve la tasa USD->CUP de hoy. Prueba 3 fuentes en orden."""
     api_key = os.getenv("API_KEY_TOQUE")
-    headers = {"Accept": "application/json"}
+    
+    # Intento 1: endpoint TRML oficial
+    try:
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            headers = {"Accept": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            r = client.get(EL_TOQUE_TRML, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+            tasas = data.get("tasas") or {}
+            tasa = tasas.get("USD")
+            if tasa and float(tasa) > 0:
+                return float(tasa)
+    except Exception as e:
+        log.warning("Fallo TRML: %s", e)
+
+    # Intento 2: endpoint con API key
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-        url = EL_TOQUE_API
-    else:
-        url = EL_TOQUE_PUBLIC
-        headers["User-Agent"] = "RapiTaxi/1.0"
+        try:
+            with httpx.Client(timeout=30, follow_redirects=True) as client:
+                r = client.get(EL_TOQUE_API, headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"})
+                r.raise_for_status()
+                data = r.json()
+                usd = data.get("USD") or data.get("usd") or {}
+                if isinstance(usd, dict):
+                    tasa = usd.get("sell") or usd.get("buy") or usd.get("rate") or usd.get("value")
+                elif isinstance(usd, (int, float)):
+                    tasa = usd
+                else:
+                    tasa = None
+                if tasa and float(tasa) > 0:
+                    return float(tasa)
+        except Exception as e:
+            log.warning("Fallo API: %s", e)
 
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        r = client.get(url, headers=headers)
-        r.raise_for_status()
-        data = r.json()
+    # Intento 3: endpoint publico
+    try:
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            r = client.get(EL_TOQUE_PUBLIC, headers={"User-Agent": "RapiTaxi/1.0"})
+            r.raise_for_status()
+            data = r.json()
+            usd = data.get("USD") or data.get("usd") or data.get("dolar") or {}
+            if isinstance(usd, dict):
+                tasa = usd.get("sell") or usd.get("buy") or usd.get("rate") or usd.get("value")
+            elif isinstance(usd, (int, float)):
+                tasa = usd
+            else:
+                tasa = None
+            if tasa and float(tasa) > 0:
+                return float(tasa)
+    except Exception as e:
+        log.warning("Fallo publico: %s", e)
 
-    # El Toque devuelve {"USD": {"buy": 350, "sell": 355}, ...} o similar
-    # Buscamos el campo USD. Si no existe, probamos otras estructuras.
-    usd = data.get("USD") or data.get("usd") or data.get("dolar") or {}
-    if isinstance(usd, dict):
-        tasa = usd.get("sell") or usd.get("buy") or usd.get("rate") or usd.get("value")
-    elif isinstance(usd, (int, float)):
-        tasa = usd
-    else:
-        # Intentar estructura alternativa
-        for key in ("USD", "usd", "dolar", "Dolar"):
-            if key in data and isinstance(data[key], (int, float)):
-                tasa = data[key]
-                break
-        else:
-            raise ValueError(f"Estructura de respuesta inesperada: {data}")
-
-    if not tasa:
-        raise ValueError(f"No se encontro la tasa USD en la respuesta: {data}")
-    return float(tasa)
+    raise ValueError("No se pudo obtener tasa USD de ninguna fuente de El Toque")
 
 
 # ---------------------------------------------------------------------------
