@@ -981,8 +981,12 @@ def admin_init_usd_prices(auth: dict = Depends(verify_cron_or_admin), body: Opti
 def admin_update_daily_prices(auth: dict = Depends(verify_cron_or_admin), body: Optional[Dict] = None):
     """FASE 2 (CRON DIARIO): recalcula precios CUP desde USD * tasa_hoy.
 
-    Si la API de El Toque falla, acepta tasa manual por body: {"rate": 835}.
-    Si no hay tasa manual ni automatica, ABORTA sin tocar nada.
+    Prioridad de fuentes de tasa (en orden):
+      1. Tasa manual en body: {"rate": 835}
+      2. API de El Toque (automatica)
+      3. Fallback: variable de entorno TASA_USD_FALLBACK (ultima conocida)
+
+    Si las 3 fallan, ABORTA sin tocar nada.
     """
     body = body or {}
     tasa_manual = body.get("rate")
@@ -993,10 +997,24 @@ def admin_update_daily_prices(auth: dict = Depends(verify_cron_or_admin), body: 
     else:
         try:
             tasa = _obtener_tasa_usd()
+            logger.info("Fase 2: tasa automatica de El Toque: %.4f", tasa)
         except Exception as e:
-            raise HTTPException(status_code=502,
-                detail=f"No se pudo obtener tasa automatica: {e}. "
-                       f"Reintenta pasando body: {{\"rate\": <tasa_de_hoy>}}")
+            tasa_fallback = os.getenv("TASA_USD_FALLBACK")
+            if tasa_fallback:
+                tasa = float(tasa_fallback)
+                logger.warning(
+                    "Fase 2: API El Toque fallo (%s), usando TASA_USD_FALLBACK=%.4f",
+                    e, tasa,
+                )
+            else:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"No se pudo obtener tasa automatica: {e}. "
+                        f"Configura TASA_USD_FALLBACK en Render o pasa "
+                        f"body: {{\"rate\": <tasa_de_hoy>}}"
+                    ),
+                )
 
     if tasa <= 0:
         raise HTTPException(status_code=500, detail=f"Tasa invalida: {tasa}")

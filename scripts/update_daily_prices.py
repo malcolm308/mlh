@@ -111,8 +111,13 @@ def main():
         tasa = obtener_tasa_usd_hoy()
     except Exception as e:
         log.error("FALLO al obtener tasa de El Toque: %s", e)
-        log.error("ABORTANDO: no se modifican los precios. Revisar API o conectividad.")
-        sys.exit(1)
+        tasa_fallback = os.getenv("TASA_USD_FALLBACK")
+        if tasa_fallback:
+            tasa = float(tasa_fallback)
+            log.warning("Usando TASA_USD_FALLBACK=%.4f como respaldo", tasa)
+        else:
+            log.error("ABORTANDO: no hay TASA_USD_FALLBACK configurada. Revisar API o conectividad.")
+            sys.exit(1)
 
     log.info("Tasa USD de hoy: %.4f CUP/USD", tasa)
 
