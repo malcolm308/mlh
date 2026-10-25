@@ -26,10 +26,14 @@ usa `COMMISSION_RATE`. Guardarlos como 15 obligaria a convertir en cada punto y 
 cambiar lo que la app del chofer ya recibe en `commission_rate`.
 """
 import logging
+import os
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Optional, Tuple
 
+import httpx
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, Depends, Header, HTTPException
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field
@@ -733,4 +737,234 @@ def _a_json(promo: Dict[str, Any]) -> Dict[str, Any]:
         "actualizado_at": (promo["actualizado_at"].isoformat()
                            if promo["actualizado_at"] else None),
         "actualizado_por": promo["actualizado_por"],
+    }
+
+
+# ===================== ANCLAJE USD (Fase 1 y Fase 2) =====================
+#
+# Endpoints administrativos temporales para inicializar y actualizar los
+# precios anclados a USD. Se protegen con `require_admin` igual que el resto
+# del panel. Una vez ejecutados, conviene eliminarlos del codigo.
+
+EL_TOQUE_PUBLIC = "https://www.eltoque.com/api/currencies/latest"
+EL_TOQUE_API = "https://api.eltoque.com/currencies/latest"
+
+
+def _obtener_tasa_usd() -> float:
+    """Tasa USD->CUP de hoy desde El Toque. Lanza en caso de fallo."""
+    api_key = os.getenv("API_KEY_TOQUE")
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        url = EL_TOQUE_API
+    else:
+        url = EL_TOQUE_PUBLIC
+        headers["User-Agent"] = "RapiTaxi/1.0"
+
+    with httpx.Client(timeout=30, follow_redirects=True) as client:
+        r = client.get(url, headers=headers)
+        r.raise_for_status()
+        data = r.json()
+
+    usd = data.get("USD") or data.get("usd") or data.get("dolar") or {}
+    if isinstance(usd, dict):
+        tasa = usd.get("sell") or usd.get("buy") or usd.get("rate") or usd.get("value")
+    elif isinstance(usd, (int, float)):
+        tasa = usd
+    else:
+        for key in ("USD", "usd", "dolar", "Dolar"):
+            if key in data and isinstance(data[key], (int, float)):
+                tasa = data[key]
+                break
+        else:
+            raise ValueError(f"Estructura de respuesta inesperada: {data}")
+
+    if not tasa or float(tasa) <= 0:
+        raise ValueError(f"Tasa invalida o ausente: {tasa}")
+    return float(tasa)
+
+
+def _conexion():
+    from routers.Solicitud_de_viajes_v4 import get_connection
+    return get_connection()
+
+
+@router.post("/init-usd-prices")
+def admin_init_usd_prices(admin: dict = Depends(require_admin)):
+    """FASE 1 (EJECUTAR UNA SOLA VEZ): calcula y guarda los precios USD.
+
+    Los precios en CUP no cambian. Se anaden las columnas `_usd` si no existen
+    y se rellenan con `cup_actual / tasa_hoy`.
+    """
+    try:
+        tasa = _obtener_tasa_usd()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"No se pudo obtener tasa: {e}")
+
+    alter_tarifas = """
+        ALTER TABLE tariffs
+            ADD COLUMN IF NOT EXISTS base_fare_usd NUMERIC(12,6),
+            ADD COLUMN IF NOT EXISTS price_per_km_usd NUMERIC(12,6),
+            ADD COLUMN IF NOT EXISTS price_per_minute_usd NUMERIC(12,6);
+    """
+    alter_promo = """
+        ALTER TABLE promociones
+            ADD COLUMN IF NOT EXISTS precio_km_zona_basico_usd NUMERIC(12,6),
+            ADD COLUMN IF NOT EXISTS precio_km_zona_confort_usd NUMERIC(12,6),
+            ADD COLUMN IF NOT EXISTS precio_km_zona_triciclo_usd NUMERIC(12,6),
+            ADD COLUMN IF NOT EXISTS precio_km_zona_moto_usd NUMERIC(12,6),
+            ADD COLUMN IF NOT EXISTS precio_por_minuto_usd NUMERIC(12,6);
+    """
+
+    with _conexion() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(alter_tarifas)
+            cur.execute(alter_promo)
+
+        # tarifas
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT tariff_id, vehicle_type, base_fare, price_per_km, "
+                "price_per_minute FROM tariffs"
+            )
+            filas = list(cur.fetchall())
+
+        resumen_tarifas = []
+        for f in filas:
+            base_usd = round(float(f["base_fare"] or 0) / tasa, 3)
+            km_usd = round(float(f["price_per_km"] or 0) / tasa, 3)
+            min_usd = round(float(f["price_per_minute"] or 0) / tasa, 3)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE tariffs SET base_fare_usd=%s, price_per_km_usd=%s, "
+                    "price_per_minute_usd=%s WHERE tariff_id=%s",
+                    (base_usd, km_usd, min_usd, f["tariff_id"]),
+                )
+            resumen_tarifas.append({
+                "vehicle_type": f["vehicle_type"],
+                "base_cup": float(f["base_fare"]), "base_usd": base_usd,
+                "km_cup": float(f["price_per_km"]), "km_usd": km_usd,
+                "min_cup": float(f["price_per_minute"]), "min_usd": min_usd,
+            })
+
+        # promociones
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM promociones WHERE id = 1")
+            promo = cur.fetchone()
+
+        resumen_promo = []
+        if promo:
+            campos = [
+                ("precio_km_zona_basico", 1000.0),
+                ("precio_km_zona_confort", 1200.0),
+                ("precio_km_zona_triciclo", 700.0),
+                ("precio_km_zona_moto", 600.0),
+                ("precio_por_minuto", 5.0),
+            ]
+            sets, params = [], []
+            for col, default in campos:
+                cup = float(promo.get(col) or default)
+                usd = round(cup / tasa, 3)
+                sets.append(f"{col}_usd = %s")
+                params.append(usd)
+                resumen_promo.append({"campo": col, "cup": cup, "usd": usd})
+            if sets:
+                params.append(1)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE promociones SET {', '.join(sets)} WHERE id = %s",
+                        tuple(params),
+                    )
+
+    logger.info("init-usd-prices ejecutado por %s con tasa %.4f",
+                admin.get("email"), tasa)
+    return {
+        "ok": True,
+        "tasa_usd": tasa,
+        "tarifas": resumen_tarifas,
+        "promociones": resumen_promo,
+        "nota": "Precios CUP NO modificados. Valores USD guardados.",
+    }
+
+
+@router.post("/update-daily-prices")
+def admin_update_daily_prices(admin: dict = Depends(require_admin)):
+    """FASE 2 (CRON DIARIO): recalcula precios CUP desde USD * tasa_hoy.
+
+    Si la API de El Toque falla, ABORTA sin tocar nada (idempotente seguro).
+    """
+    try:
+        tasa = _obtener_tasa_usd()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"No se pudo obtener tasa: {e}")
+
+    if tasa <= 0:
+        raise HTTPException(status_code=500, detail=f"Tasa invalida: {tasa}")
+
+    with _conexion() as conn:
+        conn.autocommit = True
+
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT tariff_id, vehicle_type, base_fare_usd, price_per_km_usd, "
+                "price_per_minute_usd FROM tariffs"
+            )
+            filas = list(cur.fetchall())
+
+        resumen_tarifas = []
+        for f in filas:
+            base_usd = float(f["base_fare_usd"] or 0)
+            km_usd = float(f["price_per_km_usd"] or 0)
+            min_usd = float(f["price_per_minute_usd"] or 0)
+            if base_usd == 0 and km_usd == 0 and min_usd == 0:
+                continue
+            base_cup = round(base_usd * tasa, 2)
+            km_cup = round(km_usd * tasa, 2)
+            min_cup = round(min_usd * tasa, 2)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE tariffs SET base_fare=%s, price_per_km=%s, "
+                    "price_per_minute=%s, updated_at=NOW() WHERE tariff_id=%s",
+                    (base_cup, km_cup, min_cup, f["tariff_id"]),
+                )
+            resumen_tarifas.append({
+                "vehicle_type": f["vehicle_type"],
+                "base_cup": base_cup, "km_cup": km_cup, "min_cup": min_cup,
+            })
+
+        campos = ["precio_km_zona_basico", "precio_km_zona_confort",
+                  "precio_km_zona_triciclo", "precio_km_zona_moto",
+                  "precio_por_minuto"]
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM promociones WHERE id = 1")
+            promo = cur.fetchone()
+
+        resumen_promo = []
+        if promo:
+            sets, params = [], []
+            for col in campos:
+                usd = float(promo.get(col + "_usd") or 0)
+                if usd == 0:
+                    continue
+                cup_nuevo = round(usd * tasa, 2)
+                sets.append(f"{col} = %s")
+                params.append(cup_nuevo)
+                resumen_promo.append({"campo": col, "cup": cup_nuevo})
+            if sets:
+                params.append(1)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE promociones SET {', '.join(sets)}, "
+                        "actualizado_at=NOW() WHERE id = %s",
+                        tuple(params),
+                    )
+
+    logger.info("update-daily-prices ejecutado por %s con tasa %.4f",
+                admin.get("email"), tasa)
+    return {
+        "ok": True,
+        "tasa_usd": tasa,
+        "tarifas": resumen_tarifas,
+        "promociones": resumen_promo,
     }
