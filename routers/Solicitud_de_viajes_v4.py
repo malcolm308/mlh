@@ -772,6 +772,46 @@ def estimate_trip_price(
     distance_km = distancia_por_calle_km(
         request_lat, request_lng, dropoff_lat, dropoff_lng)
     return _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
+
+
+def estimate_all_vehicles(
+    request_lat: float,
+    request_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+) -> dict:
+    """Calcula precios para los 4 vehículos en una sola llamada.
+    
+    Reutiliza _price_breakdown (misma lógica que estimate_trip_price).
+    Los precios CUP ya están actualizados en la BD por el cron diario.
+    """
+    distance_km = distancia_por_calle_km(
+        request_lat, request_lng, dropoff_lat, dropoff_lng)
+    
+    # Velocidad promedio para ETA (km/h)
+    AVG_SPEED_KMH = 30
+    eta_minutes = round((distance_km / AVG_SPEED_KMH) * 60)
+    eta_text = f"{eta_minutes} min"
+    
+    vehicles = []
+    for vehicle_type in ["moto", "triciclo", "basico", "confort"]:
+        breakdown = _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
+        vehicles.append({
+            "vehicle_type": vehicle_type,
+            "price": breakdown["precio_estimado"],
+            "base_fare": breakdown["base_fare"],
+            "distance_fare": breakdown["distance_fare"],
+            "time_fare": breakdown["time_fare"],
+            "coeficiente": breakdown["coeficiente"],
+        })
+    
+    return {
+        "distance_km": round(distance_km, 2),
+        "eta_minutes": eta_minutes,
+        "eta_text": eta_text,
+        "payment_method": "Efectivo",
+        "vehicles": vehicles,
+    }
 # ===================== TRIPS =====================
 
 def create_trip(
@@ -2369,6 +2409,30 @@ async def api_estimate_trip(body: TripEstimateRequest):
     except Exception as e:
         logger.exception("Error estimando precio")
         raise HTTPException(status_code=500, detail="Error calculando la tarifa estimada")
+
+
+class EstimateAllRequest(BaseModel):
+    request_lat: float
+    request_lng: float
+    dropoff_lat: float
+    dropoff_lng: float
+
+
+@router.post("/trips/estimate-all")
+async def api_estimate_all(body: EstimateAllRequest):
+    """Calcula precios para los 4 vehículos en una sola llamada."""
+    try:
+        return estimate_all_vehicles(
+            request_lat=body.request_lat,
+            request_lng=body.request_lng,
+            dropoff_lat=body.dropoff_lat,
+            dropoff_lng=body.dropoff_lng,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Error estimando todos los vehículos")
+        raise HTTPException(status_code=500, detail="Error calculando tarifas")
 
 
 async def _retry_offer_trip(
