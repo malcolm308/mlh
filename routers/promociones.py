@@ -111,6 +111,54 @@ def require_admin(authorization: Optional[str] = Header(None)) -> dict:
     return {"id": str(admin["_id"]), "email": email, "rol": admin.get("rol")}
 
 
+def verify_cron_or_admin(
+    authorization: Optional[str] = Header(None),
+    x_cron_key: Optional[str] = Header(None),
+) -> dict:
+    """Autenticacion dual para endpoints de anclaje USD.
+
+    Acepta DOS formas de autenticarse:
+
+      1. **JWT de administrador** (cabecera `Authorization: Bearer <token>`).
+         Usado por el panel web. Expira cada 30 min.
+
+      2. **API Key estatica** (cabecera `X-Cron-Key: <CRON_API_KEY>`).
+         Usado por el cron job externo (cron-job.org). No expira.
+
+    La API Key se compara contra la variable de entorno `CRON_API_KEY`.
+    Si no esta configurada en el servidor, el metodo cron queda deshabilitado
+    y solo funciona el JWT admin (fail-safe).
+    """
+    # --- Metodo 1: API Key estatica (cron) ---
+    cron_key = os.getenv("CRON_API_KEY")
+    if x_cron_key and cron_key:
+        # Comparacion en tiempo constante para evitar timing attacks
+        if len(x_cron_key) == len(cron_key) and x_cron_key == cron_key:
+            return {"id": "cron", "email": "cron-job@rapitaxi", "source": "cron-key"}
+
+    # --- Metodo 2: JWT admin (panel) ---
+    if authorization and authorization.lower().startswith("bearer "):
+        payload = verify_admin_token(authorization.split(" ", 1)[1].strip())
+        if payload:
+            email = payload.get("sub")
+            admin = admin_coleccion.find_one({"email": email}) if email else None
+            if admin:
+                return {
+                    "id": str(admin["_id"]),
+                    "email": email,
+                    "rol": admin.get("rol"),
+                    "source": "jwt",
+                }
+
+    raise HTTPException(
+        status_code=401,
+        detail=(
+            "Autenticacion requerida. Usa 'Authorization: Bearer <token>' "
+            "o 'X-Cron-Key: <CRON_API_KEY>'"
+        ),
+    )
+
+
 ALTER_PROMOCIONES = """
     ALTER TABLE promociones
             ADD COLUMN IF NOT EXISTS coef_corto_km NUMERIC(6,2) NOT NULL DEFAULT 3.0,
@@ -821,7 +869,7 @@ def _conexion():
 
 
 @router.post("/init-usd-prices")
-def admin_init_usd_prices(admin: dict = Depends(require_admin), body: Optional[Dict] = None):
+def admin_init_usd_prices(auth: dict = Depends(verify_cron_or_admin), body: Optional[Dict] = None):
     """FASE 1 (EJECUTAR UNA SOLA VEZ): calcula y guarda los precios USD.
 
     Los precios en CUP no cambian. Se anaden las columnas `_usd` si no existen
@@ -919,7 +967,7 @@ def admin_init_usd_prices(admin: dict = Depends(require_admin), body: Optional[D
                     )
 
     logger.info("init-usd-prices ejecutado por %s con tasa %.4f",
-                admin.get("email"), tasa)
+                auth.get("email"), tasa)
     return {
         "ok": True,
         "tasa_usd": tasa,
@@ -930,15 +978,25 @@ def admin_init_usd_prices(admin: dict = Depends(require_admin), body: Optional[D
 
 
 @router.post("/update-daily-prices")
-def admin_update_daily_prices(admin: dict = Depends(require_admin)):
+def admin_update_daily_prices(auth: dict = Depends(verify_cron_or_admin), body: Optional[Dict] = None):
     """FASE 2 (CRON DIARIO): recalcula precios CUP desde USD * tasa_hoy.
 
-    Si la API de El Toque falla, ABORTA sin tocar nada (idempotente seguro).
+    Si la API de El Toque falla, acepta tasa manual por body: {"rate": 835}.
+    Si no hay tasa manual ni automatica, ABORTA sin tocar nada.
     """
-    try:
-        tasa = _obtener_tasa_usd()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"No se pudo obtener tasa: {e}")
+    body = body or {}
+    tasa_manual = body.get("rate")
+    
+    if tasa_manual and float(tasa_manual) > 0:
+        tasa = float(tasa_manual)
+        logger.info("Fase 2: tasa manual %.4f (pasada por body)", tasa)
+    else:
+        try:
+            tasa = _obtener_tasa_usd()
+        except Exception as e:
+            raise HTTPException(status_code=502,
+                detail=f"No se pudo obtener tasa automatica: {e}. "
+                       f"Reintenta pasando body: {{\"rate\": <tasa_de_hoy>}}")
 
     if tasa <= 0:
         raise HTTPException(status_code=500, detail=f"Tasa invalida: {tasa}")
@@ -1002,7 +1060,7 @@ def admin_update_daily_prices(admin: dict = Depends(require_admin)):
                     )
 
     logger.info("update-daily-prices ejecutado por %s con tasa %.4f",
-                admin.get("email"), tasa)
+                auth.get("email"), tasa)
     return {
         "ok": True,
         "tasa_usd": tasa,
