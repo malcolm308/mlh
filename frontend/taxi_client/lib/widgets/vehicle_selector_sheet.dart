@@ -65,6 +65,7 @@ class VehicleSelectorSheet extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onVehicleSelected;
   final VoidCallback onConfirmTrip;
+  final VoidCallback? onBack;
   final bool isLoading;
 
   const VehicleSelectorSheet({
@@ -78,6 +79,7 @@ class VehicleSelectorSheet extends StatelessWidget {
     required this.selectedIndex,
     required this.onVehicleSelected,
     required this.onConfirmTrip,
+    this.onBack,
     this.isLoading = false,
   });
 
@@ -104,15 +106,50 @@ class VehicleSelectorSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 10),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey[300],
-              borderRadius: BorderRadius.circular(2),
+          // Cabecera: botón "Cambiar ruta" + indicador de arrastre
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (onBack != null)
+                  InkWell(
+                    onTap: onBack,
+                    borderRadius: BorderRadius.circular(20),
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.arrow_back, size: 18),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Cambiar ruta',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox(width: 80),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 80),
+              ],
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(

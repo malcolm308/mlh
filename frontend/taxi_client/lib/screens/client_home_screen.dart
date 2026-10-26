@@ -88,6 +88,52 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   VehicleOption? _selectedVehicle;
   String? _etaText;
   String _paymentMethod = 'Efectivo';
+  bool _sheetOpen = false;
+  bool _shouldAutoShowPanel = true; // Controla si el panel se abre automáticamente
+
+  /// Resetea TODO el estado del viaje y la cotización.
+  /// Vuelve la pantalla al Paso 1 (mapa + buscadores + botón "Confirmar ruta").
+  void _resetTripState() {
+    setState(() {
+      // Coordenadas y direcciones
+      _pickup = _myLoc;
+      _dropoff = null;
+      _pickupAddr = null;
+      _dropoffAddr = null;
+      _pickupTouched = false;
+      _pinMode = _PinMode.pickup;
+
+      // Vehículo
+      _vehicleType = '';
+      _selectedVehicle = null;
+      _vehicles = const [];
+      _etaText = null;
+      _paymentMethod = 'Efectivo';
+
+      // Cotización
+      _backendFare = null;
+      _detalleFare = null;
+      _estFareBusy = false;
+      _estFareError = false;
+
+      // Ruta
+      _route = const [];
+      _routeKm = null;
+      _routeMin = null;
+      _routing = false;
+
+      // Panel
+      _sheetOpen = false;
+      _verDetalle = false;
+      _shouldAutoShowPanel = false; // No abrir panel automáticamente después de cancelar
+
+      // Errores
+      _error = null;
+      _searchError = null;
+      _searchHelp = null;
+      _suggestions = const [];
+    });
+  }
 
   /// Estado del GPS del dispositivo.
   LocationPermissionState? _gpsState;
@@ -394,7 +440,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         }
       });
       // Mostrar el BottomSheet automáticamente cuando hay estimación
-      if (mounted && vehiclesList.isNotEmpty) {
+      // pero solo si no está abierto ya y el usuario no ha cancelado recientemente
+      if (mounted && vehiclesList.isNotEmpty && !_sheetOpen && _shouldAutoShowPanel) {
         _showVehicleSelector();
       }
     } catch (_) {
@@ -408,41 +455,48 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
 
   void _showVehicleSelector() {
     if (_vehicles.isEmpty || _selectedVehicle == null) return;
-    showModalBottomSheet<void>(
+    if (_sheetOpen) return;  // Re-entrancy guard: prevent multiple sheets
+    _sheetOpen = true;       // Set synchronously BEFORE showModalBottomSheet
+
+    final initialIndex = _vehicles.indexWhere(
+        (v) => v.type == _selectedVehicle?.type);
+
+    showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
+      isDismissible: true,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
-      enableDrag: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          return VehicleSelectorSheet(
-            pickupAddress: _pickupAddr ?? 'Ubicación actual',
-            dropoffAddress: _dropoffAddr ?? 'Destino',
-            distanceKm: _routeKm ?? 0,
-            etaText: _etaText ?? '--',
-            paymentMethod: _paymentMethod,
-            vehicles: _vehicles,
-            selectedIndex: _vehicles.indexWhere(
-                (v) => v.type == _selectedVehicle?.type),
-            onVehicleSelected: (index) {
-              // Solo actualiza el índice dentro del sheet, sin cerrar.
-              // Así el precio y el resaltado cambian en el mismo frame.
-              setSheetState(() {
-                _selectedVehicle = _vehicles[index];
-              });
-              // Sincronizamos con el estado del padre para que _requestTrip
-              // use el vehículo correcto al pulsar "Viajar ahora".
-              setState(() {});
-            },
-            onConfirmTrip: () {
-              Navigator.of(ctx).pop();
-              _requestTrip();
-            },
-            isLoading: _loading,
-          );
+      builder: (ctx) => _VehicleSelectorStateful(
+        pickupAddress: _pickupAddr ?? 'Ubicación actual',
+        dropoffAddress: _dropoffAddr ?? 'Destino',
+        distanceKm: _routeKm ?? 0,
+        etaText: _etaText ?? '--',
+        paymentMethod: _paymentMethod,
+        vehicles: _vehicles,
+        initialSelectedIndex: initialIndex < 0 ? 0 : initialIndex,
+        onConfirm: (selectedIndex) {
+          setState(() => _selectedVehicle = _vehicles[selectedIndex]);
+          Navigator.of(ctx).pop(true);
+          _requestTrip();
+        },
+        onBack: () {
+          Navigator.of(ctx).pop(false);
+        },
+        isLoading: _loading,
+        onOpen: () {},  // No longer needed - _sheetOpen set synchronously
+        onClose: () {
+          _sheetOpen = false;
         },
       ),
-    );
+    ).then((confirmed) {
+      _sheetOpen = false;  // Safety reset in .then()
+      if (!mounted) return;
+      if (confirmed == true) return; // Confirmó → _requestTrip ya se encargó
+      // El usuario cerró el panel (back, tap outside o botón Volver).
+      // Volvemos al Paso 1 limpiando el estado de cotización.
+      _resetTripState();
+    });
   }
 
   Future<void> _requestTrip() async {
@@ -475,7 +529,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       if (tripId.isEmpty) throw ApiException('No se recibió el trip_id');
       if (!mounted) return;
       setState(() => _loading = false);
-      Navigator.of(context).push(MaterialPageRoute(
+      final result = await Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => TripScreen(
           api: widget.api,
           clientId: widget.clientId,
@@ -483,6 +537,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           initialEstimate: (res['precio_estimado'] ?? 0).toDouble(),
         ),
       ));
+      // Si el viaje fue cancelado, limpiar todo el estado
+      if (result == 'cancelled' && mounted) {
+        _resetTripState();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -1105,7 +1163,10 @@ onTap: () => setState(() {
                   onPressed: (!bothSet || _estFareBusy || _loading)
                       ? null
                       : _vehicles.isEmpty
-                          ? _loadEstimate
+                          ? () {
+                              setState(() => _shouldAutoShowPanel = true);
+                              _loadEstimate();
+                            }
                           : _requestTrip,
                   icon: _estFareBusy || _loading
                       ? const SizedBox(
@@ -1214,6 +1275,81 @@ onTap: () => setState(() {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Widget stateful que maneja la selecci�n de veh�culo internamente.
+/// Evita reconstruir el padre y apilar m�ltiples layouts.
+class _VehicleSelectorStateful extends StatefulWidget {
+  final String pickupAddress;
+  final String dropoffAddress;
+  final double distanceKm;
+  final String etaText;
+  final String paymentMethod;
+  final List<VehicleOption> vehicles;
+  final int initialSelectedIndex;
+  final ValueChanged<int> onConfirm;
+  final VoidCallback onBack;
+  final bool isLoading;
+  final VoidCallback onOpen;
+  final VoidCallback onClose;
+
+  const _VehicleSelectorStateful({
+    required this.pickupAddress,
+    required this.dropoffAddress,
+    required this.distanceKm,
+    required this.etaText,
+    required this.paymentMethod,
+    required this.vehicles,
+    required this.initialSelectedIndex,
+    required this.onConfirm,
+    required this.onBack,
+    required this.isLoading,
+    required this.onOpen,
+    required this.onClose,
+  });
+
+  @override
+  State<_VehicleSelectorStateful> createState() => _VehicleSelectorStatefulState();
+}
+
+class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
+  late int _selectedIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIndex = widget.initialSelectedIndex;
+    widget.onOpen();
+  }
+
+  @override
+  void dispose() {
+    widget.onClose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return VehicleSelectorSheet(
+      pickupAddress: widget.pickupAddress,
+      dropoffAddress: widget.dropoffAddress,
+      distanceKm: widget.distanceKm,
+      etaText: widget.etaText,
+      paymentMethod: widget.paymentMethod,
+      vehicles: widget.vehicles,
+      selectedIndex: _selectedIndex,
+      onVehicleSelected: (index) {
+        setState(() {
+          _selectedIndex = index;
+        });
+      },
+      onConfirmTrip: () {
+        widget.onConfirm(_selectedIndex);
+      },
+      onBack: widget.onBack,
+      isLoading: widget.isLoading,
     );
   }
 }
