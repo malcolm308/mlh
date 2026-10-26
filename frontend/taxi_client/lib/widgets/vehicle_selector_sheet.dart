@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
 /// Modelo de vehículo con su precio y datos
 class VehicleOption {
@@ -22,23 +21,23 @@ class VehicleOption {
     
     switch (type) {
       case 'moto':
-        iconPath = 'assets/icons/moto.svg';
+        iconPath = 'assets/icons/moto_scooter.png';
         displayName = 'Moto';
         break;
       case 'triciclo':
-        iconPath = 'assets/icons/triciclo.svg';
+        iconPath = 'assets/icons/triciclo_rickshaw.png';
         displayName = 'Triciclo';
         break;
       case 'basico':
-        iconPath = 'assets/icons/basico.svg';
+        iconPath = 'assets/icons/basico_lada.png';
         displayName = 'Básico';
         break;
       case 'confort':
-        iconPath = 'assets/icons/confort.svg';
+        iconPath = 'assets/icons/confort_suv.png';
         displayName = 'Confort';
         break;
       default:
-        iconPath = 'assets/icons/basico.svg';
+        iconPath = 'assets/icons/basico_lada.png';
         displayName = type;
     }
     
@@ -51,7 +50,11 @@ class VehicleOption {
   }
 }
 
-/// BottomSheet de selección de vehículo (Paso 2 del flujo)
+/// BottomSheet de selección de vehículo (Paso 2 del flujo).
+///
+/// Recibe `selectedIndex` y `onVehicleSelected(int)`. La reconstrucción se
+/// controla desde fuera con `StatefulBuilder` para que al tocar una tarjeta
+/// solo cambie el resaltado y el precio, sin cerrar/reabrir el sheet.
 class VehicleSelectorSheet extends StatelessWidget {
   final String pickupAddress;
   final String dropoffAddress;
@@ -59,8 +62,8 @@ class VehicleSelectorSheet extends StatelessWidget {
   final String etaText;
   final String paymentMethod;
   final List<VehicleOption> vehicles;
-  final VehicleOption selectedVehicle;
-  final Function(VehicleOption) onVehicleSelected;
+  final int selectedIndex;
+  final ValueChanged<int> onVehicleSelected;
   final VoidCallback onConfirmTrip;
   final bool isLoading;
 
@@ -72,11 +75,13 @@ class VehicleSelectorSheet extends StatelessWidget {
     required this.etaText,
     required this.paymentMethod,
     required this.vehicles,
-    required this.selectedVehicle,
+    required this.selectedIndex,
     required this.onVehicleSelected,
     required this.onConfirmTrip,
     this.isLoading = false,
   });
+
+  VehicleOption get _selected => vehicles[selectedIndex];
 
   @override
   Widget build(BuildContext context) {
@@ -89,18 +94,17 @@ class VehicleSelectorSheet extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black26,
-            blurRadius: 10,
-            offset: Offset(0, -2),
+            color: Color(0x29000000),
+            blurRadius: 12,
+            offset: Offset(0, -3),
           ),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Indicador de arrastre
+          const SizedBox(height: 10),
           Container(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
             width: 40,
             height: 4,
             decoration: BoxDecoration(
@@ -108,15 +112,14 @@ class VehicleSelectorSheet extends StatelessWidget {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          
-          // Cabecera con origen/destino
+          const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _AddressRow(
-                  icon: Icons.arrow_upward,
+                  icon: Icons.circle,
                   iconColor: Colors.green,
                   address: pickupAddress,
                   label: 'Recogida',
@@ -131,10 +134,7 @@ class VehicleSelectorSheet extends StatelessWidget {
               ],
             ),
           ),
-          
-          const SizedBox(height: 20),
-          
-          // Lista horizontal de vehículos
+          const SizedBox(height: 16),
           SizedBox(
             height: 110,
             child: ListView.builder(
@@ -143,20 +143,16 @@ class VehicleSelectorSheet extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               itemCount: vehicles.length,
               itemBuilder: (context, index) {
-                final vehicle = vehicles[index];
-                final isSelected = vehicle.type == selectedVehicle.type;
+                final isSelected = index == selectedIndex;
                 return _VehicleCard(
-                  vehicle: vehicle,
+                  vehicle: vehicles[index],
                   isSelected: isSelected,
-                  onTap: () => onVehicleSelected(vehicle),
+                  onTap: () => onVehicleSelected(index),
                 );
               },
             ),
           ),
-          
-          const SizedBox(height: 20),
-          
-          // Fila de detalles: Precio | Pago | ETA
+          const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
@@ -165,7 +161,7 @@ class VehicleSelectorSheet extends StatelessWidget {
                 _DetailColumn(
                   icon: Icons.attach_money,
                   label: 'Precio',
-                  value: '${selectedVehicle.price.toStringAsFixed(0)} CUP',
+                  value: '${_selected.price.toStringAsFixed(0)} CUP',
                   valueColor: const Color(0xFF007AFF),
                 ),
                 _DetailColumn(
@@ -181,10 +177,7 @@ class VehicleSelectorSheet extends StatelessWidget {
               ],
             ),
           ),
-          
-          const SizedBox(height: 20),
-          
-          // Botón de acción
+          const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
             child: SizedBox(
@@ -238,7 +231,7 @@ class _AddressRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 18, color: iconColor),
+        Icon(icon, size: 10, color: iconColor),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -284,50 +277,49 @@ class _VehicleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Container(
         width: 100,
         margin: const EdgeInsets.only(right: 12),
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF007AFF).withValues(alpha: 0.1) : Colors.grey[100],
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isSelected ? const Color(0xFF007AFF) : Colors.grey[300]!,
-              width: isSelected ? 2 : 1,
-            ),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFF007AFF).withValues(alpha: 0.08)
+              : Colors.grey[100],
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF007AFF) : Colors.grey[300]!,
+            width: isSelected ? 2 : 1,
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              SvgPicture.asset(
-                vehicle.iconPath,
-                width: 48,
-                height: 48,
-                colorFilter: ColorFilter.mode(
-                  isSelected ? const Color(0xFF007AFF) : Colors.grey[700]!,
-                  BlendMode.srcIn,
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Center(
+                child: Image.asset(
+                  vehicle.iconPath,
+                  cacheWidth: 256,
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stack) =>
+                      const Icon(Icons.directions_car, size: 48),
                 ),
               ),
-            const SizedBox(height: 8),
+            ),
+            const SizedBox(height: 6),
             Text(
               vehicle.displayName,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                 color: isSelected ? const Color(0xFF007AFF) : Colors.grey[800],
+                decoration: isSelected ? TextDecoration.underline : null,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            if (isSelected)
-              Container(
-                margin: const EdgeInsets.only(top: 4),
-                width: 20,
-                height: 2,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF007AFF),
-                  borderRadius: BorderRadius.all(Radius.circular(1)),
-                ),
-              ),
           ],
         ),
       ),
@@ -350,27 +342,28 @@ class _DetailColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Icon(icon, size: 20, color: Colors.grey[600]),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            color: Colors.grey[600],
+    return Expanded(
+      child: Column(
+        children: [
+          Icon(icon, size: 20, color: Colors.grey[600]),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(fontSize: 10, color: Colors.grey[600]),
           ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: valueColor ?? Colors.grey[900],
+          const SizedBox(height: 2),
+          Text(
+            value,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: valueColor ?? Colors.grey[900],
+            ),
+            maxLines: 1,
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

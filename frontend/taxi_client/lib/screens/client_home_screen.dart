@@ -413,27 +413,34 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       enableDrag: true,
-      builder: (ctx) => VehicleSelectorSheet(
-        pickupAddress: _pickupAddr ?? 'Ubicación actual',
-        dropoffAddress: _dropoffAddr ?? 'Destino',
-        distanceKm: _routeKm ?? 0,
-        etaText: _etaText ?? '--',
-        paymentMethod: _paymentMethod,
-        vehicles: _vehicles,
-        selectedVehicle: _selectedVehicle!,
-        onVehicleSelected: (vehicle) {
-          Navigator.of(ctx).pop();
-          setState(() => _selectedVehicle = vehicle);
-          // Reabrir con el nuevo seleccionado
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _showVehicleSelector();
-          });
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          return VehicleSelectorSheet(
+            pickupAddress: _pickupAddr ?? 'Ubicación actual',
+            dropoffAddress: _dropoffAddr ?? 'Destino',
+            distanceKm: _routeKm ?? 0,
+            etaText: _etaText ?? '--',
+            paymentMethod: _paymentMethod,
+            vehicles: _vehicles,
+            selectedIndex: _vehicles.indexWhere(
+                (v) => v.type == _selectedVehicle?.type),
+            onVehicleSelected: (index) {
+              // Solo actualiza el índice dentro del sheet, sin cerrar.
+              // Así el precio y el resaltado cambian en el mismo frame.
+              setSheetState(() {
+                _selectedVehicle = _vehicles[index];
+              });
+              // Sincronizamos con el estado del padre para que _requestTrip
+              // use el vehículo correcto al pulsar "Viajar ahora".
+              setState(() {});
+            },
+            onConfirmTrip: () {
+              Navigator.of(ctx).pop();
+              _requestTrip();
+            },
+            isLoading: _loading,
+          );
         },
-        onConfirmTrip: () {
-          Navigator.of(ctx).pop();
-          _requestTrip();
-        },
-        isLoading: _loading,
       ),
     );
   }
