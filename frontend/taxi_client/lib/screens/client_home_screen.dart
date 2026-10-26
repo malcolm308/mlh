@@ -36,6 +36,13 @@ class ClientHomeScreen extends StatefulWidget {
 
 enum _PinMode { pickup, dropoff }
 
+// Estados estrictos del flujo de solicitud de viaje
+enum ClientState {
+  selectingRoute,    // Paso 1: Mapa + buscadores + botón "Confirmar ruta"
+  selectingVehicle,  // Paso 2: Panel de vehículos abierto (única forma de solicitar)
+  waitingForDriver,  // Viaje solicitado, mostrando carga
+}
+
 class _ClientHomeScreenState extends State<ClientHomeScreen> {
   final ClientMapController _mapController = ClientMapController();
 
@@ -43,6 +50,11 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   LatLng? _pickup;
   LatLng? _dropoff;
   _PinMode _pinMode = _PinMode.pickup;
+
+  // Estado del flujo controlado por enum
+  ClientState _currentState = ClientState.selectingRoute;
+
+  // Variables de datos del viaje
   String _vehicleType = '';
   bool _loading = false;
   String? _error;
@@ -56,19 +68,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   bool _estFareError = false;
   int _estReq = 0;
 
-  /// Desglose de la última estimación, tal y como lo devuelve el backend.
-  ///
-  /// Se guarda entero, no solo el total, para poder enseñar de donde sale el
-  /// precio: con el coeficiente por distancia el total ya no es "base + km +
-  /// tiempo" a ojos del pasajero.
+  /// Desglose de la última estimación
   Map<String, dynamic>? _detalleFare;
 
-  /// Si el desglose está abierto. Cerrado por defecto porque a quien pide un
-  /// viaje le interesa el total, no la cuenta.
+  /// Si el desglose está abierto
   bool _verDetalle = false;
 
-  /// Minutos de espera que regala la plataforma, para poder avisar al pasajero.
-  /// `null` mientras no se haya podido leer; entonces no se pinta nada.
+  /// Minutos de espera de cortesía
   int? _cortesiaMin;
   String? _pickupAddr;
   String? _dropoffAddr;
@@ -80,21 +86,20 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   bool _searching = false;
   Timer? _searchDebounce;
 
-  /// Tarifas del backend (GET /api/tariffs).
+  /// Tarifas del backend (GET /api/tariffs)
   List<Tariff> _tarifas = const [];
 
-  // Flujo 2 pasos: vehículos disponibles y seleccionado
+  // Datos del panel de vehículos (solo existen cuando _currentState == selectingVehicle)
   List<VehicleOption> _vehicles = [];
   VehicleOption? _selectedVehicle;
   String? _etaText;
   String _paymentMethod = 'Efectivo';
-  bool _sheetOpen = false;
-  bool _shouldAutoShowPanel = true; // Controla si el panel se abre automáticamente
 
-  /// Resetea TODO el estado del viaje y la cotización.
-  /// Vuelve la pantalla al Paso 1 (mapa + buscadores + botón "Confirmar ruta").
+  /// Resetea TODO el estado y vuelve a Paso 1 (selectingRoute)
   void _resetTripState() {
     setState(() {
+      _currentState = ClientState.selectingRoute;
+      
       // Coordenadas y direcciones
       _pickup = _myLoc;
       _dropoff = null;
@@ -122,10 +127,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       _routeMin = null;
       _routing = false;
 
-      // Panel
-      _sheetOpen = false;
+      // UI
       _verDetalle = false;
-      _shouldAutoShowPanel = false; // No abrir panel automáticamente después de cancelar
+      _loading = false;
 
       // Errores
       _error = null;
@@ -409,6 +413,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     final pickup = _pickup;
     final dropoff = _dropoff;
     if (pickup == null || dropoff == null || pickup == dropoff) return;
+    // Solo cargar estimación si estamos en Paso 1
+    if (_currentState != ClientState.selectingRoute) return;
+    
     final req = ++_estReq;
     setState(() => _estFareBusy = true);
     try {
@@ -422,28 +429,25 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       final vehiclesList = (res['vehicles'] as List)
           .map((v) => VehicleOption.fromApi(Map<String, dynamic>.from(v as Map)))
           .toList();
+      if (vehiclesList.isEmpty) {
+        setState(() {
+          _estFareBusy = false;
+          _estFareError = true;
+        });
+        return;
+      }
+      // Transición a Paso 2: cambiar estado Y abrir panel en un solo setState
       setState(() {
+        _currentState = ClientState.selectingVehicle;
         _estFareBusy = false;
         _estFareError = false;
         _vehicles = vehiclesList;
         _etaText = res['eta_text'] as String? ?? '--';
         _paymentMethod = res['payment_method'] as String? ?? 'Efectivo';
-        // Seleccionar el primero por defecto (o mantener el anterior si existe)
-        if (_selectedVehicle == null && vehiclesList.isNotEmpty) {
-          _selectedVehicle = vehiclesList.first;
-        } else if (_selectedVehicle != null) {
-          // Mantener el tipo seleccionado si sigue existiendo
-          final stillExists = vehiclesList.any((v) => v.type == _selectedVehicle!.type);
-          if (!stillExists) {
-            _selectedVehicle = vehiclesList.first;
-          }
-        }
+        _selectedVehicle = vehiclesList.first;
       });
-      // Mostrar el BottomSheet automáticamente cuando hay estimación
-      // pero solo si no está abierto ya y el usuario no ha cancelado recientemente
-      if (mounted && vehiclesList.isNotEmpty && !_sheetOpen && _shouldAutoShowPanel) {
-        _showVehicleSelector();
-      }
+      // Abrir el panel DESPUÉS del setState (necesita _vehicles poblado)
+      _showVehicleSelector();
     } catch (_) {
       if (!mounted || req != _estReq) return;
       setState(() {
@@ -454,9 +458,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   }
 
   void _showVehicleSelector() {
+    // Solo abrir si estamos en el estado correcto y hay vehículos
+    if (_currentState != ClientState.selectingVehicle) return;
     if (_vehicles.isEmpty || _selectedVehicle == null) return;
-    if (_sheetOpen) return;  // Re-entrancy guard: prevent multiple sheets
-    _sheetOpen = true;       // Set synchronously BEFORE showModalBottomSheet
 
     final initialIndex = _vehicles.indexWhere(
         (v) => v.type == _selectedVehicle?.type);
@@ -484,17 +488,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           Navigator.of(ctx).pop(false);
         },
         isLoading: _loading,
-        onOpen: () {},  // No longer needed - _sheetOpen set synchronously
-        onClose: () {
-          _sheetOpen = false;
-        },
+        onOpen: () {},
+        onClose: () {},
       ),
     ).then((confirmed) {
-      _sheetOpen = false;  // Safety reset in .then()
       if (!mounted) return;
-      if (confirmed == true) return; // Confirmó → _requestTrip ya se encargó
-      // El usuario cerró el panel (back, tap outside o botón Volver).
-      // Volvemos al Paso 1 limpiando el estado de cotización.
+      if (confirmed == true) return; // Confirmó → _requestTrip maneja el estado
+      // El usuario cerró el panel sin confirmar → volver a Paso 1
       _resetTripState();
     });
   }
@@ -504,13 +504,17 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     final dropoff = _dropoff;
     if (pickup == null || dropoff == null) {
       _showError('Define recogida y destino en el mapa');
+      _resetTripState();
       return;
     }
     if (_selectedVehicle == null) {
       _showError('Selecciona un tipo de vehículo');
+      _resetTripState();
       return;
     }
+    // Transición a estado de carga
     setState(() {
+      _currentState = ClientState.waitingForDriver;
       _loading = true;
       _error = null;
     });
@@ -528,7 +532,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       final tripId = (res['trip_id'] ?? '').toString();
       if (tripId.isEmpty) throw ApiException('No se recibió el trip_id');
       if (!mounted) return;
-      setState(() => _loading = false);
+      // Navegar a TripScreen
       final result = await Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => TripScreen(
           api: widget.api,
@@ -543,8 +547,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
       _showError('$e');
+      _resetTripState();
     }
   }
 
@@ -1159,33 +1163,36 @@ onTap: () => setState(() {
                   _buildRouteStats(scheme),
                 ],
                 const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: (!bothSet || _estFareBusy || _loading)
-                      ? null
-                      : _vehicles.isEmpty
-                          ? () {
-                              setState(() => _shouldAutoShowPanel = true);
-                              _loadEstimate();
-                            }
-                          : _requestTrip,
-                  icon: _estFareBusy || _loading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.local_taxi),
-                  label: Text(_loading
-                      ? 'Solicitando...'
-                      : _estFareBusy
-                          ? 'Calculando...'
-                          : _vehicles.isEmpty
-                              ? 'Confirmar ruta'
-                              : 'Solicitar viaje'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
+                // Botón de acción: solo "Confirmar ruta" en Paso 1
+                // En otros estados (selectingVehicle, waitingForDriver) no se muestra
+                if (_currentState == ClientState.selectingRoute)
+                  FilledButton.icon(
+                    onPressed: (!bothSet || _estFareBusy) ? null : _loadEstimate,
+                    icon: _estFareBusy
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.route),
+                    label: Text(_estFareBusy ? 'Calculando...' : 'Confirmar ruta'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                    ),
                   ),
-                ),
+                // Indicador de carga cuando el viaje está siendo solicitado
+                if (_currentState == ClientState.waitingForDriver)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 12),
+                        Text('Solicitando viaje...', style: TextStyle(fontSize: 14)),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
