@@ -1211,9 +1211,25 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             descuento_cliente = calcular_descuento_cliente(
                 Decimal(str(precio_bruto)), promo)
 
+            # 8c. Descuento por sistema de referidos.
+            # Regla: NO es acumulable con otras promociones.
+            # Solo se aplica si descuento_cliente == 0.
+            # Si ya hay descuento de promocion, el referido se guarda para el proximo viaje.
+            cliente_oid = to_mongo_id(trip.get("client_id") or "")
+            cliente_doc = mongo_client["Administración"].users.find_one({"_id": cliente_oid}) if cliente_oid else None
+            descuentos_disponibles = int(cliente_doc.get("descuentos_disponibles", 0) or 0) if cliente_doc else 0
+            descuento_referido = Decimal("0")
+            aplicar_descuento_referido = False
+            
+            if descuentos_disponibles > 0 and descuento_cliente == 0:
+                # Solo aplicar si no hay descuento de promocion
+                descuento_referido = (Decimal(str(precio_bruto)) * Decimal("0.10")).quantize(
+                    CENT, rounding=ROUND_HALF_UP)
+                aplicar_descuento_referido = True
+
             # Lo que paga el pasajero. El descuento sale de la comision de la
             # plataforma, nunca del bolsillo del chofer.
-            total_fare = float(Decimal(str(precio_bruto)) - descuento_cliente)
+            total_fare = float(Decimal(str(precio_bruto)) - descuento_cliente - descuento_referido)
 
             # 9. Actualizar el viaje en PostgreSQL
             cur.execute("""
@@ -1301,6 +1317,43 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 logger.exception("complete_trip: fallo en comision para viaje %s", trip_id)
                 comision_nominal = None
                 commission = None
+
+            # 11. Sistema de referidos
+            try:
+                client_oid = to_mongo_id(updated_trip.get("client_id") or "")
+                cliente_doc = mongo_client["Administración"].users.find_one({"_id": client_oid})
+                if cliente_doc:
+                    # A. Si se aplicó descuento de referido en este viaje, restar 1 del contador
+                    if aplicar_descuento_referido:
+                        mongo_client["Administración"].users.update_one(
+                            {"_id": client_oid},
+                            {"$inc": {"descuentos_disponibles": -1}}
+                        )
+                        logger.info("Descuento de referido aplicado a cliente %s, contador restado",
+                                  updated_trip.get("client_id"))
+                    
+                    # B. Si es el primer viaje del cliente y fue referido, otorgar descuento al referidor
+                    primer_viaje = (cliente_doc.get("viajes_completados") or 0) == 0
+                    referido_por = cliente_doc.get("referido_por")
+                    if primer_viaje and referido_por:
+                        referidor_doc = mongo_client["Administración"].users.find_one({"_id": to_mongo_id(referido_por)})
+                        if referidor_doc:
+                            descuentos_actuales = referidor_doc.get("descuentos_disponibles", 0)
+                            if descuentos_actuales < 10:  # Máximo 10 descuentos
+                                mongo_client["Administración"].users.update_one(
+                                    {"_id": to_mongo_id(referido_por)},
+                                    {"$inc": {"descuentos_disponibles": 1}}
+                                )
+                                logger.info("Referido %s completó primer viaje, descuento otorgado a %s",
+                                          updated_trip.get("client_id"), referido_por)
+                    
+                    # C. Incrementar contador de viajes completados
+                    mongo_client["Administración"].users.update_one(
+                        {"_id": client_oid},
+                        {"$inc": {"viajes_completados": 1}}
+                    )
+            except Exception as e:
+                logger.warning("Error en lógica de referidos: %s", e)
 
             # 11. Retornar el viaje completo con informacion adicional
             completed_at_iso = None
@@ -1396,7 +1449,8 @@ def get_trips_by_client(client_id: str, limit: int = 50) -> list[dict]:
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
-                equipaje, mascota, num_pasajes, vehicle_type, precio_estimado
+                equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
+                request_address, dropoff_address
             FROM trips WHERE client_id = %s ORDER BY requested_at DESC LIMIT %s;
             """,
             (client_id, limit),
@@ -2910,6 +2964,45 @@ async def api_cancel_trip(trip_id: str, body: Optional[dict] = None):
 @router.get("/trips/client/{client_id}")
 async def api_get_trips_by_client(client_id: str, limit: int = Query(50, le=200)):
     return get_trips_by_client(client_id, limit)
+
+
+@router.get("/trips/history/{client_id}")
+async def api_get_trip_history(client_id: str, limit: int = Query(50, le=200)):
+    """Historial de viajes del cliente con datos enriquecidos del chofer."""
+    viajes = get_trips_by_client(client_id, limit)
+    resultado = []
+    for v in viajes:
+        driver_id = v.get("driver_id")
+        chofer_nombre = None
+        vehiculo_marca = None
+        vehiculo_modelo = None
+        if driver_id:
+            try:
+                chofer_doc = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)})
+                if chofer_doc:
+                    chofer_nombre = chofer_doc.get("nombre")
+                    vehiculo = chofer_doc.get("vehiculo", {}) or {}
+                    vehiculo_marca = vehiculo.get("marca")
+                    vehiculo_modelo = vehiculo.get("modelo")
+            except Exception:
+                pass
+        resultado.append({
+            "trip_id": v.get("trip_id"),
+            "status": v.get("status"),
+            "request_address": v.get("request_address") or "Sin dirección",
+            "dropoff_address": v.get("dropoff_address") or "Sin dirección",
+            "distance_km": float(v.get("distance_km") or 0),
+            "duration_secs": int(v.get("duration_secs") or 0),
+            "total_fare": float(v.get("total_fare") or 0),
+            "vehicle_type": v.get("vehicle_type", "basico"),
+            "currency": v.get("currency", "CUP"),
+            "completed_at": str(v.get("completed_at") or v.get("requested_at") or ""),
+            "driver_id": driver_id,
+            "driver_name": chofer_nombre,
+            "vehicle_brand": vehiculo_marca,
+            "vehicle_model": vehiculo_modelo,
+        })
+    return resultado
 
 
 @router.get("/trips/driver/{driver_id}")
