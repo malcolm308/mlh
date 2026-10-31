@@ -16,6 +16,7 @@ import '../services/osrm_service.dart';
 import '../widgets/client_map_view.dart';
 import '../widgets/vehicle_selector_sheet.dart';
 import 'history_screen.dart';
+import 'support_screen.dart';
 import 'trip_screen.dart';
 
 class ClientHomeScreen extends StatefulWidget {
@@ -558,6 +559,48 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     await prefs.remove('client_id');
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false);
+  }
+
+  Future<void> _confirmDeleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Borrar cuenta?'),
+        content: const Text(
+          'Esta acción eliminará permanentemente tu cuenta y todos tus datos. '
+          'Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Borrar cuenta'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      try {
+        await widget.api.deleteAccount();
+        if (!mounted) return;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cuenta eliminada')),
+        );
+        Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
   }
 
   void _showError(String msg) {
@@ -1260,17 +1303,19 @@ onTap: () => setState(() {
                   builder: (_) => HistoryScreen(
                     api: widget.api,
                     clientId: widget.clientId,
-                    fullName: widget.profile.fullName,
                   ),
                 ));
               },
             ),
             ListTile(
-              leading: const Icon(Icons.info_outline, color: Color(0xFF333333)),
-              title: const Text('Servidor'),
-              subtitle: Text(ApiConfig.baseUrl,
-                  style: const TextStyle(color: Color(0xFF888888))),
-              onTap: () => Navigator.of(context).pop(),
+              leading: const Icon(Icons.help_outline, color: Color(0xFF333333)),
+              title: const Text('Ayuda y soporte'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => SupportScreen(api: widget.api),
+                ));
+              },
             ),
             const Divider(height: 16),
             ListTile(
@@ -1278,6 +1323,12 @@ onTap: () => setState(() {
               title: const Text('Cerrar sesión',
                   style: TextStyle(color: Color(0xFFB3261E))),
               onTap: _logout,
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_forever, color: Colors.red),
+              title: const Text('Borrar cuenta',
+                  style: TextStyle(color: Colors.red)),
+              onTap: _confirmDeleteAccount,
             ),
           ],
         ),

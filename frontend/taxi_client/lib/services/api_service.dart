@@ -211,6 +211,13 @@ class ApiService {
     return ClientTrip.fromJson(j);
   }
 
+  /// Historial de viajes enriquecido con datos del chofer y vehículo.
+  Future<List<Map<String, dynamic>>> getTripHistory(String clientId,
+      {int limit = 50}) async {
+    final list = await _list('GET', '/trips/history/$clientId?limit=$limit');
+    return list.whereType<Map<String, dynamic>>().toList();
+  }
+
   Future<List<RoutePoint>> getTripRoute(String tripId) async {
     final j = await _map('GET', '/trips/$tripId/route');
     final list = (j['points'] as List<dynamic>?) ?? const [];
@@ -229,6 +236,12 @@ class ApiService {
     } on Exception catch (_) {
       rethrow;
     }
+  }
+
+  // ---------------- USUARIO ----------------
+
+  Future<void> deleteAccount() async {
+    await _send('DELETE', '/users/me');
   }
 
   Future<List<ClientTrip>> getTripsByClient(String clientId,
