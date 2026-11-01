@@ -109,11 +109,10 @@ class TabMonitor(ttk.Frame):
 
     def _refresco_auto(self):
         self._auto = None
-        # Si el administrador esta a punto de pulsar un boton, no se le mueve
-        # la tabla debajo: se espera al siguiente ciclo.
-        if not self._consulta_en_curso and not self.btn_inicio["state"] == "disabled":
-            if self.winfo_ismapped():
-                self.cargar()
+        # Si hay una consulta en vuelo no se lanza otra; la tabla se repinta
+        # cuando termine. `_pintar` conserva la fila seleccionada.
+        if not self._consulta_en_curso and self.winfo_ismapped():
+            self.cargar()
         self._programar_refresco()
 
     def cargar(self):
@@ -201,6 +200,8 @@ class TabMonitor(ttk.Frame):
         return viaje
 
     def forzar_inicio(self):
+        if self._consulta_en_curso:
+            return
         viaje = self._viaje_para_accion("forzar el inicio")
         if not viaje:
             return
@@ -230,6 +231,8 @@ class TabMonitor(ttk.Frame):
         self.cargar()
 
     def forzar_fin(self):
+        if self._consulta_en_curso:
+            return
         viaje = self._viaje_para_accion("forzar el fin")
         if not viaje:
             return
