@@ -70,6 +70,9 @@ DDL = """
         bono_chofer_viajes_requeridos INTEGER NOT NULL DEFAULT 10,
         descuento_cliente_activo BOOLEAN NOT NULL DEFAULT FALSE,
         descuento_cliente_porcentaje NUMERIC(5,4) NOT NULL DEFAULT 0.0000,
+        -- Interruptor general del sistema de referidos. Si esta apagado, el
+        -- backend ignora los descuentos por referido y bloquea el canje.
+        referidos_activos BOOLEAN NOT NULL DEFAULT TRUE,
         fecha_expiracion TIMESTAMP,
         -- Coeficientes por distancia. Se aplican SOLO al subtotal del
         -- kilometraje: la tarifa base siempre se suma entera.
@@ -161,6 +164,7 @@ def verify_cron_or_admin(
 
 ALTER_PROMOCIONES = """
     ALTER TABLE promociones
+            ADD COLUMN IF NOT EXISTS referidos_activos BOOLEAN NOT NULL DEFAULT TRUE,
             ADD COLUMN IF NOT EXISTS coef_corto_km NUMERIC(6,2) NOT NULL DEFAULT 3.0,
             ADD COLUMN IF NOT EXISTS coef_corto_valor NUMERIC(6,4) NOT NULL DEFAULT 0.5000,
             ADD COLUMN IF NOT EXISTS coef_medio_km NUMERIC(6,2) NOT NULL DEFAULT 10.0,
@@ -236,6 +240,7 @@ def leer_promocion() -> Dict[str, Any]:
         "bono_chofer_viajes_requeridos": DEFAULT_BONO_VIAJES,
         "descuento_cliente_activo": False,
         "descuento_cliente_porcentaje": Decimal("0"),
+        "referidos_activos": True,
         "fecha_expiracion": None,
         "coef_corto_km": Decimal("3.0"),
         "coef_corto_valor": Decimal("0.5"),
@@ -279,6 +284,7 @@ def leer_promocion() -> Dict[str, Any]:
             "descuento_cliente_activo": bool(fila.get("descuento_cliente_activo")),
             "descuento_cliente_porcentaje": _a_decimal(
                 fila.get("descuento_cliente_porcentaje"), Decimal("0")),
+            "referidos_activos": bool(fila.get("referidos_activos", True)),
             "fecha_expiracion": fila.get("fecha_expiracion"),
             "coef_corto_km": _a_decimal(fila.get("coef_corto_km"), Decimal("3.0")),
             "coef_corto_valor": _a_decimal(fila.get("coef_corto_valor"), Decimal("0.5")),
@@ -449,6 +455,7 @@ class PromoIn(BaseModel):
     bono_chofer_viajes_requeridos: int = 0
     descuento_cliente_activo: bool = False
     descuento_cliente_porcentaje: float = 0
+    referidos_activos: bool = True
     fecha_expiracion: Optional[str] = Field(
         None, description="YYYY-MM-DD. Vacio = no caduca")
     coef_corto_km: Optional[float] = Field(
@@ -532,6 +539,7 @@ def _validar(datos: PromoIn) -> Dict[str, Any]:
         "bono_chofer_viajes_requeridos": viajes,
         "descuento_cliente_activo": descuento_activo,
         "descuento_cliente_porcentaje": descuento,
+        "referidos_activos": bool(datos.referidos_activos),
         "fecha_expiracion": expiracion,
         **tarifas,
     }
@@ -583,7 +591,7 @@ async def guardar_promocion(datos: PromoIn, admin: dict = Depends(require_admin)
     limpio = _validar(datos)
     columnas = ("comision_porcentaje, bono_chofer_activo, bono_chofer_monto, "
                 "bono_chofer_viajes_requeridos, descuento_cliente_activo, "
-                "descuento_cliente_porcentaje, fecha_expiracion, "
+                "descuento_cliente_porcentaje, referidos_activos, fecha_expiracion, "
                 "coef_corto_km, coef_corto_valor, coef_medio_km, coef_medio_valor, "
                 "coef_largo_valor, tiempo_espera_cortesia_minutos")
     asignaciones = ", ".join("%s = %%s" % c for c in columnas.split(", "))
@@ -767,6 +775,7 @@ def _a_json(promo: Dict[str, Any]) -> Dict[str, Any]:
             _porcentaje(promo["descuento_cliente_porcentaje"]),
         "descuento_aplicando": promo["descuento_aplicando"],
         "descuento_bloqueado_por_comision_cero": promo["comision_porcentaje"] <= 0,
+        "referidos_activos": bool(promo.get("referidos_activos", True)),
         "expirada": promo["expirada"],
         "fecha_expiracion": (promo["fecha_expiracion"].isoformat()
                              if promo["fecha_expiracion"] else None),

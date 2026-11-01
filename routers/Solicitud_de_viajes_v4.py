@@ -1213,15 +1213,19 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
             # 8c. Descuento por sistema de referidos.
             # Regla: NO es acumulable con otras promociones.
-            # Solo se aplica si descuento_cliente == 0.
-            # Si ya hay descuento de promocion, el referido se guarda para el proximo viaje.
+            # Solo se aplica si descuento_cliente == 0 y el interruptor global
+            # `referidos_activos` esta encendido.
+            referidos_activos = bool(promo.get("referidos_activos", True))
             cliente_oid = to_mongo_id(trip.get("client_id") or "")
             cliente_doc = cliente_coleccion.find_one({"_id": cliente_oid}) if cliente_oid else None
-            descuentos_disponibles = int(cliente_doc.get("descuentos_disponibles", 0) or 0) if cliente_doc else 0
+            descuentos_disponibles = (
+                int(cliente_doc.get("descuentos_disponibles", 0) or 0)
+                if (cliente_doc and referidos_activos) else 0
+            )
             descuento_referido = Decimal("0")
             aplicar_descuento_referido = False
             
-            if descuentos_disponibles > 0 and descuento_cliente == 0:
+            if referidos_activos and descuentos_disponibles > 0 and descuento_cliente == 0:
                 # Solo aplicar si no hay descuento de promocion
                 descuento_referido = (Decimal(str(precio_bruto)) * Decimal("0.10")).quantize(
                     CENT, rounding=ROUND_HALF_UP)
@@ -1332,10 +1336,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                         logger.info("Descuento de referido aplicado a cliente %s, contador restado",
                                   updated_trip.get("client_id"))
                     
-                    # B. Si es el primer viaje del cliente y fue referido, otorgar descuento al referidor
+                    # B. Si es el primer viaje del cliente y fue referido, otorgar
+                    # descuento al referidor. Si el sistema esta apagado, no se otorga.
                     primer_viaje = (cliente_doc.get("viajes_completados") or 0) == 0
                     referido_por = cliente_doc.get("referido_por")
-                    if primer_viaje and referido_por:
+                    if referidos_activos and primer_viaje and referido_por:
                         referidor_doc = cliente_coleccion.find_one({"_id": to_mongo_id(referido_por)})
                         if referidor_doc:
                             descuentos_actuales = referidor_doc.get("descuentos_disponibles", 0)

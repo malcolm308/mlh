@@ -224,6 +224,24 @@ class ApiClient:
         pantalla que solo necesita leer y escribir un unico recurso."""
         return self.post("/admin/promociones", kwargs)
 
+    # ------------------- MONITOR DE VIAJES (emergencias) -------------------
+
+    def viajes_activos(self):
+        """Viajes pendientes o en curso (monitor de control manual)."""
+        return self.get("/admin/trips/active")
+
+    def forzar_inicio(self, trip_id):
+        """Fuerza el paso a 'en curso' cuando el chofer no tiene conexion."""
+        return self.post("/admin/trips/%s/force-start" % trip_id)
+
+    def forzar_fin(self, trip_id, dropoff_lat=None, dropoff_lng=None, tip=0.0):
+        """Cierra el viaje. El precio lo calcula el backend, no se envia."""
+        cuerpo = {"tip": tip}
+        if dropoff_lat is not None and dropoff_lng is not None:
+            cuerpo["dropoff_lat"] = dropoff_lat
+            cuerpo["dropoff_lng"] = dropoff_lng
+        return self.post("/admin/trips/%s/force-complete" % trip_id, cuerpo)
+
     # ------------------- TARIFAS Y ESPERA -------------------
 
     def tarifas_espera(self):

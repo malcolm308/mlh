@@ -15,19 +15,28 @@ Todos los endpoints exigen token de administrador.
 """
 import logging
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Optional
 
 import bcrypt
 import psycopg2
 import psycopg2.extras
 from bson import ObjectId
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
-from routers.Solicitud_de_viajes_v4 import get_connection
+from db.Cliente.connection import cliente_db
+from routers.Solicitud_de_viajes_v4 import (
+    apply_daily_bonus,
+    complete_trip,
+    daily_trip_metrics,
+    get_connection,
+    publish_trip_event,
+    set_driver_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +44,7 @@ router = APIRouter(prefix="/admin", tags=["Administracion"])
 
 chofer_coleccion = chofer_db.users
 admin_coleccion = admin_db.users
+cliente_coleccion = cliente_db.users
 
 # Los 10 documentos que el chofer debe subir en el registro
 CAMPOS_DOCUMENTOS = [
@@ -543,3 +553,267 @@ async def choferes_top(fecha: Optional[str] = None, limite: int = 10,
         r["facturado"] = round(float(r["facturado"]), 2)
         r["km"] = round(float(r["km"]), 2)
     return {"fecha": str(dia), "choferes": rows}
+
+
+# ===================== MONITOR / CONTROL MANUAL DE VIAJES =====================
+
+ESTADOS_ACTIVOS = ("requested", "accepted", "driver_arrived", "in_progress")
+
+
+def _nombre_persona(doc: Optional[dict]) -> Optional[str]:
+    if not doc:
+        return None
+    nombre = " ".join(filter(None, [
+        doc.get("Nombre") or doc.get("nombre"),
+        doc.get("Apellidos") or doc.get("apellidos"),
+    ])).strip()
+    if nombre:
+        return nombre
+    profile = doc.get("profile") or {}
+    return profile.get("name") or doc.get("full_name") or doc.get("email")
+
+
+def _nombre_de(coleccion, id_str) -> Optional[str]:
+    try:
+        if not id_str or not ObjectId.is_valid(id_str):
+            return None
+        return _nombre_persona(coleccion.find_one({"_id": ObjectId(id_str)}))
+    except Exception:
+        return None
+
+
+def _json_trip(row: dict) -> dict:
+    """Convierte Decimal/fecha de Postgres a tipos que entiende el panel."""
+    salida = {}
+    for k, v in row.items():
+        if isinstance(v, datetime):
+            salida[k] = v.isoformat()
+        elif isinstance(v, Decimal):
+            salida[k] = float(v)
+        else:
+            salida[k] = v
+    return salida
+
+
+class ForzarFinIn(BaseModel):
+    """El precio NO se manda: lo calcula el backend con las tarifas vigentes."""
+    dropoff_lat: Optional[float] = None
+    dropoff_lng: Optional[float] = None
+    tip: float = 0.0
+
+
+@router.get("/trips/active")
+async def viajes_activos(admin: dict = Depends(require_admin)):
+    """Viajes pendientes o en curso, para el monitor de emergencias."""
+    sql = """
+        SELECT trip_id, client_id, driver_id, status,
+               request_address, dropoff_address, vehicle_type,
+               distance_km, precio_estimado, requested_at, started_at,
+               hora_llegada,
+               ST_Y(dropoff_location::geometry) AS dropoff_lat,
+               ST_X(dropoff_location::geometry) AS dropoff_lng
+          FROM trips
+         WHERE status IN ('requested', 'accepted', 'driver_arrived', 'in_progress')
+         ORDER BY requested_at DESC
+         LIMIT 200
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql)
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+
+    viajes = []
+    for r in rows:
+        item = _json_trip(r)
+        item["client_name"] = _nombre_de(cliente_coleccion, r.get("client_id"))
+        item["driver_name"] = _nombre_de(chofer_coleccion, r.get("driver_id"))
+        item["distance_km"] = (round(float(r["distance_km"]), 2)
+                               if r.get("distance_km") is not None else None)
+        item["precio_estimado"] = (float(r["precio_estimado"])
+                                   if r.get("precio_estimado") is not None else None)
+        viajes.append(item)
+
+    return {"total": len(viajes), "viajes": viajes}
+
+
+@router.post("/trips/{trip_id}/force-start")
+async def forzar_inicio(trip_id: str, admin: dict = Depends(require_admin)):
+    """Pone el viaje 'en curso' aunque el chofer no tenga conexion."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM trips WHERE trip_id = %s FOR UPDATE", (trip_id,))
+        trip = cur.fetchone()
+        if not trip:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Viaje no encontrado")
+
+        if trip["status"] == "in_progress":
+            cur.close()
+            return {"trip_id": trip_id, "status": "in_progress",
+                    "message": "El viaje ya estaba en curso"}
+
+        if trip["status"] not in ("requested", "accepted", "driver_arrived"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede iniciar un viaje en estado '%s'" % trip["status"])
+
+        if not trip.get("driver_id"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="El viaje no tiene chofer asignado; no se puede iniciar")
+
+        cur.execute(
+            """
+            UPDATE trips
+               SET status = 'in_progress',
+                   started_at = COALESCE(started_at, NOW())
+             WHERE trip_id = %s
+             RETURNING trip_id, status, started_at
+            """,
+            (trip_id,),
+        )
+        actualizado = dict(cur.fetchone())
+        conn.commit()
+        cur.close()
+
+    driver_id = trip.get("driver_id")
+    if driver_id:
+        try:
+            await set_driver_status(driver_id, "on_trip")
+        except Exception as e:
+            logger.warning("force-start: no se pudo marcar chofer %s: %s", driver_id, e)
+        try:
+            await publish_trip_event(trip_id, "trip_started", {"forced_by": admin.get("email")})
+        except Exception as e:
+            logger.warning("force-start: no se pudo publicar evento: %s", e)
+
+    return {**_json_trip(actualizado),
+            "message": "Viaje iniciado manualmente por el administrador",
+            "forzado_por": admin.get("email")}
+
+
+@router.post("/trips/{trip_id}/force-complete")
+async def forzar_fin(
+    trip_id: str,
+    background: BackgroundTasks,
+    body: Optional[ForzarFinIn] = None,
+    admin: dict = Depends(require_admin),
+):
+    """Cierra el viaje con el MISMO calculo de precio que el cierre normal.
+
+    El administrador no escribe el precio: se calcula distancia, tiempo,
+    comisiones y descuentos igual que cuando el chofer pulsa "Completar".
+    """
+    body = body or ForzarFinIn()
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT trip_id, driver_id, status,
+                   ST_Y(COALESCE(dropoff_location, request_location)::geometry) AS lat,
+                   ST_X(COALESCE(dropoff_location, request_location)::geometry) AS lng
+              FROM trips WHERE trip_id = %s
+            """,
+            (trip_id,),
+        )
+        trip = cur.fetchone()
+        if not trip:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Viaje no encontrado")
+
+        if trip["status"] == "completed":
+            cur.close()
+            raise HTTPException(status_code=400, detail="El viaje ya esta completado")
+        if trip["status"] in ("cancelled", "expired"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede completar un viaje '%s'" % trip["status"])
+        if not trip.get("driver_id"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="El viaje no tiene chofer asignado; no se puede completar")
+
+        # Si aun no estaba en curso (el chofer perdio la conexion antes de
+        # pulsar "Iniciar"), se pasa a in_progress para que complete_trip pueda
+        # ejecutar el mismo calculo. La distancia ya esta guardada desde la
+        # creacion del viaje, asi que el precio por km no se pierde.
+        if trip["status"] != "in_progress":
+            cur.execute(
+                """
+                UPDATE trips
+                   SET status = 'in_progress',
+                       started_at = COALESCE(started_at, NOW())
+                 WHERE trip_id = %s
+                """,
+                (trip_id,),
+            )
+            conn.commit()
+        cur.close()
+
+    lat = body.dropoff_lat if body.dropoff_lat is not None else trip.get("lat")
+    lng = body.dropoff_lng if body.dropoff_lng is not None else trip.get("lng")
+    if lat is None or lng is None:
+        raise HTTPException(
+            status_code=400,
+            detail="El viaje no tiene destino guardado; envía dropoff_lat y dropoff_lng")
+
+    try:
+        result = complete_trip(
+            trip_id=trip_id,
+            dropoff_lat=float(lat),
+            dropoff_lng=float(lng),
+            tip=float(body.tip or 0),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("force-complete fallo para el viaje %s", trip_id)
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo completar el viaje en el servidor. Revisa los logs.")
+
+    driver_id = result.get("driver_id")
+    if driver_id:
+        try:
+            await set_driver_status(driver_id, "available")
+        except Exception as e:
+            logger.warning("force-complete: no se pudo liberar chofer %s: %s",
+                           driver_id, e)
+        try:
+            await publish_trip_event(trip_id, "trip_completed", {
+                "total_fare": result.get("total_fare"),
+                "currency": result.get("currency"),
+                "forced_by": admin.get("email"),
+            })
+        except Exception as e:
+            logger.warning("force-complete: no se pudo publicar evento: %s", e)
+        try:
+            bonus = apply_daily_bonus(driver_id)
+            if bonus.get("bonus_applied"):
+                result["bonus"] = bonus
+        except Exception as e:
+            logger.exception("force-complete: error aplicando bono: %s", e)
+
+    background.add_task(daily_trip_metrics)
+
+    return {
+        "trip_id": trip_id,
+        "status": result.get("status"),
+        "precio_final": result.get("total_fare"),
+        "moneda": result.get("currency", "CUP"),
+        "distancia_km": result.get("distance_km"),
+        "duracion_segundos": result.get("duration_secs"),
+        "descuento_cliente": result.get("descuento_cliente"),
+        "forzado_por": admin.get("email"),
+        "message": "Viaje completado manualmente. Precio calculado por el backend.",
+        "viaje": _json_trip(result),
+    }
+

@@ -93,6 +93,21 @@ class TabPromociones(ttk.Frame):
             justify="left", font=("Segoe UI", 8))
         self.lbl_aviso.pack(anchor="w", pady=(4, 6))
 
+        # ---- referidos ----
+        self._titulo(izq, "Sistema de referidos")
+        self.var_referidos_activo = tk.IntVar(value=1)
+        self.cb_referidos = tk.Checkbutton(
+            izq, text="Activar códigos de referido", variable=self.var_referidos_activo,
+            bg="#243447", fg="#cfd8e3",
+            activebackground="#243447", activeforeground="#ffffff",
+            selectcolor="#1b2a3a", font=("Segoe UI", 9), anchor="w")
+        self.cb_referidos.pack(fill="x", pady=(2, 2))
+        tk.Label(izq,
+                 text="Si se desactiva, el backend ignora los descuentos por referido "
+                      "y bloquea el canje de códigos.",
+                 bg="#243447", fg="#6b7d8f", wraplength=320, justify="left",
+                 font=("Segoe UI", 8)).pack(anchor="w")
+
         # ---- caducidad ----
         self._titulo(izq, "Caducidad")
         self.var_fecha = tk.StringVar(value=date.today().isoformat())
@@ -271,6 +286,7 @@ class TabPromociones(ttk.Frame):
             "bono_chofer_viajes_requeridos": bono_viajes,
             "descuento_cliente_activo": descuento_activo,
             "descuento_cliente_porcentaje": descuento,
+            "referidos_activos": bool(self.var_referidos_activo.get()),
             "fecha_expiracion": fecha or None,
         }, None
 
@@ -345,6 +361,7 @@ class TabPromociones(ttk.Frame):
         self.var_bono_viajes.set(str(datos.get("bono_chofer_viajes_requeridos", 0)))
         self.var_desc_activo.set(1 if datos.get("descuento_cliente_activo") else 0)
         self.var_desc_pct.set(("%.4g" % float(datos.get("descuento_cliente_porcentaje", 0))))
+        self.var_referidos_activo.set(1 if datos.get("referidos_activos", True) else 0)
         self.var_fecha.set(datos.get("fecha_expiracion") or "")
 
         self._al_cambiar_bono()
@@ -380,14 +397,15 @@ class TabPromociones(ttk.Frame):
         if not messagebox.askyesno(
                 "Guardar configuración",
                 "Se aplicara esto a todos los viajes y choferes:\n\n"
-                "Comisión: %s%%\nBono: %s\nDescuento al cliente: %s\n\n¿Continuar?"
+                "Comisión: %s%%\nBono: %s\nDescuento al cliente: %s\nReferidos: %s\n\n¿Continuar?"
                 % (round(cuerpo["comision_porcentaje"] * 100, 2),
                    ("activo, %s CUP por %d viajes"
                     % (money(cuerpo["bono_chofer_monto"]),
                        cuerpo["bono_chofer_viajes_requeridos"]))
                    if cuerpo["bono_chofer_activo"] else "desactivado",
                    ("activo, %s%%" % round(cuerpo["descuento_cliente_porcentaje"] * 100, 2))
-                   if cuerpo["descuento_cliente_activo"] else "desactivado")):
+                   if cuerpo["descuento_cliente_activo"] else "desactivado",
+                   "activados" if cuerpo["referidos_activos"] else "desactivados")):
             return
 
         self.app.status("Guardando configuración...")

@@ -38,6 +38,19 @@ def _nombre(doc: Optional[dict]) -> str:
     return completo or doc.get("full_name") or doc.get("email") or "Usuario"
 
 
+def _referidos_activos() -> bool:
+    """Interruptor global de referidos, configurable desde el panel Tkinter."""
+    try:
+        from routers.promociones import leer_promocion
+        return bool(leer_promocion().get("referidos_activos", True))
+    except Exception:
+        # Si la configuracion no se puede leer, se mantiene el comportamiento
+        # historico (activo) antes que romper el cierre de viajes.
+        logger.warning("No se pudo leer referidos_activos; se asume activo",
+                       exc_info=True)
+        return True
+
+
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not authorization:
         raise HTTPException(status_code=401, detail="Token requerido")
@@ -92,6 +105,8 @@ async def obtener_relativos(user: dict = Depends(get_current_user)):
 
 @router.post("/validar-codigo")
 async def validar_codigo_referido(datos: CodigoIn, user: dict = Depends(get_current_user)):
+    if not _referidos_activos():
+        return {"valido": False, "mensaje": "El sistema de referidos está desactivado"}
     codigo = (datos.codigo or "").strip().upper()
     referidor = users_coleccion.find_one({"codigo_referido": codigo})
     if not referidor:
@@ -110,6 +125,8 @@ async def canjear_codigo_referido(datos: CodigoIn, user: dict = Depends(get_curr
     codigo = (datos.codigo or "").strip().upper()
     if not codigo:
         raise HTTPException(status_code=400, detail="Escribe un código")
+    if not _referidos_activos():
+        raise HTTPException(status_code=400, detail="El sistema de referidos está desactivado")
 
     yo = users_coleccion.find_one({"_id": ObjectId(user["id"])})
     if not yo:

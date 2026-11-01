@@ -13,8 +13,12 @@ class SupportScreen extends StatefulWidget {
 }
 
 class _SupportScreenState extends State<SupportScreen> {
+  static const String _telefono = '+53 59295207';
+  static const String _whatsappUrl =
+      'https://wa.me/5359295207?text=Hola,%20necesito%20ayuda%20con%20mi%20viaje.';
+
   Future<void> _launchWhatsApp() async {
-    final uri = Uri.parse('https://wa.me/5359295207');
+    final uri = Uri.parse(_whatsappUrl);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
@@ -25,14 +29,14 @@ class _SupportScreenState extends State<SupportScreen> {
     }
   }
 
-  Future<void> _launchEmail() async {
-    final uri = Uri.parse('mailto:malcolmlamar308@gmail.com');
+  Future<void> _llamar() async {
+    final uri = Uri(scheme: 'tel', path: '+5359295207');
     if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      await launchUrl(uri);
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el correo')),
+        const SnackBar(content: Text('No se pudo abrir el marcador')),
       );
     }
   }
@@ -63,23 +67,22 @@ class _SupportScreenState extends State<SupportScreen> {
                   ListTile(
                     leading: const Icon(Icons.phone, color: Colors.green),
                     title: const Text('Teléfono'),
-                    subtitle: const Text('+53 5 5551234'),
-                    onTap: () {
-                      final uri = Uri.parse('tel:+5355551234');
-                      launchUrl(uri);
-                    },
+                    subtitle: const Text(_telefono),
+                    onTap: _llamar,
                   ),
-                  ListTile(
-                    leading: const Icon(Icons.email, color: Colors.blue),
-                    title: const Text('Email'),
-                    subtitle: const Text('malcolmlamar308@gmail.com'),
-                    onTap: _launchEmail,
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.chat, color: Colors.purple),
-                    title: const Text('WhatsApp'),
-                    subtitle: const Text('Chat en vivo'),
-                    onTap: _launchWhatsApp,
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _launchWhatsApp,
+                      icon: const Icon(Icons.chat),
+                      label: const Text('Chat en vivo (WhatsApp)'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF25D366),
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size.fromHeight(48),
+                      ),
+                    ),
                   ),
                 ],
               ),

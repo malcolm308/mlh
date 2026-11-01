@@ -241,6 +241,41 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       (a.latitude - b.latitude).abs() < 1e-9 &&
       (a.longitude - b.longitude).abs() < 1e-9;
 
+  String _coordLabel(LatLng p) =>
+      '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}';
+
+  /// Garantiza que la direccion de un punto este en el estado ANTES de abrir
+  /// el BottomSheet. Si el geocodificador inverso aun no respondio, se espera
+  /// aqui; si falla, se usa la coordenada para que el destino nunca quede vacio.
+  Future<void> _ensureAddress(LatLng point, {required bool pickup}) async {
+    final actual = pickup ? _pickupAddr : _dropoffAddr;
+    if (actual != null && actual.trim().isNotEmpty) return;
+
+    final key = '${point.latitude.toStringAsFixed(5)},'
+        '${point.longitude.toStringAsFixed(5)}';
+    final cached = _reverseCache[key];
+    String label;
+    if (cached != null && cached.trim().isNotEmpty) {
+      label = cached;
+    } else {
+      final dir = await AddressService.de(point);
+      label = dir.vacia ? _coordLabel(point) : dir.texto;
+      if (!dir.vacia) _reverseCache[key] = dir.texto;
+    }
+    if (!mounted) return;
+    setState(() {
+      if (pickup) {
+        if (_pickup != null && _samePoint(_pickup!, point)) {
+          _pickupAddr = label;
+        }
+      } else {
+        if (_dropoff != null && _samePoint(_dropoff!, point)) {
+          _dropoffAddr = label;
+        }
+      }
+    });
+  }
+
   Future<void> _resolveDefaultAddress() async {
     final addr = await AddressService.de(_myLoc);
     if (!mounted || _pickup == null || !_samePoint(_pickup!, _myLoc)) return;
@@ -418,7 +453,15 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     if (pickup == null || dropoff == null || pickup == dropoff) return;
     // Solo cargar estimación si estamos en Paso 1
     if (_currentState != ClientState.selectingRoute) return;
-    
+
+    // FIX: el destino debe estar escrito en el estado ANTES de abrir el panel.
+    // Si el usuario tocó el mapa, el geocodificador inverso puede seguir en
+    // vuelo; sin esta espera el BottomSheet recibía null y mostraba "Destino"
+    // en blanco al cancelar y pedir un viaje nuevo.
+    await _ensureAddress(pickup, pickup: true);
+    await _ensureAddress(dropoff, pickup: false);
+    if (!mounted || _currentState != ClientState.selectingRoute) return;
+
     final req = ++_estReq;
     setState(() => _estFareBusy = true);
     try {
@@ -475,8 +518,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (ctx) => _VehicleSelectorStateful(
-        pickupAddress: _pickupAddr ?? 'Ubicación actual',
-        dropoffAddress: _dropoffAddr ?? 'Destino',
+        pickupAddress: (_pickupAddr ?? '').trim().isNotEmpty
+            ? _pickupAddr!
+            : _coordLabel(_pickup ?? _myLoc),
+        dropoffAddress: (_dropoffAddr ?? '').trim().isNotEmpty
+            ? _dropoffAddr!
+            : _coordLabel(_dropoff ?? _myLoc),
         distanceKm: _routeKm ?? 0,
         etaText: _etaText ?? '--',
         paymentMethod: _paymentMethod,
@@ -529,8 +576,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         dropoffLat: dropoff.latitude,
         dropoffLng: dropoff.longitude,
         vehicleType: _selectedVehicle!.type,
-        requestAddress: _pickupAddr,
-        dropoffAddress: _dropoffAddr,
+        requestAddress: _pickupAddr ?? _coordLabel(pickup),
+        dropoffAddress: _dropoffAddr ?? _coordLabel(dropoff),
       );
       final tripId = (res['trip_id'] ?? '').toString();
       if (tripId.isEmpty) throw ApiException('No se recibió el trip_id');

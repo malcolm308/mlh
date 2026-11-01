@@ -115,21 +115,51 @@ class _FavoriteLocationsScreenState extends State<FavoriteLocationsScreen> {
           ),
           TextButton(
             onPressed: () async {
+              final alias = aliasController.text.trim();
+              final direccion = addressController.text.trim();
+              final lat =
+                  double.tryParse(latController.text.replaceAll(',', '.').trim());
+              final lng =
+                  double.tryParse(lngController.text.replaceAll(',', '.').trim());
+
+              String? problema;
+              if (alias.isEmpty) {
+                problema = 'Escribe un alias (ej: Casa)';
+              } else if (direccion.isEmpty) {
+                problema = 'Escribe la dirección';
+              } else if (lat == null || lng == null) {
+                problema = 'Latitud y longitud deben ser números';
+              } else if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                problema = 'Las coordenadas están fuera de rango';
+              }
+              if (problema != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(problema)),
+                );
+                return;
+              }
+              final latOk = lat!;
+              final lngOk = lng!;
+
               try {
-                final lat = double.parse(latController.text);
-                final lng = double.parse(lngController.text);
                 await widget.api.createFavorite(
-                  alias: aliasController.text,
-                  direccion: addressController.text,
-                  lat: lat,
-                  lng: lng,
+                  alias: alias,
+                  direccion: direccion,
+                  lat: latOk,
+                  lng: lngOk,
+                  userId: widget.clientId,
                 );
                 if (!mounted) return;
                 Navigator.pop(ctx);
-                _loadFavorites();
-              } catch (e) {
+                await _loadFavorites();
+                if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $e')),
+                  const SnackBar(content: Text('Ubicación favorita guardada')),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('No se pudo guardar: $e')),
                 );
               }
             },
