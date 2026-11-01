@@ -298,6 +298,10 @@ class ApiService {
     return _map('POST', '/referidos/validar-codigo', body: {'codigo': code});
   }
 
+  Future<Map<String, dynamic>> redeemReferralCode(String code) async {
+    return _map('POST', '/referidos/canjear-codigo', body: {'codigo': code});
+  }
+
   Future<Map<String, dynamic>> applyTripDiscount(String tripId) async {
     return _map('POST', '/referidos/aplicar-descuento', body: {'trip_id': tripId});
   }

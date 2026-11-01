@@ -1216,7 +1216,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             # Solo se aplica si descuento_cliente == 0.
             # Si ya hay descuento de promocion, el referido se guarda para el proximo viaje.
             cliente_oid = to_mongo_id(trip.get("client_id") or "")
-            cliente_doc = mongo_client["Administración"].users.find_one({"_id": cliente_oid}) if cliente_oid else None
+            cliente_doc = cliente_coleccion.find_one({"_id": cliente_oid}) if cliente_oid else None
             descuentos_disponibles = int(cliente_doc.get("descuentos_disponibles", 0) or 0) if cliente_doc else 0
             descuento_referido = Decimal("0")
             aplicar_descuento_referido = False
@@ -1321,11 +1321,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             # 11. Sistema de referidos
             try:
                 client_oid = to_mongo_id(updated_trip.get("client_id") or "")
-                cliente_doc = mongo_client["Administración"].users.find_one({"_id": client_oid})
+                cliente_doc = cliente_coleccion.find_one({"_id": client_oid})
                 if cliente_doc:
                     # A. Si se aplicó descuento de referido en este viaje, restar 1 del contador
                     if aplicar_descuento_referido:
-                        mongo_client["Administración"].users.update_one(
+                        cliente_coleccion.update_one(
                             {"_id": client_oid},
                             {"$inc": {"descuentos_disponibles": -1}}
                         )
@@ -1336,11 +1336,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     primer_viaje = (cliente_doc.get("viajes_completados") or 0) == 0
                     referido_por = cliente_doc.get("referido_por")
                     if primer_viaje and referido_por:
-                        referidor_doc = mongo_client["Administración"].users.find_one({"_id": to_mongo_id(referido_por)})
+                        referidor_doc = cliente_coleccion.find_one({"_id": to_mongo_id(referido_por)})
                         if referidor_doc:
                             descuentos_actuales = referidor_doc.get("descuentos_disponibles", 0)
                             if descuentos_actuales < 10:  # Máximo 10 descuentos
-                                mongo_client["Administración"].users.update_one(
+                                cliente_coleccion.update_one(
                                     {"_id": to_mongo_id(referido_por)},
                                     {"$inc": {"descuentos_disponibles": 1}}
                                 )
@@ -1348,7 +1348,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                                           updated_trip.get("client_id"), referido_por)
                     
                     # C. Incrementar contador de viajes completados
-                    mongo_client["Administración"].users.update_one(
+                    cliente_coleccion.update_one(
                         {"_id": client_oid},
                         {"$inc": {"viajes_completados": 1}}
                     )

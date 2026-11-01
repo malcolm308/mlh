@@ -29,10 +29,21 @@ class _ReferralScreenState extends State<ReferralScreen> {
   bool _loading = true;
   String? _error;
 
+  final _codigoCtrl = TextEditingController();
+  bool _canjeando = false;
+  String? _canjeMsg;
+  bool _canjeOk = false;
+
   @override
   void initState() {
     super.initState();
     _loadAll();
+  }
+
+  @override
+  void dispose() {
+    _codigoCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAll() async {
@@ -92,11 +103,38 @@ class _ReferralScreenState extends State<ReferralScreen> {
     }
   }
 
+  Future<void> _redeem() async {
+    final code = _codigoCtrl.text.trim();
+    if (code.isEmpty) return;
+    setState(() {
+      _canjeando = true;
+      _canjeMsg = null;
+    });
+    try {
+      final res = await widget.api.redeemReferralCode(code);
+      if (!mounted) return;
+      setState(() {
+        _canjeando = false;
+        _canjeOk = true;
+        _canjeMsg = res['mensaje']?.toString() ?? 'Código aplicado';
+        _codigoCtrl.clear();
+      });
+      await _loadAll();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _canjeando = false;
+        _canjeOk = false;
+        _canjeMsg = e.toString();
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Invitar amigos')),
+      appBar: AppBar(title: const Text('Código de referidos')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -191,6 +229,71 @@ class _ReferralScreenState extends State<ReferralScreen> {
                                   ],
                                 ),
                               ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Canjear el código de un amigo
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '¿Te invitaron?',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Ingresa el código de tu amigo y obtén 10% OFF en tu primer viaje.',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: _codigoCtrl,
+                                textCapitalization:
+                                    TextCapitalization.characters,
+                                decoration: const InputDecoration(
+                                  labelText: 'Código de referido',
+                                  border: OutlineInputBorder(),
+                                  prefixIcon: Icon(
+                                      Icons.confirmation_number_outlined),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                width: double.infinity,
+                                child: FilledButton.icon(
+                                  onPressed: _canjeando ? null : _redeem,
+                                  icon: _canjeando
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : const Icon(Icons.check_circle_outline),
+                                  label: Text(
+                                      _canjeando ? 'Aplicando...' : 'Aplicar código'),
+                                ),
+                              ),
+                              if (_canjeMsg != null) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  _canjeMsg!,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: _canjeOk
+                                        ? Colors.green[700]
+                                        : Colors.red[700],
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),

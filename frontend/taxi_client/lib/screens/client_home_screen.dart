@@ -1324,7 +1324,7 @@ onTap: () => setState(() {
             ),
             ListTile(
               leading: const Icon(Icons.card_giftcard, color: Color(0xFF333333)),
-              title: const Text('Invitar amigos'),
+              title: const Text('Código de referidos'),
               onTap: () {
                 Navigator.of(context).pop();
                 Navigator.of(context).push(MaterialPageRoute(

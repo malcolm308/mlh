@@ -4,20 +4,21 @@ Gestión de cuenta de usuario.
 import logging
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Header, HTTPException, Depends
 from pydantic import BaseModel
 from bson import ObjectId
 
 from db.Administración.auth import verify_token as verify_admin_token
-from db.Administración.connection import admin_db
+from db.Cliente.connection import cliente_db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["Usuarios"])
 
-users_coleccion = admin_db["users"]
+# La cuenta del pasajero vive en la base de datos "Cliente".
+users_coleccion = cliente_db["users"]
 
-def get_current_user(authorization: Optional[str] = None) -> dict:
+def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not authorization:
         raise HTTPException(status_code=401, detail="Token requerido")
     if not authorization.lower().startswith("bearer "):
