@@ -8,14 +8,9 @@ import 'api_client.dart';
 export 'api_client.dart' show ApiException;
 
 /// Cliente HTTP de alto nivel para el backend FastAPI de TaxiRapid.
-///
-/// Todo el transporte lo hace [ApiClient]: timeout de 15 s, reintentos de
-/// fallos de red con backoff, headers y descodificación JSON.
 class ApiService {
   final String base;
 
-  /// Token JWT para `Authorization: Bearer`. Vive en [ApiClient] y aquí solo
-  /// se expone con el mismo nombre que tenía antes del refactor.
   String? get token => ApiClient.token;
   set token(String? value) => ApiClient.token = value;
 
@@ -36,8 +31,10 @@ class ApiService {
         return ApiClient.put(url, body: body);
       case 'PATCH':
         return ApiClient.patch(url, body: body);
+      case 'DELETE':
+        return ApiClient.delete(url);
       default:
-        throw ApiException('Método no soportado: $method');
+        throw ApiException('Metodo no soportado: $method');
     }
   }
 
@@ -49,13 +46,13 @@ class ApiService {
           {Map<String, dynamic>? body}) async =>
       (await _send(method, path, body: body)) as List<dynamic>;
 
-  // ------------------- AUTH -------------------
+  // ---------------- AUTH ----------------
 
   Future<String> login(String email, String password) async {
     final j = await _map('POST', '/login',
         body: {'email': email, 'password': password});
     final t = j['access_token']?.toString();
-    if (t == null || t.isEmpty) throw ApiException('Respuesta de login inválida');
+    if (t == null || t.isEmpty) throw ApiException('Respuesta de login invalida');
     token = t;
     return t;
   }
@@ -73,14 +70,12 @@ class ApiService {
     return null;
   }
 
-  // ------------------- PERFIL -------------------
+  // ---------------- PERFIL ----------------
 
   Future<ClientProfile> getCliente(String id) async {
     final j = await _map('GET', '/cliente/$id');
     return ClientProfile.fromJson(j);
   }
-
-  // ------------------- REGISTRO -------------------
 
   Future<Map<String, dynamic>> registerCliente({
     required String nombre,
@@ -100,9 +95,8 @@ class ApiService {
     });
   }
 
-  // ------------------- TARIFAS -------------------
+  // ---------------- TARIFAS ----------------
 
-  /// Todas las tarifas disponibles (GET /api/tariffs).
   Future<List<Tariff>> getTariffs() async {
     final j = await _map('GET', ApiConfig.tariffs().path);
     final list = (j['tariffs'] as List<dynamic>?) ?? const [];
@@ -112,13 +106,11 @@ class ApiService {
         .toList();
   }
 
-  /// La tarifa de un tipo de vehiculo concreto (GET /api/tariffs/{tipo}).
   Future<Tariff> getTariff(String vehicleType) async {
     final j = await _map('GET', ApiConfig.tariffByType(vehicleType).path);
     return Tariff.fromJson(j);
   }
 
-  /// Todas las reglas de precio por horario (GET /api/pricing-rules).
   Future<List<PricingRule>> getPricingRules() async {
     final j = await _map('GET', ApiConfig.pricingRules().path);
     final list = (j['rules'] as List<dynamic>?) ?? const [];
@@ -128,7 +120,7 @@ class ApiService {
         .toList();
   }
 
-  // ------------------- VIAJES -------------------
+  // ---------------- VIAJES ----------------
 
   Future<Map<String, dynamic>> createTrip({
     required String clientId,
@@ -153,69 +145,14 @@ class ApiService {
       'num_pasajes': numPasajes,
       'equipaje': equipaje,
       'mascota': mascota,
-      'request_address': ?requestAddress,
-      'dropoff_address': ?dropoffAddress,
+      'request_address': requestAddress,
+      'dropoff_address': dropoffAddress,
     });
-  }
-
-  Future<Map<String, dynamic>> estimateTrip({
-    required double requestLat,
-    required double requestLng,
-    required double dropoffLat,
-    required double dropoffLng,
-    required String vehicleType,
-  }) async {
-    return _map('POST', '/trips/estimate', body: {
-      'request_lat': requestLat,
-      'request_lng': requestLng,
-      'dropoff_lat': dropoffLat,
-      'dropoff_lng': dropoffLng,
-      'vehicle_type': vehicleType,
-    });
-  }
-
-  /// Calcula precios para los 4 vehículos en una sola llamada.
-  Future<Map<String, dynamic>> estimateAll({
-    required double requestLat,
-    required double requestLng,
-    required double dropoffLat,
-    required double dropoffLng,
-  }) async {
-    return _map('POST', '/trips/estimate-all', body: {
-      'request_lat': requestLat,
-      'request_lng': requestLng,
-      'dropoff_lat': dropoffLat,
-      'dropoff_lng': dropoffLng,
-    });
-  }
-
-  /// Minutos de espera que el pasajero no paga.
-  ///
-  /// No hace falta administrador: es un dato público, como la tarifa base, y el
-  /// pasajero tiene derecho a saberlo ANTES de pedir el viaje. Si la peticion
-  /// falla se devuelve `null` y el cliente simplemente no lo menciona, en vez
-  /// de inventar un numero.
-  Future<int?> fetchCortesiaMinutos() async {
-    try {
-      final datos = await _map('GET', '/admin/promociones/tarifas-espera');
-      final valor = datos['tiempo_espera_cortesia_minutos'];
-      if (valor is num) return valor.round();
-    } catch (_) {
-      // Sin dato no se inventa nada: la app sigue funcionando igual.
-    }
-    return null;
   }
 
   Future<ClientTrip> getTrip(String tripId) async {
     final j = await _map('GET', '/trips/$tripId');
     return ClientTrip.fromJson(j);
-  }
-
-  /// Historial de viajes enriquecido con datos del chofer y vehículo.
-  Future<List<Map<String, dynamic>>> getTripHistory(String clientId,
-      {int limit = 50}) async {
-    final list = await _list('GET', '/trips/history/$clientId?limit=$limit');
-    return list.whereType<Map<String, dynamic>>().toList();
   }
 
   Future<List<RoutePoint>> getTripRoute(String tripId) async {
@@ -238,15 +175,141 @@ class ApiService {
     }
   }
 
-  // ---------------- USUARIO ----------------
+  Future<List<ClientTrip>> getTripsByClient(String clientId,
+      {int limit = 30}) async {
+    final list = await _list('GET', '/trips/client/$clientId?limit=$limit');
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(ClientTrip.fromJson)
+        .toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getTripHistory(String clientId,
+      {int limit = 50}) async {
+    final list = await _list('GET', '/trips/history/$clientId?limit=$limit');
+    return list.whereType<Map<String, dynamic>>().toList();
+  }
+
+  // ---------------- ESTIMACION ----------------
+
+  Future<Map<String, dynamic>> estimateTrip({
+    required double requestLat,
+    required double requestLng,
+    required double dropoffLat,
+    required double dropoffLng,
+    required String vehicleType,
+  }) async {
+    return _map('POST', '/trips/estimate', body: {
+      'request_lat': requestLat,
+      'request_lng': requestLng,
+      'dropoff_lat': dropoffLat,
+      'dropoff_lng': dropoffLng,
+      'vehicle_type': vehicleType,
+    });
+  }
+
+  Future<Map<String, dynamic>> estimateAll({
+    required double requestLat,
+    required double requestLng,
+    required double dropoffLat,
+    required double dropoffLng,
+  }) async {
+    return _map('POST', '/trips/estimate-all', body: {
+      'request_lat': requestLat,
+      'request_lng': requestLng,
+      'dropoff_lat': dropoffLat,
+      'dropoff_lng': dropoffLng,
+    });
+  }
+
+  // ---------------- FAVORITOS ----------------
+
+  Future<List<Map<String, dynamic>>> getFavorites() async {
+    final list = await _list('GET', '/favoritos/');
+    return list.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<Map<String, dynamic>> createFavorite({
+    required String alias,
+    required String direccion,
+    required double lat,
+    required double lng,
+  }) async {
+    return _map('POST', '/favoritos/', body: {
+      'alias': alias,
+      'direccion': direccion,
+      'lat': lat,
+      'lng': lng,
+    });
+  }
+
+  Future<void> deleteFavorite(String favoriteId) async {
+    await _map('DELETE', '/favoritos/$favoriteId');
+  }
+
+  // ---------------- INCIDENCIAS ----------------
+
+  Future<void> blockDriver({
+    required String driverId,
+    required String tripId,
+    required String motivo,
+  }) async {
+    await _map('POST', '/incidencias/bloquear-chofer', body: {
+      'driver_id': driverId,
+      'trip_id': tripId,
+      'motivo': motivo,
+    });
+  }
+
+  // ---------------- SOPORTE ----------------
+
+  Future<Map<String, dynamic>> createSupportTicket({
+    required String tipo,
+    required String mensaje,
+  }) async {
+    return _map('POST', '/soporte/ticket', body: {
+      'tipo': tipo,
+      'mensaje': mensaje,
+    });
+  }
+
+  // ---------------- CUENTA ----------------
 
   Future<void> deleteAccount() async {
     await _send('DELETE', '/users/me');
   }
 
-  Future<List<ClientTrip>> getTripsByClient(String clientId,
-      {int limit = 30}) async {
-    final list = await _list('GET', '/trips/client/$clientId?limit=$limit');
-    return list.whereType<Map<String, dynamic>>().map(ClientTrip.fromJson).toList();
+  // ---------------- REFERIDOS ----------------
+
+  Future<Map<String, dynamic>> getMyReferralCode() async {
+    return _map('GET', '/referidos/mi-codigo');
+  }
+
+  Future<Map<String, dynamic>> getMyDiscounts() async {
+    return _map('GET', '/referidos/mis-descuentos');
+  }
+
+  Future<List<Map<String, dynamic>>> getMyReferrals() async {
+    final list = await _list('GET', '/referidos/mis-referidos');
+    return list.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<Map<String, dynamic>> validateReferralCode(String code) async {
+    return _map('POST', '/referidos/validar-codigo', body: {'codigo': code});
+  }
+
+  Future<Map<String, dynamic>> applyTripDiscount(String tripId) async {
+    return _map('POST', '/referidos/aplicar-descuento', body: {'trip_id': tripId});
+  }
+
+  // ---------------- CORTESIA ----------------
+
+  Future<int?> fetchCortesiaMinutos({int porDefecto = 4}) async {
+    try {
+      final datos = await _map('GET', '/admin/promociones/tarifas-espera');
+      final valor = datos['tiempo_espera_cortesia_minutos'];
+      if (valor is num) return valor.round();
+    } catch (_) {}
+    return null;
   }
 }

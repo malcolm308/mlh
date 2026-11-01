@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../api_config.dart';
 import '../services/api_service.dart';
 
 /// Pantalla de referidos: muestra el código personal, permite compartirlo
@@ -63,7 +65,7 @@ class _ReferralScreenState extends State<ReferralScreen> {
   Future<void> _shareCode() async {
     if (_myCode == null) return;
     final message =
-        'Hola! Usá mi código ${_myCode} para registrarte en RapiTaxi y obtener un 10% de descuento en tu primer viaje. ${ApiConfig.baseUrl}';
+        'Hola! Usá mi código $_myCode para registrarte en RapiTaxi y obtener un 10% de descuento en tu primer viaje. ${ApiConfig.baseUrl}';
     
     // Android share sheet
     try {

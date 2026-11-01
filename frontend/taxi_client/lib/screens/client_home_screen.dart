@@ -15,7 +15,9 @@ import '../services/location_service.dart';
 import '../services/osrm_service.dart';
 import '../widgets/client_map_view.dart';
 import '../widgets/vehicle_selector_sheet.dart';
+import 'favorite_locations_screen.dart';
 import 'history_screen.dart';
+import 'referral_screen.dart';
 import 'support_screen.dart';
 import 'trip_screen.dart';
 
@@ -1303,6 +1305,33 @@ onTap: () => setState(() {
                   builder: (_) => HistoryScreen(
                     api: widget.api,
                     clientId: widget.clientId,
+                  ),
+                ));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.star, color: Color(0xFF333333)),
+              title: const Text('Ubicaciones favoritas'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => FavoriteLocationsScreen(
+                    api: widget.api,
+                    clientId: widget.clientId,
+                  ),
+                ));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.card_giftcard, color: Color(0xFF333333)),
+              title: const Text('Invitar amigos'),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ReferralScreen(
+                    api: widget.api,
+                    clientId: widget.clientId,
+                    fullName: widget.profile.fullName,
                   ),
                 ));
               },

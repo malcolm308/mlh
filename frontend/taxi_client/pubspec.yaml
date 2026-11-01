@@ -1,4 +1,4 @@
-﻿name: taxi_client
+name: taxi_client
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -38,6 +38,7 @@ dependencies:
   latlong2: ^0.10.1
   maplibre_gl: 0.27.1
   shared_preferences: ^2.5.5
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
