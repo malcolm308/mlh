@@ -245,3 +245,25 @@ Vive en los documentos de la coleccion Mongo **`Chofer.users`** (no en
 El campo esta declarado en `ChoferResponse`
 (`routers/CRUD_MONGODB.py`) como `Optional[int]`, asi que aparece en la API sin
 romper a los choferes que no lo tienen.
+## APK dentro del backend (`/static`)
+
+El APK que se comparte desde "Compartir App" en las dos apps se sirve desde la
+carpeta `static/` del repositorio:
+
+- URL publica: `https://rapitaxi-api-fws6.onrender.com/static/app-release.apk`
+- `main_v2.py` monta `static/` en `/static` al arrancar y crea la carpeta si no
+  existe, para que el servicio no falle en un clon nuevo.
+
+Despues de compilar el cliente, este es el comando exacto para publicar el APK
+nuevo (PowerShell, desde la raiz del repositorio):
+
+```powershell
+Copy-Item E:\Taxi_Rapid\frontend\taxi_client\build\app\outputs\flutter-apk\app-release.apk E:\Taxi_Rapid\static\app-release.apk -Force
+git add static/app-release.apk
+git commit -m "chore: actualizar APK de descarga"
+git push origin main
+```
+
+Render redepliega al recibir el push y el enlace queda disponible en uno o dos
+minutos. El archivo pesa ~82 MB, asi que se sube aparte del codigo: no hace
+falta recompilar el backend.

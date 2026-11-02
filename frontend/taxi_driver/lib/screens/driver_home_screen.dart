@@ -3081,10 +3081,9 @@ if (pickup != null)
   }
 
   Future<void> _shareApp() async {
-    const mensaje = '¡Únete a RapiTaxi, la app para conductores que quieren '
-        'más viajes en Cuba!\n\n'
-        'Búscala en Google Play como "RapiTaxi Chofer". Si aún no está '
-        'disponible, escríbenos a rapitaxicuba@gmail.com y te ayudamos.';
+    const mensaje = '¡Descarga RapiTaxi, la mejor app para moverte por La '
+        'Habana! Descárgala aquí: '
+        'https://rapitaxi-api-fws6.onrender.com/static/app-release.apk';
     // ignore: deprecated_member_use
     await Share.share(mensaje, subject: 'RapiTaxi Chofer');
   }

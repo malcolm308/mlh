@@ -211,31 +211,33 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     if (_pickup != null) _loadRoutePreview();
   }
 
-  /// Vuelve a pedir el permiso y recentra en la posicion real.
-  Future<void> _enableGps() async {
-    final state = await LocationService.ensurePermission();
-    if (!mounted) return;
-    setState(() {
-      _gpsState = state;
-      if (state == LocationPermissionState.granted) _pickupTouched = false;
-    });
-    if (state == LocationPermissionState.granted) {
-      final p = await LocationService.current();
-      if (p != null && mounted) _applyGpsPosition(p, moveMap: true);
-    }
-  }
-
-  /// Usa la ubicacion actual como punto de recogida.
+  /// Pide permiso si hace falta, toma la posicion real y la impone como punto
+  /// de recogida.
   ///
   /// No reutiliza `_applyGpsPosition` a proposito: esa funcion respeta
   /// `_pickupTouched` y no mueve el punto si el pasajero toco el mapa antes.
-  /// La flecha azul debe forzar el GPS como recogida aunque haya un pin manual.
+  /// La flecha debe imponerse siempre: actualiza `_pickup`, mueve el mapa y
+  /// escribe en el buscador la direccion inversa del nuevo punto.
   Future<void> _useMyLocation() async {
-    final p = await LocationService.current() ?? await LocationService.lastKnown();
-    if (p == null || !mounted) {
+    var state = _gpsState ?? LocationPermissionState.denied;
+    if (state != LocationPermissionState.granted) {
+      state = await LocationService.ensurePermission();
+      if (!mounted) return;
+      setState(() => _gpsState = state);
+    }
+    if (state != LocationPermissionState.granted) {
+      _showLocationError(state);
+      return;
+    }
+
+    final p =
+        await LocationService.current() ?? await LocationService.lastKnown();
+    if (!mounted) return;
+    if (p == null) {
       _showError('No se pudo obtener la ubicacion. Revisa el GPS del telefono.');
       return;
     }
+
     setState(() {
       _gpsState = LocationPermissionState.granted;
       _pickupTouched = false;
@@ -243,9 +245,36 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       _pickup = p;
       _pickupAddr = null;
     });
-    _mapController.move(p, 16);
+    _moveMapTo(p);
     _loadRoutePreview();
     _reverseToAddress(p, updateSearch: true);
+  }
+
+  void _showLocationError(LocationPermissionState state) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(state == LocationPermissionState.serviceDisabled
+          ? 'Activa la ubicacion (GPS) del telefono para usar tu posicion.'
+          : 'Concede el permiso de ubicacion para usar tu posicion actual.'),
+      backgroundColor: Theme.of(context).colorScheme.error,
+      action: SnackBarAction(
+        label: 'Ajustes',
+        textColor: Colors.white,
+        onPressed: LocationService.openSettings,
+      ),
+    ));
+  }
+
+  /// Centra el mapa en [p] aunque el controlador aun no este listo (primer
+  /// arranque o estilo cargando): reintenta unas cuantas veces.
+  void _moveMapTo(LatLng p, {double zoom = 16, int intento = 0}) {
+    if (_mapController.listo) {
+      _mapController.move(p, zoom);
+      return;
+    }
+    if (intento >= 6) return;
+    Future<void>.delayed(const Duration(milliseconds: 250), () {
+      if (mounted) _moveMapTo(p, zoom: zoom, intento: intento + 1);
+    });
   }
 
   bool _samePoint(LatLng a, LatLng b) =>
@@ -326,27 +355,32 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
 
   void _applyReverseAddress(LatLng p, String? addr,
       {bool updateSearch = false}) {
+    final texto = (addr ?? '').trim();
     if (_pickup != null && _samePoint(p, _pickup!)) {
-      // Al usar "mi ubicacion", el buscador debe mostrar la direccion real y
-      // no el texto de una busqueda anterior.
-      if (updateSearch && addr != null && addr.trim().isNotEmpty) {
+      // Solo se escribe el buscador si en ese momento esta pidiendo la
+      // recogida; si el pasajero esta escribiendo el destino, no se le pisa.
+      final escribir =
+          updateSearch && _pinMode == _PinMode.pickup && texto.isNotEmpty;
+      if (escribir || _pickupAddr != addr) {
         setState(() {
           _pickupAddr = addr;
-          _searchController.text = addr;
-          _suggestions = const [];
+          if (escribir) {
+            _searchController.text = texto;
+            _suggestions = const [];
+          }
         });
-      } else if (_pickupAddr != addr) {
-        setState(() => _pickupAddr = addr);
       }
     } else if (_dropoff != null && _samePoint(p, _dropoff!)) {
-      if (updateSearch && addr != null && addr.trim().isNotEmpty) {
+      final escribir =
+          updateSearch && _pinMode == _PinMode.dropoff && texto.isNotEmpty;
+      if (escribir || _dropoffAddr != addr) {
         setState(() {
           _dropoffAddr = addr;
-          _searchController.text = addr;
-          _suggestions = const [];
+          if (escribir) {
+            _searchController.text = texto;
+            _suggestions = const [];
+          }
         });
-      } else if (_dropoffAddr != addr) {
-        setState(() => _dropoffAddr = addr);
       }
     }
   }
@@ -768,15 +802,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
               _gpsState == LocationPermissionState.granted
                   ? Icons.my_location
                   : Icons.location_disabled,
-              () {
-                // Recentrar en la posicion real y usarla como punto de
-                // recogida; si falta el permiso, se vuelve a pedir.
-                if (_gpsState == LocationPermissionState.granted) {
-                  _useMyLocation();
-                } else {
-                  _enableGps();
-                }
-              },
+              // Recentra en la posicion real y la usa como recogida. La
+              // funcion pide el permiso si falta, asi que siempre responde.
+              _useMyLocation,
             ),
           ),
           Positioned(
@@ -1112,13 +1140,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
                       shape: const CircleBorder(),
                       child: InkWell(
                         customBorder: const CircleBorder(),
-onTap: () => setState(() {
-  _pickup = _myLoc;
-  _pinMode = _PinMode.dropoff;
-  _pickupAddr = null;
-  _reverseToAddress(_myLoc);
-  _loadRoutePreview();
-}),
+                        onTap: () {
+                          // La flecha azul: fija la recogida en el GPS real,
+                          // recentra el mapa y deja el buscador en modo
+                          // recogida con la direccion inversa.
+                          setState(() => _pinMode = _PinMode.pickup);
+                          _useMyLocation();
+                        },
                         child: const Padding(
                           padding: EdgeInsets.all(10),
                           child: Icon(Icons.near_me,
@@ -1324,10 +1352,9 @@ onTap: () => setState(() {
   }
 
   Future<void> _shareApp() async {
-    const mensaje = '¡Descarga RapiTaxi, la app para pedir taxis de forma '
-        'rápida y segura en Cuba!\n\n'
-        'Búscala en Google Play como "RapiTaxi". Si aún no está disponible, '
-        'escríbenos a rapitaxicuba@gmail.com y te ayudamos a instalarla.';
+    const mensaje = '¡Descarga RapiTaxi, la mejor app para moverte por La '
+        'Habana! Descárgala aquí: '
+        'https://rapitaxi-api-fws6.onrender.com/static/app-release.apk';
     // ignore: deprecated_member_use
     await Share.share(mensaje, subject: 'RapiTaxi');
   }

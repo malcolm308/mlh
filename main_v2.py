@@ -1,6 +1,9 @@
-﻿from fastapi import FastAPI, Header, HTTPException
+from pathlib import Path
+
+from fastapi import FastAPI, Header, HTTPException
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from routers import billetera
 from routers import CRUD_MONGODB
@@ -50,6 +53,15 @@ for _stream in (sys.stdout, sys.stderr):
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# ---- Archivos estaticos ----
+# Aqui vive el APK que se comparte desde el menu de las apps. Se monta antes de
+# los routers para que /static nunca compita con ninguna ruta de la API. El
+# directorio se crea si no existe para que el arranque no falle en un clon
+# nuevo (el APK se copia despues con el comando documentado en el README).
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ---- CORS (pruebas locales: flutter web en otro puerto) ----
 app.add_middleware(
