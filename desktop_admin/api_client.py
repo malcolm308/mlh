@@ -113,6 +113,9 @@ class ApiClient:
     def post(self, path, body=None, params=None):
         return self._request("POST", path, params=params, body=body)
 
+    def put(self, path, body=None, params=None):
+        return self._request("PUT", path, params=params, body=body)
+
     # ---------- sesion ----------
     def login(self, email, password):
         r = self.post("/login", {"email": email, "password": password})
@@ -151,6 +154,14 @@ class ApiClient:
 
     def documentos(self, driver_id):
         return self.get("/documentos/chofer/%s/estado" % driver_id)
+
+    # ---------- garaje ----------
+    def vehiculos(self, estado=None):
+        return self.get("/admin/vehicles", {"estado": estado})
+
+    def cambiar_estado_vehiculo(self, vehiculo_id, decision, motivo=None):
+        return self.put("/admin/vehicles/%s/approve" % vehiculo_id,
+                        {"decision": decision, "motivo": motivo})
 
     def url_documento(self, archivo):
         return "%s/documentos/imagen/%s" % (self.base_url, archivo)

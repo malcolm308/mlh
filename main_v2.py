@@ -17,6 +17,7 @@ from routers import routing
 from routers import vehiculos
 from routers import chofer_cancelaciones
 from routers import tariffs
+from routers import garaje
 from routers import telegram_webhook
 from routers import favoritos
 from routers import incidencias
@@ -79,6 +80,9 @@ app.include_router(admin_panel.router)
 # Promociones antes que CRUD_MONGODB: ese router tiene un `GET /admin/{id}` que
 # se tragaria `/admin/promociones`.
 app.include_router(promociones.router)
+# El garaje va tambien antes que CRUD_MONGODB: ese CRUD tiene un GET
+# /admin/{id} que se tragaria los /admin/vehicles del garaje.
+app.include_router(garaje.router)
 app.include_router(CRUD_MONGODB.router)
 app.include_router(Solicitud_de_viajes_v4.router)
 app.include_router(billetera.router)

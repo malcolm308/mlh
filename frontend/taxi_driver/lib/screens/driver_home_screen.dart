@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api_config.dart';
 import '../models/models.dart';
@@ -18,6 +19,7 @@ import '../services/osrm_service.dart';
 import '../models/geo_fix.dart';
 import '../services/route_recalculation_service.dart';
 import '../services/trip_notification_service.dart';
+import '../services/ofertas_background_service.dart';
 import '../services/whatsapp_service.dart';
 import '../widgets/navigation_map_view.dart';
 import '../widgets/cancel_reason_dialog.dart';
@@ -26,6 +28,7 @@ import '../widgets/trip_info_panel.dart';
 import 'driver_profile_screen.dart';
 import 'driver_settings_screen.dart';
 import 'driver_fondo_screen.dart';
+import 'garage_screen.dart';
 import 'history_screen.dart';
 import 'support_screen.dart';
 import '../services/traza_fichero.dart';
@@ -179,6 +182,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// "ya fue aceptado por otro conductor", que con un solo chofer conectado era
   /// siempre un falso positivo contra su propia peticion.
   bool _isAccepting = false;
+
+  /// Servicio en primer plano (notificacion persistente + relevo del sondeo
+  /// en segundo plano). Se configura en `initState`.
+  final OfertasBackgroundService _bg = OfertasBackgroundService.instancia;
+
+  /// Tipo del vehiculo ACTIVO del garaje.
+  ///
+  /// Antes se leia del perfil fijo con el que la pantalla se creo
+  /// (`widget.profile.tipoVehiculo`): cambiar de coche en "Mi Garaje" no
+  /// cambiaba las ofertas hasta reiniciar la app. Ahora es estado, y "Mi
+  /// Garaje" lo actualiza de vuelta al seleccionar otro vehiculo.
+  String? _tipoVehiculoActivo;
 
   /// Vista previa del panel de viaje en curso, para desarrollo.
   ///
@@ -341,6 +356,8 @@ double? _rumboParaFlecha() {
     _loadTodayEarnings();
     _initGps();
     _initNotificaciones();
+    _bg.configurar();
+    _tipoVehiculoActivo = widget.profile.tipoVehiculo;
 
     // El saldo decide si se puede aceptar un viaje, asi que se lee al abrir y
     // se refresca con el mismo ritmo que el sondeo de ofertas.
@@ -572,6 +589,10 @@ double? _rumboParaFlecha() {
         // en el panel: el conductor ya dijo que no las quiere.
         await _notif.shutdown();
         _ofertaCache.clear();
+        // El chofer se desconecta: la pantalla se puede apagar y el servicio
+        // en primer plano ya no tiene nada que custodiar.
+        unawaited(WakelockPlus.disable());
+        unawaited(_bg.detener());
         if (!mounted) return;
         setState(() {
           _online = false;
@@ -582,6 +603,27 @@ double? _rumboParaFlecha() {
         });
         _refreshRoutes();
       } else {
+        // Mi Garaje: no hay que poder "En linea" sin un vehiculo aprobado y
+        // activo. El backend igual no entrega ofertas (el sondeo resuelve el
+        // tipo en el servidor), pero el chofer lo tiene que saber de entrada
+        // y no buscar en el mapa la explicacion.
+        final garaje = await widget.api.getMyVehicles();
+        DriverVehicle? activo;
+        for (final v in garaje) {
+          if (v.estado == 'aprobado' && v.esActivo) {
+            activo = v;
+            break;
+          }
+        }
+        if (activo == null) {
+          if (mounted) {
+            _showError('Esperando aprobación de vehículo. Añade uno en '
+                '"Mi Garaje" o espera la revisión del administrador.');
+          }
+          return;
+        }
+        _tipoVehiculoActivo = activo.tipoVehiculo;
+
         await widget.api.setDriverStatus(widget.driverId, 'available');
         await widget.api.setDriverLocation(
             widget.driverId, _driverPos.latitude, _driverPos.longitude);
@@ -597,6 +639,17 @@ double? _rumboParaFlecha() {
           _lostOffer = null;
           _lostCountdown = 0;
         });
+        // Pantalla encendida mientras el chofer esta disponible: un turno de
+        // trabajo se pierde a telefonos bloqueados.
+        unawaited(WakelockPlus.enable());
+        // Servicio en primer plano: notificacion persistente + relevo del
+        // sondeo si la app pasa a segundo plano o se cierra.
+        await _bg.arrancar(
+          driverId: widget.driverId,
+          token: widget.api.token ?? '',
+          tipoVehiculo: _tipoVehiculoActivo,
+        );
+        OfertasBackgroundService.guardarTipo(_tipoVehiculoActivo);
         _startTicker();
         await _tick();
       }
@@ -783,6 +836,10 @@ double? _rumboParaFlecha() {
     if (_panelDemo) return;
     // Pausado no se sondea nada: las ofertas solo existen "En linea".
     if (!_online) return;
+    // Latido para el servicio en primer plano: este sondeo (4 s) mantiene
+    // fresco el indicador. Si deja de correr, el servicio asume que el
+    // proceso se congel o se cerro y toma el relevo del sondeo.
+    unawaited(OfertasBackgroundService.latido());
     if (_online && _activeTrip != null) return;
 
     // El saldo se repinta con el mismo ritmo que las ofertas: asi el boton
@@ -791,7 +848,10 @@ double? _rumboParaFlecha() {
     _refrescarSaldo();
 
     try {
-      final tipoChofer = widget.profile.tipoVehiculo;
+      // Mi Garaje: el tipo ahora es estado (vehiculo activo del garaje). El
+      // backend lo comprueba igual con la base, esta es solo la puerta de
+      // entrada.
+      final tipoChofer = _tipoVehiculoActivo;
 
       // Sin tipo declarado no se sondea nada. El backend ya devuelve una lista
       // vacia en ese caso, pero no se le pregunta: si el filtro del servidor
@@ -801,8 +861,8 @@ double? _rumboParaFlecha() {
         if (_avisoSinTipoMostrado != widget.profile.id) {
           _avisoSinTipoMostrado = widget.profile.id;
           _mostrarAviso(
-              'No tienes un tipo de vehiculo definido, por eso no te llegan '
-              'ofertas. Pidele al administrador que lo ponga en tu ficha.');
+              'No tienes un vehículo activo en Mi Garaje, por eso no te llegan '
+              'ofertas. Añade uno o espera la aprobación del administrador.');
         }
         return;
       }
@@ -915,6 +975,9 @@ double? _rumboParaFlecha() {
   void _setDriverPos(LatLng p) {
     setState(() => _driverPos = p);
     _publicarRuta();
+    // Ultima posicion que conoce el servicio en primer plano: si tiene que
+    // relevar el sondeo (app cerrada), usa este punto.
+    unawaited(OfertasBackgroundService.guardarUltimaPosicion(p.latitude, p.longitude));
     if (_online) {
       widget.api
           .setDriverLocation(widget.driverId, p.latitude, p.longitude)
@@ -2019,6 +2082,17 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   }
 
   Future<void> _logout() async {
+    // Salir deja de custodiar nada: sin wakelock (la pantalla puede apagarse)
+    // y sin servicio en primer plano (la notificacion "Buscando viajes..."
+    // no tiene derecho a vivir sin sesion).
+    if (_online) {
+      unawaited(WakelockPlus.disable());
+      unawaited(_bg.detener());
+      // Salir en linea deja al chofer "available" en el backend para siempre:
+      // gana ofertas sin estar conectado. Se marca offline, sin bloquear el
+      // cierre si falla.
+      widget.api.setDriverStatus(widget.driverId, 'offline').catchError((_) {});
+    }
     await _limpiarMarcadorViaje();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('driver_token');
@@ -3324,6 +3398,30 @@ if (pickup != null)
                     driverId: widget.driverId,
                   ),
                 ));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.directions_car, color: Color(0xFF333333)),
+              title: const Text('Mi Garaje'),
+              onTap: () async {
+                Navigator.of(context).pop();
+                final seleccion = await Navigator.of(context).push<DriverVehicle>(
+                  MaterialPageRoute(
+                    builder: (_) => GarageScreen(
+                      api: widget.api,
+                      driverId: widget.driverId,
+                      tipoActivo: _tipoVehiculoActivo,
+                    ),
+                  ),
+                );
+                // Un vehiculo distinto activado cambia el tipo que pide el
+                // sondeo: se actualiza en caliente, sin reiniciar la app.
+                if (seleccion != null && mounted) {
+                  setState(() => _tipoVehiculoActivo = seleccion.tipoVehiculo);
+                  unawaited(OfertasBackgroundService
+                      .guardarTipo(seleccion.tipoVehiculo));
+                  unawaited(_tick());
+                }
               },
             ),
             ListTile(

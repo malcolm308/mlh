@@ -232,8 +232,36 @@ class ApiService {
     });
   }
 
-  // ------------------- OFERTAS / VIAJES -------------------
+  // ------------------- MI GARAJE -------------------
 
+  Future<List<DriverVehicle>> getMyVehicles() async {
+    final list = await _list('GET', '/driver/vehicles');
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(DriverVehicle.fromJson)
+        .toList();
+  }
+
+  Future<DriverVehicle> addVehicle({
+    required String tipoVehiculo,
+    required String marca,
+    required String modelo,
+    required String matricula,
+  }) async {
+    final j = await _map('POST', '/driver/vehicles', body: {
+      'tipo_vehiculo': tipoVehiculo,
+      'marca': marca,
+      'modelo': modelo,
+      'matricula': matricula,
+    });
+    return DriverVehicle.fromJson(j);
+  }
+
+  Future<void> selectVehicle(String vehicleId) async {
+    await _map('PUT', '/driver/vehicles/$vehicleId/select');
+  }
+
+  // ------------------- OFERTAS / VIAJES -------------------
   Future<List<TripOffer>> getNearbyRequestedTrips(
     double lat,
     double lng, {

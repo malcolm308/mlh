@@ -20,6 +20,7 @@ except Exception:
     Point = None
     Polygon = None
 from routers.promociones import calcular_descuento_cliente, coeficiente_por_distancia, excedente_espera, leer_promocion  # noqa
+from routers.garaje import tipo_vehiculo_activo_de
 from decimal import Decimal, ROUND_HALF_UP
 from bson import ObjectId
 from pymongo import MongoClient
@@ -1573,6 +1574,7 @@ def get_nearby_requested_trips(
     radius_km: float = 5,
     limit: int = 20,
     vehicle_type: Optional[str] = None,
+    driver_id: Optional[str] = None,
 ) -> list[dict]:
     """Viajes 'requested' cercanos, opcionalmente filtrados por tipo de vehiculo.
 
@@ -1580,6 +1582,10 @@ def get_nearby_requested_trips(
     ofertas de un viaje 'confort'. Va en el propio SQL (y no en un filtrado de
     Python) para que el ``LIMIT`` no se llene de viajes que luego se descartan
     y deje al conductor sin ofertas aunque las tenga compatibles.
+
+    Desde "Mi Garaje", si va `driver_id`, el tipo se resuelve en el SERVIDOR
+    con el vehiculo aprobado y activo del chofer. La app puede mandar lo que
+    quiera en el query param; la base manda.
     """
     where = """
         WHERE status = 'requested'
@@ -1607,6 +1613,21 @@ def get_nearby_requested_trips(
     # forma de que el error se vea (no le llegan ofertas) en vez de dejarle
     # aceptar un viaje que no puede hacer.
     tipo_norm = _normalize_vehicle_type(vehicle_type)
+
+    # Mi Garaje: con driver_id, el tipo REAL sale del vehiculo aprobado y
+    # activo del chofer. Si no tiene ninguno activo, no trabaja y no recibe
+    # ofertas de ningun tipo, aunque la app mande un `vehicle_type` amable en
+    # el query param.
+    if driver_id:
+        tipo_activo = tipo_vehiculo_activo_de(driver_id)
+        if tipo_activo:
+            tipo_norm = tipo_activo
+        else:
+            logger.info(
+                "Sondeo de %s sin vehiculo activo en su garaje: no se "
+                "entregan ofertas.", driver_id)
+            return []
+
     if not tipo_norm:
         logger.warning("Sondeo de ofertas sin vehicle_type: no se devuelve nada. "
                        "El conductor tiene que declarar su vehiculo.")
@@ -2689,7 +2710,8 @@ async def api_get_requested_trips_nearby(
     ofertas de un viaje 'confort' que no podia atender.
     """
     trips = get_nearby_requested_trips(
-        lat, lng, radius_km, limit, vehicle_type=vehicle_type
+        lat, lng, radius_km, limit, vehicle_type=vehicle_type,
+        driver_id=driver_id,
     )
     trips = await filter_declined_trips(trips, driver_id)
     # Enriquecer con datos del cliente desde MongoDB

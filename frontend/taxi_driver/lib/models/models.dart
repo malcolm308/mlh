@@ -101,6 +101,57 @@ factory DriverProfile.fromJson(Map<String, dynamic> j) {
   String get fullName => '$nombre $apellidos'.trim();
 }
 
+/// Un vehiculo de "Mi Garaje", tal como lo devuelve `/driver/vehicles`.
+class DriverVehicle {
+  final String id;
+  final String driverId;
+  final String? tipoVehiculo;
+  final String? marca;
+  final String? modelo;
+  final String? matricula;
+  final String estado;      // pendiente | aprobado | rechazado
+  final bool esActivo;
+  final String? creado;
+  final String? motivo;
+
+  const DriverVehicle({
+    required this.id,
+    required this.driverId,
+    required this.estado,
+    required this.esActivo,
+    this.tipoVehiculo,
+    this.marca,
+    this.modelo,
+    this.matricula,
+    this.creado,
+    this.motivo,
+  });
+
+  /// Etiqueta de estado legible para la interfaz.
+  String get estadoEtiqueta => switch (estado) {
+        'aprobado' => 'Aprobado',
+        'rechazado' => 'Rechazado',
+        _ => 'Pendiente',
+      };
+
+  /// Solo un vehiculo aprobado puede marcarse como activo.
+  bool get esAprobado => estado == 'aprobado';
+
+  factory DriverVehicle.fromJson(Map<String, dynamic> j) => DriverVehicle(
+        id: (j['id'] ?? '').toString(),
+        driverId: (j['driver_id'] ?? '').toString(),
+        estado: (j['estado'] ?? '').toString(),
+        esActivo: (j['es_activo'] ?? false) == true,
+        tipoVehiculo: _normalizarTipo(
+            j['tipo_vehiculo'] ?? j['vehicle_type']),
+        marca: _str(j, ['marca', 'Marca']),
+        modelo: _str(j, ['modelo', 'model']),
+        matricula: _str(j, ['matricula', 'chapa']),
+        creado: j['creado']?.toString(),
+        motivo: j['motivo']?.toString(),
+      );
+}
+
 /// Normaliza un tipo de vehiculo: quita tildes, espacios y mayusculas.
 ///
 /// Hace falta porque la base guarda 'básico' con tilde y la app escribe

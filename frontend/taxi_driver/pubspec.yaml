@@ -53,6 +53,15 @@ dependencies:
   app_badge_plus: ^1.3.5
   share_plus: ^13.3.1
 
+  # No deja que la pantalla se apague mientras el chofer esta en linea o
+  # llevando un viaje. Sin esto el telefono serie se bloquea en la terminal.
+  wakelock_plus: ^1.3.2
+
+  # Servicio en primer plano: mantiene vivo el sondeo de ofertas cuando la app
+  # pasa a segundo plano (sin FCM a proposito: no es fiable en Cuba) y muestra
+  # la notificacion persistente "Buscando viajes...".
+  flutter_background_service: ^5.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

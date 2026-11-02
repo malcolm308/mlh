@@ -505,19 +505,24 @@ class PlatformNotificationPort extends NotificationPort {
 
     await _plugin.show(
       idOf(offer.tripId),
-      'Oferta de viaje nueva',
+      '¡Nuevo Viaje!',
       _subtitulo(offer),
       NotificationDetails(android: detalles),
       payload: offer.tripId,
     );
   }
 
-  /// Linea de abajo: el destino es lo unico que de verdad distingue una
-  /// oferta de otra cuando hay varias en el panel.
+  /// Linea de abajo del aviso: la direccion de RECOGIDA.
+  ///
+  /// Es lo que el chofer necesita a vistazo para decidir si toma el viaje
+  /// (a que distancia esta y si conoce la zona); el destino y la tarifa van
+  /// en el texto grande, que se despliega al expandir el aviso.
   static String _subtitulo(TripOffer offer) {
-    final d = offer.dropoffAddress ?? offer.requestAddress;
-    if (d == null || d.trim().isEmpty) return 'Toca para ver el detalle';
-    return d.trim();
+    final r = offer.requestAddress?.trim();
+    if (r != null && r.isNotEmpty) return 'Recogida en: $r';
+    // Sin direccion legible, la ubicacion no se puede compartir: el chofer
+    // abrira la tarjeta, que muestra el punto en el mapa.
+    return 'Recogida en: dirección pendiente de confirmar';
   }
 
   @override
