@@ -1615,6 +1615,17 @@ def get_nearby_requested_trips(
     where += "          AND lower(vehicle_type) = %s"
     params.append(tipo_norm)
 
+    # Un viaje cuya oferta ya vencio no puede seguir llegando al conductor.
+    #
+    # Antes solo se filtraba por `status = 'requested'`, y un viaje seguia en
+    # ese estado entre los 60 s del TTL de la oferta y los 120 s del barrido.
+    # En esa ventana llegaba al sondeo con `offer_expires_in_secs = 0`: la app
+    # pintaba una oferta fantasma y, al tocarla, el backend respondia que ya no
+    # estaba disponible. El plazo se mide con el reloj del servidor, nunca con
+    # el del movil.
+    where += "          AND requested_at > NOW() - (%s * INTERVAL '1 second')"
+    params.append(OFFER_TTL_SECS)
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
@@ -2039,6 +2050,55 @@ _DRIVER_VEHICLE_KEYS = ("vehicle_type", "type_vehicle", "type")
 _ACCENTS = str.maketrans("áàäâãéèëêíìïîóòöôõúùüûñç", "aaaaaeeeeiiiiooooouuuunc")
 
 
+def _offer_expired(trip: dict) -> bool:
+    """True si la oferta del viaje ya supero `OFFER_TTL_SECS`.
+
+    Se mide contra `requested_at` y con el reloj del servidor, la misma base
+    que usa `_offer_secs_left`. Asi el filtro del sondeo, el temporizador de la
+    app y la aceptacion hablan siempre del mismo plazo.
+    """
+    requested_at = trip.get("requested_at")
+    if not requested_at:
+        return False
+    now = datetime.now(timezone.utc)
+    if requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=timezone.utc)
+    return (now - requested_at).total_seconds() > OFFER_TTL_SECS
+
+
+async def _expire_trip_now(trip_id: str) -> bool:
+    """Marca el viaje como expirado si aun sigue en 'requested'.
+
+    Se usa cuando alguien intenta aceptar una oferta vencida: en vez de dejarla
+    en 'requested' hasta el barrido de 120 s (y que otro conductor la reciba en
+    el siguiente sondeo), se cierra en el acto.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                UPDATE trips
+                   SET status = 'expired', completed_at = NOW()
+                 WHERE trip_id = %s AND status = 'requested'
+                 RETURNING trip_id;
+                """,
+                (trip_id,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+    if row:
+        await publish_trip_event(trip_id, "trip_expired", {"reason": "offer_ttl"})
+        return True
+    return False
+
+
 def _normalize_vehicle_type(value) -> Optional[str]:
     """Normaliza un tipo de vehiculo para poder compararlo.
 
@@ -2096,6 +2156,17 @@ async def offer_trip_to_nearby_drivers(
     vehicle_type = _normalize_vehicle_type(vehicle_type) or "basico"
     if offer_ttl_secs is None:
         offer_ttl_secs = OFFER_TTL_SECS
+
+    # Embudo unico de salida de ofertas (creacion y reintentos): si el viaje ya
+    # no esta 'requested' o su oferta vencio, no se publica nada. Sin esto el
+    # reintento seguia ofertando viajes que la app ya no podia aceptar.
+    trip = get_trip(trip_id)
+    if not trip or trip.get("status") != "requested" or _offer_expired(trip):
+        return []
+    offer_ttl_secs = min(offer_ttl_secs, _offer_secs_left(trip))
+    if offer_ttl_secs <= 0:
+        return []
+
     nearby = await get_nearby_drivers(request_lng, request_lat, radius_km)
 
     offered = []
@@ -2559,6 +2630,11 @@ async def _retry_offer_trip(
         if not trip or trip["status"] != "requested":
             return
 
+        # El reintento tampoco puede resucitar una oferta vencida.
+        if _offer_expired(trip):
+            logger.info("Viaje %s ya no se oferta: su oferta vencio", trip_id)
+            return
+
         # Expandir radio en cada intento: 3km -> 5.5km -> 8km
         radius = 3.0 + (attempt - 1) * 2.5
         offered = await offer_trip_to_nearby_drivers(
@@ -2724,9 +2800,47 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
     """
     if not validate_driver_exists(driver_id):
         raise HTTPException(404, "Conductor no encontrado en MongoDB")
-    status = await get_driver_status(driver_id)
-    if status != "available":
-        raise HTTPException(400, f"El conductor no está disponible (estado: {status})")
+
+    trip = get_trip(trip_id)
+    if not trip:
+        raise HTTPException(404, "Viaje no encontrado")
+
+    estado = trip.get("status")
+
+    # 1. Mismo conductor: exito silencioso.
+    #
+    # Va ANTES de mirar si esta 'available' (el primer POST ya lo dejo 'busy')
+    # y antes del saldo o el vehiculo: el viaje ya es suyo y la app solo tiene
+    # que navegar a el. Un doble toque o un reintento tras un timeout de red
+    # dejan de ser un error y pasan a ser una operacion idempotente.
+    if trip.get("driver_id") == driver_id:
+        if estado in ("accepted", "driver_arrived", "in_progress"):
+            return {
+                "trip_id": trip_id,
+                "driver_id": driver_id,
+                "status": estado,
+                "message": "Viaje ya asignado a este conductor",
+            }
+        if estado == "completed":
+            raise HTTPException(409, "El viaje ya fue completado")
+
+    # 2. La oferta vencio (60 s desde `requested_at`). Se cierra el viaje en el
+    #    acto para que no siga apareciendo en sondeos ni reintentos.
+    if estado == "expired" or (estado == "requested" and _offer_expired(trip)):
+        if estado == "requested":
+            await _expire_trip_now(trip_id)
+        raise HTTPException(410, "La oferta ha expirado")
+
+    # 3. Cancelado o ya asignado a otro conductor.
+    if estado == "cancelled":
+        raise HTTPException(409, "La solicitud fue cancelada por el pasajero")
+    if estado != "requested":
+        raise HTTPException(409, "El viaje ya fue aceptado por otro conductor")
+
+    # 4. La oferta esta viva y sin dueno: comprobaciones del conductor.
+    driver_state = await get_driver_status(driver_id)
+    if driver_state != "available":
+        raise HTTPException(400, f"El conductor no está disponible (estado: {driver_state})")
 
     # Un chofer en números rojos no trabaja: se le avisa antes de que pierda el
     # viaje, no después. La comprobación va aquí, en el servidor, porque un reloj
@@ -2740,12 +2854,6 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
                       "aceptar viajes." % saldo,
             "saldo": saldo,
         })
-
-    trip = get_trip(trip_id)
-    if not trip:
-        raise HTTPException(404, "Viaje no encontrado")
-    if trip["status"] != "requested":
-        raise HTTPException(400, f"El viaje no está disponible (estado: {trip['status']})")
 
     # TERCERA BARRERA, y la que de verdad importa: el tipo de vehiculo.
     #
@@ -2783,19 +2891,41 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
                 RETURNING trip_id, client_id;
             """, (driver_id, trip_id))
             row = cur.fetchone()
-            if not row:
+            if row:
+                conn.commit()
+            else:
                 conn.rollback()
-                raise HTTPException(409, "El viaje ya fue aceptado por otro conductor o cancelado")
-            conn.commit()
-        except HTTPException:
-            raise
         except Exception as e:
             conn.rollback()
             logger.exception("accept_trip fallo para el viaje %s", trip_id)
             raise e
-
         finally:
             cur.close()
+
+    if not row:
+        # Perdimos la carrera contra otra peticion. Antes de acusar a nadie se
+        # relee el estado real del viaje: con un solo conductor conectado, el
+        # "otro conductor" casi siempre era su propio segundo toque.
+        actual = get_trip(trip_id)
+        if actual and actual.get("driver_id") == driver_id and actual.get("status") in (
+            "accepted", "driver_arrived", "in_progress",
+        ):
+            return {
+                "trip_id": trip_id,
+                "driver_id": driver_id,
+                "status": actual.get("status"),
+                "message": "Viaje ya asignado a este conductor",
+            }
+        if actual and (
+            actual.get("status") == "expired"
+            or (actual.get("status") == "requested" and _offer_expired(actual))
+        ):
+            if actual.get("status") == "requested":
+                await _expire_trip_now(trip_id)
+            raise HTTPException(410, "La oferta ha expirado")
+        if actual and actual.get("status") == "cancelled":
+            raise HTTPException(409, "La solicitud fue cancelada por el pasajero")
+        raise HTTPException(409, "El viaje ya fue aceptado por otro conductor")
 
     # Cambiar estado del chofer y notificar al cliente
     await set_driver_status(driver_id, "busy")

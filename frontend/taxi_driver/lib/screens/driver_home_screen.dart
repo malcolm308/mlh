@@ -171,6 +171,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// viaje que acababa de ganar el propio chofer.
   String? _aceptandoTripId;
 
+  /// Bloqueo del boton "Aceptar".
+  ///
+  /// Se activa en el mismo instante en que el chofer toca y no se suelta hasta
+  /// que el backend responde. Sin esto, dos toques rapidos podian encolar dos
+  /// POST antes de que la tarjeta desapareciera: el segundo recibia el 409 de
+  /// "ya fue aceptado por otro conductor", que con un solo chofer conectado era
+  /// siempre un falso positivo contra su propia peticion.
+  bool _isAccepting = false;
+
   /// Vista previa del panel de viaje en curso, para desarrollo.
   ///
   /// Se activa solo con `flutter run --dart-define=PANEL_DEMO=true`: al abrir
@@ -552,7 +561,7 @@ double? _rumboParaFlecha() {
   // ---------------- SERVIDOR ----------------
 
   Future<void> _toggleOnline() async {
-    if (_busy) return;
+    if (_busy || _isAccepting) return;
     setState(() => _busy = true);
     try {
       if (_online) {
@@ -562,21 +571,32 @@ double? _rumboParaFlecha() {
         // Al dejar de aceptar viajes no puede quedar ningun aviso de oferta
         // en el panel: el conductor ya dijo que no las quiere.
         await _notif.shutdown();
+        _ofertaCache.clear();
         if (!mounted) return;
         setState(() {
           _online = false;
-      _selectedOffer = null;
-      _lostOffer = null;
-      _lostCountdown = 0;
-      _declinedTripIds.clear();
-    });
+          _isAccepting = false;
+          _selectedOffer = null;
+          _lostOffer = null;
+          _lostCountdown = 0;
+        });
         _refreshRoutes();
       } else {
         await widget.api.setDriverStatus(widget.driverId, 'available');
         await widget.api.setDriverLocation(
             widget.driverId, _driverPos.latitude, _driverPos.longitude);
         if (!mounted) return;
-        setState(() => _online = true);
+        // Lista limpia antes de pedir las ofertas nuevas: sin esto quedaban en
+        // pantalla tarjetas y avisos de la sesion anterior, que ya no
+        // correspondian a ningun viaje vivo.
+        _ofertaCache.clear();
+        setState(() {
+          _online = true;
+          _isAccepting = false;
+          _selectedOffer = null;
+          _lostOffer = null;
+          _lostCountdown = 0;
+        });
         _startTicker();
         await _tick();
       }
@@ -629,7 +649,8 @@ double? _rumboParaFlecha() {
     if (!mounted) return;
     if (_selectedOffer != null || _lostOffer != null) return;
     final offer = _ofertaCache[tripId];
-    if (offer == null) {
+    final secs = offer?.offerExpiresInSecs;
+    if (offer == null || (secs != null && secs <= 0)) {
       _showError('Esa oferta ya no está disponible');
       return;
     }
@@ -673,20 +694,30 @@ double? _rumboParaFlecha() {
     }
 
     TripOffer? offer;
+    var lecturaFallida = false;
     try {
       offer = await widget.api.getTrip(tripId);
     } catch (_) {
       offer = null;
+      lecturaFallida = true;
     }
 
-    final status = offer?.status ?? '';
+    if (lecturaFallida || offer == null) {
+      // Sin estado real no se da un veredicto. Antes, un fallo de red se
+      // convertia en "la oferta expiro" (o en "otro conductor" si la lectura
+      // venia incompleta), dos mensajes que no se podian sostener.
+      await _notif.handleOfferGone(tripId);
+      return;
+    }
+
+    final status = offer.status;
     if (status == 'accepted' ||
         status == 'in_progress' ||
         status == 'driver_assigned') {
       // Un 'accepted' con nuestro driver_id es un viaje ganado por nosotros,
       // no un viaje perdido. (El guardado de arriba ya cubre el caso comun;
       // este cubre cualquier otra secuencia en que el sondeo llegue antes.)
-      final propietario = offer?.tripDriverId;
+      final propietario = offer.tripDriverId;
       if (propietario != null && propietario == widget.driverId) {
         await _notif.handleOfferGone(tripId);
         return;
@@ -750,6 +781,8 @@ double? _rumboParaFlecha() {
     // En vista previa ([_panelDemo]) no se piden ofertas: el viaje ficticio
     // se ve sin que una tarjeta real lo tape ni el sondeo lo quite.
     if (_panelDemo) return;
+    // Pausado no se sondea nada: las ofertas solo existen "En linea".
+    if (!_online) return;
     if (_online && _activeTrip != null) return;
 
     // El saldo se repinta con el mismo ritmo que las ofertas: asi el boton
@@ -814,22 +847,34 @@ double? _rumboParaFlecha() {
           'online=$_online '
           'activeTrip=${_activeTrip?.tripId} lost=${_lostOffer?.tripId} '
           'selected=${_selectedOffer?.tripId}');
-      final offers = propias
-          .where((o) =>
-              o.pickup != null &&
-              !_declinedTripIds.contains(o.tripId) &&
-              (_offerDeadlineRaw(o) == null ||
-                  _offerDeadlineRaw(o)!.isAfter(now)))
-          .toList();
+      final offers = propias.where((o) {
+        if (o.pickup == null) return false;
+        if (_declinedTripIds.contains(o.tripId)) return false;
+        // `offer_expires_in_secs` lo calcula el servidor. Si ya es 0 la oferta
+        // vencio: no se pinta ni se deja aceptar. Comparar solo el deadline
+        // dejaba pasar estas porque se recalculaba con `DateTime.now()` y
+        // quedaba unos milisegundos por delante del `now` del sondeo.
+        final secs = o.offerExpiresInSecs;
+        if (secs != null && secs <= 0) {
+          debugPrint('[OFERTA] descartada por vencida: ${o.tripId}');
+          return false;
+        }
+        final deadline = _offerDeadlineRaw(o);
+        return deadline == null || deadline.isAfter(now);
+      }).toList();
       debugPrint('[OFERTA] filtradas=${offers.length} '
           'ids=${offers.map((o) => o.tripId).toList()}');
 
       // Una oferta que el backend ya no devuelve puede estar tomada por otro
       // conductor, cancelada o simplemente vencida. El sondeo no dice cual, y
-      // avisar "otro conductor Daily" de un viaje cancelado seria una falta de
+      // avisar "otro conductor" de un viaje cancelado seria una falta de
       // respeto, asi que se consulta el estado real antes de acusar a nadie.
+      // Las rechazadas por el propio chofer se excluyen: ya se sabe por que
+      // desaparecieron y no deben producir ningun aviso.
       final desaparecidas = _ofertaCache.keys
-          .where((id) => !offers.any((o) => o.tripId == id))
+          .where((id) =>
+              !offers.any((o) => o.tripId == id) &&
+              !_declinedTripIds.contains(id))
           .toList();
       for (final id in desaparecidas) {
         _ofertaCache.remove(id);
@@ -1287,6 +1332,9 @@ final inTripPhase = active != null && active.status == 'in_progress';
   // ---------------- OFERTA SELECCIONADA ----------------
 
   void _selectOffer(TripOffer offer) {
+    // Una oferta vencida no se presenta ni se deja aceptar.
+    final restantes = offer.offerExpiresInSecs;
+    if (restantes != null && restantes <= 0) return;
     _offerTimer?.cancel();
     _lostTimer?.cancel();
     final now = DateTime.now().toUtc();
@@ -1549,10 +1597,15 @@ final inTripPhase = active != null && active.status == 'in_progress';
   }
 
   Future<void> _acceptOffer(TripOffer offer) async {
+    // Bloqueo inmediato: el segundo toque no llega a mandar otro POST. Se
+    // activa antes de cualquier `await`, en el mismo frame del primer toque.
+    if (_isAccepting) return;
     _offerTimer?.cancel();
     setState(() {
-      _loading = true;
-      _selectedOffer = null;
+      _isAccepting = true;
+      // La tarjeta se queda visible con el spinner en el boton; no se oculta
+      // el panel entero, que daba la sensacion de que no habia pasado nada.
+      _selectedOffer = offer;
       _error = null;
     });
     // Marca la toma en vuelo: hasta que la aceptacion termine, el sondeo no
@@ -1563,15 +1616,20 @@ final inTripPhase = active != null && active.status == 'in_progress';
       await widget.api.setDriverStatus(widget.driverId, 'busy');
       final trip = await widget.api.getTrip(offer.tripId);
       if (!mounted) return;
+      _ofertaCache.remove(offer.tripId);
+      _aceptandoTripId = null;
+      await _notif.resolveTrip(offer.tripId);
+      if (!mounted) return;
       setState(() {
         _activeTrip = trip;
+        _isAccepting = false;
+        _selectedOffer = null;
         _loading = false;
         _route = [];
         // Viaje nuevo: cualquier ruta recalculada era del trayecto anterior.
         _rutaEsRecalculada = false;
         _rutaRecogidaEsRecalculada = false;
       });
-      _aceptandoTripId = null;
       // Viaje nuevo: la ruta guardada es del trayecto anterior y no debe
       // reutilizarse (el destino nuevo puede estar a menos de 150 m del viejo).
       OsrmService.olvidarCache();
@@ -1587,21 +1645,47 @@ final inTripPhase = active != null && active.status == 'in_progress';
     } catch (e) {
       _aceptandoTripId = null;
       if (!mounted) return;
-      setState(() => _loading = false);
-      _showError('$e');
+      setState(() {
+        _isAccepting = false;
+        _selectedOffer = null;
+        _loading = false;
+      });
+      _showError(_mensajeAceptar(e));
       await _tick();
     }
   }
 
+  /// Mensaje legible de un fallo al aceptar, sin el "(HTTP nnn)" pegado.
+  String _mensajeAceptar(Object e) {
+    if (e is ApiException) {
+      if (e.statusCode == 410) {
+        return 'La oferta ha expirado. Espera una nueva solicitud.';
+      }
+      if (e.statusCode == 409 &&
+          e.message.toLowerCase().contains('cancelada')) {
+        return 'La solicitud fue cancelada por el pasajero.';
+      }
+      return e.message.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), '');
+    }
+    return '$e';
+  }
+
   Future<void> _declineOffer(TripOffer offer) async {
+    if (_isAccepting) return;
     _offerTimer?.cancel();
     // Se marca aqui y no solo en el servidor: el sondeo ocurre cada 4 s y sin
     // esto la tarjeta reapareceria antes de que el backend registre el rechazo.
     _declinedTripIds.add(offer.tripId);
+    // Se quita de la cache y del panel en el acto: una oferta rechazada no
+    // vuelve a salir ni produce avisos de "expiro" en el siguiente sondeo.
+    _ofertaCache.remove(offer.tripId);
     setState(() {
       _loading = true;
       _selectedOffer = null;
+      _lostOffer = null;
+      _lostCountdown = 0;
     });
+    await _notif.resolveTrip(offer.tripId);
     try {
       await widget.api.declineTrip(offer.tripId, widget.driverId);
       if (!mounted) return;
@@ -2273,7 +2357,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
           children: [
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () => _declineOffer(o),
+                onPressed: _isAccepting ? null : () => _declineOffer(o),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(48),
                   backgroundColor: const Color(0xFFF3F4F6),
@@ -2289,7 +2373,11 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             const SizedBox(width: 12),
             Expanded(
               child: FilledButton.icon(
-                onPressed: (_busy || _saldoNegativo) ? null : () => _acceptOffer(o),
+                // Deshabilitado desde el primer toque hasta que el backend
+                // responde: aqui vive el bloqueo real contra el doble POST.
+                onPressed: (_busy || _isAccepting || _saldoNegativo)
+                    ? null
+                    : () => _acceptOffer(o),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(48),
                   backgroundColor: const Color(0xFF111827),
@@ -2298,8 +2386,17 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14)),
                 ),
-                icon: const Icon(Icons.check),
-                label: const Text('Aceptar'),
+                icon: _isAccepting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check),
+                label: Text(_isAccepting ? 'Aceptando...' : 'Aceptar'),
               ),
             ),
           ],
