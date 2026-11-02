@@ -92,16 +92,22 @@ class _FavoriteLocationsScreenState extends State<FavoriteLocationsScreen> {
                 Expanded(
                   child: TextField(
                     controller: latController,
-                    decoration: const InputDecoration(labelText: 'Latitud'),
-                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Latitud (Opcional)',
+                    ),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(signed: true, decimal: true),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
                     controller: lngController,
-                    decoration: const InputDecoration(labelText: 'Longitud'),
-                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Longitud (Opcional)',
+                    ),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(signed: true, decimal: true),
                   ),
                 ),
               ],
@@ -117,19 +123,23 @@ class _FavoriteLocationsScreenState extends State<FavoriteLocationsScreen> {
             onPressed: () async {
               final alias = aliasController.text.trim();
               final direccion = addressController.text.trim();
-              final lat =
-                  double.tryParse(latController.text.replaceAll(',', '.').trim());
-              final lng =
-                  double.tryParse(lngController.text.replaceAll(',', '.').trim());
+              final latTxt = latController.text.replaceAll(',', '.').trim();
+              final lngTxt = lngController.text.replaceAll(',', '.').trim();
+              final lat = latTxt.isEmpty ? null : double.tryParse(latTxt);
+              final lng = lngTxt.isEmpty ? null : double.tryParse(lngTxt);
 
               String? problema;
               if (alias.isEmpty) {
                 problema = 'Escribe un alias (ej: Casa)';
               } else if (direccion.isEmpty) {
                 problema = 'Escribe la dirección';
-              } else if (lat == null || lng == null) {
+              } else if (latTxt.isNotEmpty != lngTxt.isNotEmpty) {
+                problema = 'Indica latitud y longitud, o deja ambas vacías';
+              } else if (latTxt.isNotEmpty && (lat == null || lng == null)) {
                 problema = 'Latitud y longitud deben ser números';
-              } else if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+              } else if (lat != null &&
+                  lng != null &&
+                  (lat < -90 || lat > 90 || lng < -180 || lng > 180)) {
                 problema = 'Las coordenadas están fuera de rango';
               }
               if (problema != null) {
@@ -138,15 +148,13 @@ class _FavoriteLocationsScreenState extends State<FavoriteLocationsScreen> {
                 );
                 return;
               }
-              final latOk = lat!;
-              final lngOk = lng!;
 
               try {
                 await widget.api.createFavorite(
                   alias: alias,
                   direccion: direccion,
-                  lat: latOk,
-                  lng: lngOk,
+                  lat: lat,
+                  lng: lng,
                   userId: widget.clientId,
                 );
                 if (!mounted) return;
@@ -237,14 +245,16 @@ class _FavoriteLocationsScreenState extends State<FavoriteLocationsScreen> {
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                   ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Lat: ${fav['lat']?.toStringAsFixed(5) ?? '—'}, Lng: ${fav['lng']?.toStringAsFixed(5) ?? '—'}',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
+                                if (fav['lat'] is num && fav['lng'] is num) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Lat: ${(fav['lat'] as num).toStringAsFixed(5)}, Lng: ${(fav['lng'] as num).toStringAsFixed(5)}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[600],
+                                    ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                             trailing: IconButton(

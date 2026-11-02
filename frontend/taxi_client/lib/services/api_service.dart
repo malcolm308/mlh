@@ -253,16 +253,16 @@ class ApiService {
   Future<Map<String, dynamic>> createFavorite({
     required String alias,
     required String direccion,
-    required double lat,
-    required double lng,
+    double? lat,
+    double? lng,
     String? userId,
   }) async {
     return _map('POST', '/favoritos/', body: {
       'alias': alias,
       'direccion': direccion,
-      'lat': lat,
-      'lng': lng,
-      if (userId != null) 'user_id': userId,
+      'lat': ?lat,
+      'lng': ?lng,
+      'user_id': ?userId,
     });
   }
 

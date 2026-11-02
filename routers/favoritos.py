@@ -38,8 +38,10 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
 class FavoritoCreate(BaseModel):
     alias: str
     direccion: str
-    lat: float
-    lng: float
+    # Las coordenadas son opcionales: muchas veces el pasajero solo quiere
+    # guardar el nombre y la calle ("Casa", "Trabajo") sin saber el punto GPS.
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     # El cliente puede mandarlo; si viene, tiene que coincidir con el token.
     user_id: Optional[str] = None
 
@@ -61,7 +63,16 @@ async def crear_favorito(body: FavoritoCreate, user: dict = Depends(get_current_
         raise HTTPException(status_code=400, detail="El alias es obligatorio")
     if not direccion:
         raise HTTPException(status_code=400, detail="La dirección es obligatoria")
-    if not (-90 <= body.lat <= 90) or not (-180 <= body.lng <= 180):
+    # Si se indican coordenadas tienen que venir las dos y ser validas; una sola
+    # no sirve para situar nada en el mapa.
+    if (body.lat is None) != (body.lng is None):
+        raise HTTPException(
+            status_code=400,
+            detail="Indica latitud y longitud, o deja las dos vacías",
+        )
+    if body.lat is not None and (
+        not (-90 <= body.lat <= 90) or not (-180 <= body.lng <= 180)
+    ):
         raise HTTPException(status_code=400, detail="Coordenadas inválidas")
 
     favorito = {
