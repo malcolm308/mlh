@@ -51,10 +51,17 @@ def asegurar_codigo(coleccion, doc: Dict[str, Any]) -> str:
         return codigo
 
     codigo = generar_codigo(coleccion)
+    # Actualizacion condicional: si dos dispositivos consultan el perfil a la
+    # vez, solo uno escribe. Despues se relee para devolver el codigo que de
+    # verdad quedo guardado; si no, una de las dos sesiones mostraria un codigo
+    # que no existe y el invitado recibiria "codigo invalido".
     coleccion.update_one(
-        {"_id": doc["_id"]},
+        {"_id": doc["_id"], "codigo_referido": {"$in": [None, ""]}},
         {"$set": {"codigo_referido": codigo}},
     )
+    guardado = coleccion.find_one(
+        {"_id": doc["_id"]}, {"codigo_referido": 1}) or {}
+    codigo = (guardado.get("codigo_referido") or "").strip() or codigo
     doc["codigo_referido"] = codigo
     logger.info("Codigo de referido creado para %s", doc["_id"])
     return codigo
