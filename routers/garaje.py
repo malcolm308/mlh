@@ -24,8 +24,9 @@ Los vehiculos embebidos existentes se importan automaticamente como
 trabajar tras el despliegue.
 """
 import logging
+import time
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple, Dict
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -282,6 +283,7 @@ async def seleccionar_vehiculo(vehiculo_id: str,
             "updated_at": datetime.utcnow().isoformat(),
         }},
     )
+    _invalidar_cache(chofer["id"])
     return {"ok": True,
             "message": "Vehiculo activo",
             "tipo_vehiculo": doc.get("tipo_vehiculo")}
@@ -370,6 +372,7 @@ async def aprobar_vehiculo(vehiculo_id: str, body: VehiculoAprobacion = Body(...
             )
     else:
         coleccion.update_one({"_id": doc["_id"]}, {"$set": cambios})
+    _invalidar_cache(doc.get("driver_id"))
 
     decision_txt = "aprobado" if decision == ESTADO_APROBADO else "rechazado"
     salida = _vehiculo_out(coleccion.find_one({"_id": doc["_id"]}) or doc)
@@ -378,21 +381,43 @@ async def aprobar_vehiculo(vehiculo_id: str, body: VehiculoAprobacion = Body(...
 
 # ============================ CONSULTA PARA EL SONDEO ============================
 
-def tipo_vehiculo_activo_de(driver_id: Optional[str]) -> Optional[str]:
+def tipo_vehiculo_activo_de(driver_id: Optional[str],
+                            usar_cache: bool = True) -> Optional[str]:
     """Tipo normalizado del vehiculo activo del chofer, o None si no tiene.
 
     Es la fuente de verdad del sondeo: el filtro de ofertas usa esto y no el
     query param de la app. Si el chofer no tiene vehiculo aprobado y activo,
     no recibe ofertas de ningun tipo.
+
+    Se cachea 15 s: el sondeo de la app pregunta cada 4 s y cada chofe con
+    una lectura Mongo extra por sondeo es gasto gratis; los cambios de
+    vehiculo activo (select/aprobacion) invalidan la cache en el acto.
     """
     if not driver_id or not ObjectId.is_valid(driver_id):
         return None
+    ahora = time.time()
+    tallo = _cache_tipos.get(driver_id)
+    if usar_cache and tallo and (ahora - tallo[0]) < _CACHE_TTL:
+        return tallo[1]
+
     doc = coleccion.find_one(
         {"driver_id": driver_id, "es_activo": True,
          "estado": ESTADO_APROBADO},
         {"tipo_vehiculo": 1},
     )
-    return normalizar_tipo_vehiculo(doc.get("tipo_vehiculo")) if doc else None
+    tipo = normalizar_tipo_vehiculo(doc.get("tipo_vehiculo")) if doc else None
+    _cache_tipos[driver_id] = (ahora, tipo)
+    return tipo
+
+
+def _invalidar_cache(driver_id: Optional[str]) -> None:
+    if driver_id:
+        _cache_tipos.pop(str(driver_id), None)
+
+
+# driver_id -> (timestamp, tipo). Prefiere torta: se recalcula tras _CACHE_TTL.
+_cache_tipos: Dict[str, Tuple[float, Optional[str]]] = {}
+_CACHE_TTL = 15.0
 
 
 try:
