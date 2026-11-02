@@ -80,11 +80,13 @@
 
         <!-- Servicio en primer plano de flutter_background_service. Vive solo
              mientras el chofer esta "En linea": arranca en el toggle online y
-             se detiene al desconectar. -->
+             se detiene al desconectar. NO se declara `exported`: el valor lo
+             aporta el manifest del propio plugin, y pisarlo rompe el merger.
+             Lo unico nuevo aqui es foregroundServiceType=location, que es lo
+             que permite seguir leyendo el GPS con el servicio activo. -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
-            android:foregroundServiceType="location"
-            android:exported="false"/>
+            android:foregroundServiceType="location"/>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
