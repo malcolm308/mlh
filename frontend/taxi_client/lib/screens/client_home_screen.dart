@@ -1352,9 +1352,28 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   }
 
   Future<void> _shareApp() async {
-    const mensaje = '¡Descarga RapiTaxi, la mejor app para moverte por La '
-        'Habana! Descárgala aquí: '
-        'https://rapitaxi-api-fws6.onrender.com/static/app-release.apk';
+    // El código viene en el perfil que se cargó al iniciar sesión. Si la
+    // sesión se restauró con un perfil antiguo (sin código), se pide al
+    // backend: `/referidos/mi-codigo` también lo crea y lo guarda si la
+    // cuenta es anterior al sistema de referidos.
+    var codigo = widget.profile.codigoReferido;
+    if (codigo == null || codigo.isEmpty) {
+      try {
+        final j = await widget.api.getMyReferralCode();
+        codigo = (j['codigo'] ?? '').toString().trim();
+      } catch (_) {
+        codigo = null;
+      }
+    }
+    if (!mounted) return;
+    if (codigo == null || codigo.isEmpty) {
+      _showError('No se pudo obtener tu código de invitación. Inténtalo de nuevo.');
+      return;
+    }
+    final mensaje = '¡Descarga RapiTaxi, la mejor forma de moverte por La '
+        'Habana! Usa mi código de invitación $codigo al registrarte y obtén un '
+        '10% de descuento en tu primer viaje. Descarga aquí: '
+        '${ApiConfig.appDownloadUrl}';
     // ignore: deprecated_member_use
     await Share.share(mensaje, subject: 'RapiTaxi');
   }

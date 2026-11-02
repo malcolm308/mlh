@@ -7,11 +7,16 @@ class ClientProfile {
   final String email;
   final String? telefono;
 
+  /// Codigo con el que este pasajero invita a otros. El backend lo devuelve en
+  /// el perfil y crea uno si la cuenta es anterior al sistema de referidos.
+  final String? codigoReferido;
+
   const ClientProfile({
     required this.id,
     required this.fullName,
     required this.email,
     this.telefono,
+    this.codigoReferido,
   });
 
   factory ClientProfile.fromJson(Map<String, dynamic> j) => ClientProfile(
@@ -19,6 +24,10 @@ class ClientProfile {
         fullName: '${j['Nombre'] ?? ''} ${j['Apellidos'] ?? ''}'.trim(),
         email: j['email']?.toString() ?? '',
         telefono: j['numero_de_telefono']?.toString(),
+        codigoReferido: (j['codigo_referido'] ?? '') is String &&
+                (j['codigo_referido'] as String).trim().isNotEmpty
+            ? (j['codigo_referido'] as String).trim()
+            : null,
       );
 }
 

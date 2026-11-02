@@ -34,6 +34,10 @@ class DriverProfile {
   final int maxPassengers;
   final bool documentsVerified;
 
+  /// Codigo con el que este chofer invita a otros choferes. Lo devuelve el
+  /// perfil (`GET /chofer/{id}`); el backend lo crea si la cuenta es antigua.
+  final String? codigoReferido;
+
   DriverProfile({
     required this.id,
     required this.nombre,
@@ -47,6 +51,7 @@ class DriverProfile {
     this.licenseNumber,
     this.maxPassengers = 4,
     this.documentsVerified = true,
+    this.codigoReferido,
   });
 
 factory DriverProfile.fromJson(Map<String, dynamic> j) {
@@ -79,6 +84,7 @@ factory DriverProfile.fromJson(Map<String, dynamic> j) {
       licenseNumber: _str(j, ['license_number', 'licenseNumber']),
       maxPassengers: (j['max_passengers'] ?? 4).toInt(),
       documentsVerified: (j['documents_verified'] ?? true) == true,
+      codigoReferido: _str(j, ['codigo_referido']),
     );
   }
 

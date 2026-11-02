@@ -20,6 +20,7 @@ from db.Cliente.auth import create_access_token as create_access_token_cliente, 
 from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
 from services.tipo_vehiculo import (normalizar_tipo_vehiculo,
                                     resolver_tipo_vehiculo)
+from services.codigos_referido import asegurar_codigo, generar_codigo
 
 from db.Administración.connection import admin_db
 from db.Administración.models import ADMINISTRADOR
@@ -83,6 +84,9 @@ class ChoferResponse(BaseModel):
     # validador de abajo.
     type_vehicle: Optional[str] = None
     license_number: Optional[str] = None
+    # Guardado en Mongo y devuelto por el perfil para que la app pueda
+    # compartirlo en el mensaje de invitacion.
+    codigo_referido: Optional[str] = None
     status: Optional[str] = None
     documents_verified: Optional[bool] = None
     max_passengers: Optional[int] = None
@@ -140,6 +144,8 @@ class ClienteResponse(BaseModel):
     numero_de_telefono: Optional[str] = None
     Enable: Optional[bool] = None
     Fondo: Optional[float] = None
+    # El codigo propio con el que este pasajero invita a otros.
+    codigo_referido: Optional[str] = None
 
     class Config:
         populate_by_name = True
@@ -329,6 +335,10 @@ async def get_chofer(id: str, token: str = Depends(oauth2_scheme)):
     doc = chofer_coleccion.find_one({"_id": ObjectId(id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Chofer no encontrado")
+    # Los choferes anteriores al sistema de referidos no tienen codigo. Se
+    # crea aqui, en la primera consulta del perfil, para que la app pueda
+    # compartirlo sin una pantalla ni un endpoint aparte.
+    asegurar_codigo(chofer_coleccion, doc)
     doc["_id"] = str(doc["_id"])
     doc.pop("password", None)
     return doc
@@ -419,12 +429,9 @@ async def create_cliente(cliente: CLIENTE):
         # pasajero complete su primer viaje (complete_trip).
         cliente_dict["descuentos_disponibles"] = 1
 
-    try:
-        from routers.referidos import generate_referral_code
-        cliente_dict["codigo_referido"] = generate_referral_code()
-    except Exception:
-        import secrets
-        cliente_dict["codigo_referido"] = secrets.token_urlsafe(6)[:8].upper()
+    # El codigo propio se genera antes de insertar: una cuenta nueva ya puede
+    # compartirlo desde el primer inicio de sesion.
+    cliente_dict["codigo_referido"] = generar_codigo(cliente_coleccion)
 
     # Hashear la contrasena
     cliente_dict["password"] = bcrypt.hashpw(
@@ -463,6 +470,9 @@ async def get_cliente(id: str, token: str = Depends(oauth2_scheme)):
     doc = cliente_coleccion.find_one({"_id": ObjectId(id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    # Igual que en el perfil del chofer: una cuenta antigua recibe su codigo
+    # en la primera consulta y queda guardado.
+    asegurar_codigo(cliente_coleccion, doc)
     doc["_id"] = str(doc["_id"])
     doc.pop("password", None)
     return doc

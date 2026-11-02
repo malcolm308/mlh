@@ -2,7 +2,6 @@
 Sistema de referidos con descuentos automaticos.
 """
 import logging
-import secrets
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Depends
@@ -11,6 +10,7 @@ from bson import ObjectId
 
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Cliente.connection import cliente_db
+from services.codigos_referido import asegurar_codigo, generar_codigo
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +22,8 @@ descuentos_coleccion = cliente_db["descuentos"]
 
 
 def generate_referral_code() -> str:
-    while True:
-        code = secrets.token_urlsafe(6)[:8].upper()
-        if not users_coleccion.find_one({"codigo_referido": code}):
-            return code
+    """Codigo nuevo para un pasajero (ver `services.codigos_referido`)."""
+    return generar_codigo(users_coleccion)
 
 
 def _nombre(doc: Optional[dict]) -> str:
@@ -72,14 +70,10 @@ class CodigoIn(BaseModel):
 
 @router.get("/mi-codigo")
 async def obtener_mi_codigo(user: dict = Depends(get_current_user)):
-    codigo = user.get("codigo_referido")
-    if not codigo:
-        codigo = generate_referral_code()
-        users_coleccion.update_one(
-            {"_id": ObjectId(user["id"])},
-            {"$set": {"codigo_referido": codigo}},
-        )
-    return {"codigo": codigo}
+    # `asegurar_codigo` crea y guarda el codigo si la cuenta es anterior al
+    # sistema de referidos: la app puede compartirlo siempre, sin pantallas
+    # intermedias ni codigos distintos entre consultas.
+    return {"codigo": asegurar_codigo(users_coleccion, user)}
 
 
 @router.get("/mis-descuentos")

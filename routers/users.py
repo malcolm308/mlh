@@ -10,6 +10,7 @@ from bson import ObjectId
 
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Cliente.connection import cliente_db
+from services.codigos_referido import asegurar_codigo
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +61,15 @@ async def delete_account(user: dict = Depends(get_current_user)):
 
 @router.get("/me")
 async def get_my_profile(user: dict = Depends(get_current_user)):
+    # Si la cuenta es anterior al sistema de referidos, el codigo se crea en
+    # esta primera consulta y se guarda; no se devuelve null nunca.
+    codigo = asegurar_codigo(users_coleccion, user)
     return {
         "id": user["id"],
         "email": user["email"],
         "full_name": user.get("full_name"),
         "phone": user.get("phone"),
         "rol": user.get("rol", "cliente"),
-        "codigo_referido": user.get("codigo_referido"),
+        "codigo_referido": codigo,
         "descuentos_disponibles": user.get("descuentos_disponibles", 0),
     }

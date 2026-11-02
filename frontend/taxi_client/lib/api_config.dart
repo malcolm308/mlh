@@ -21,6 +21,9 @@ class ApiConfig {
     defaultValue: 'https://mlh-tdyg.onrender.com',
   );
 
+  /// APK publicado por el backend en `/static` y que se comparte por WhatsApp.
+  static const String appDownloadUrl = '$baseUrl/static/app-release.apk';
+
   /// URL del estilo de MapLibre, servido por Martin desde el MBTiles.
   /// Se sirve de [martinUrl] y no admite override aparte.
   static String get mapStyleUrl => '$martinUrl/styles/taxi';

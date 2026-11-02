@@ -18,7 +18,6 @@ El administrador las revisa desde el panel y aprueba o rechaza el chofer.
 """
 import logging
 import os
-import secrets
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -31,6 +30,7 @@ from fastapi.responses import FileResponse
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
+from services.codigos_referido import generar_codigo
 from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
 
 logger = logging.getLogger(__name__)
@@ -43,10 +43,7 @@ admin_coleccion = admin_db.users
 
 def _generar_codigo_referido_chofer() -> str:
     """Codigo unico que el chofer comparte para invitar a otros choferes."""
-    while True:
-        codigo = secrets.token_urlsafe(6)[:8].upper()
-        if not chofer_coleccion.find_one({"codigo_referido": codigo}):
-            return codigo
+    return generar_codigo(chofer_coleccion)
 
 # Raiz de las imagenes: E:\Taxi_Rapid\uploads\documentos
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
