@@ -49,6 +49,15 @@ enum ClientState {
 class _ClientHomeScreenState extends State<ClientHomeScreen> {
   final ClientMapController _mapController = ClientMapController();
 
+  /// Clave del Scaffold para abrir el menu desde el boton flotante.
+  ///
+  /// El boton vive en el `Stack` del propio `build`, o sea ENCIMA del
+  /// `Scaffold`: `Scaffold.of(context)` con ese contexto no encuentra ningun
+  /// Scaffold y la llamada explota en silencio (por eso el menu solo abria
+  /// deslizando). Con la clave el drawer se abre igual que en la app del
+  /// chofer.
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
   LatLng _myLoc = ApiConfig.defaultClientLocation;
   LatLng? _pickup;
   LatLng? _dropoff;
@@ -729,6 +738,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     final bothSet = _pickup != null && _dropoff != null;
 
     return Scaffold(
+      key: _scaffoldKey,
       drawer: _buildDrawer(),
       body: Stack(
         children: [
@@ -792,7 +802,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
             left: 8,
             child: _circularButton(
               Icons.menu,
-              () => Scaffold.of(context).openDrawer(),
+              () => _scaffoldKey.currentState?.openDrawer(),
             ),
           ),
           Positioned(
