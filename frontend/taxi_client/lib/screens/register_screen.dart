@@ -18,6 +18,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _apellidos = TextEditingController();
   final _email = TextEditingController();
   final _telefono = TextEditingController();
+  final _referido = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   bool _loading = false;
@@ -29,6 +30,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _apellidos.dispose();
     _email.dispose();
     _telefono.dispose();
+    _referido.dispose();
     _password.dispose();
     _confirm.dispose();
     super.dispose();
@@ -59,6 +61,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         apellidos: _apellidos.text.trim(),
         email: _email.text.trim(),
         telefono: _telefono.text.trim(),
+        codigoReferido: _referido.text.trim(),
         password: _password.text,
       );
 
@@ -158,6 +161,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: (v) => (v == null || v.trim().isEmpty)
                       ? 'Ingresa tu teléfono'
                       : null,
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _referido,
+                  textCapitalization: TextCapitalization.characters,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Código de referido (Opcional)',
+                    prefixIcon: Icon(Icons.card_giftcard),
+                    helperText: 'Si un amigo te invitó, escribe su código',
+                  ),
                 ),
                 const SizedBox(height: 14),
                 TextFormField(

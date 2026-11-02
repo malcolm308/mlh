@@ -383,8 +383,49 @@ async def create_cliente(cliente: CLIENTE):
     _rechazar_telefono_repetido(cliente_coleccion, cliente.numero_de_telefono,
                                  chofer_coleccion)
 
+    # El código de referido llega como dato de entrada. Si es válido se guarda
+    # el `_id` del referidor en `referido_por`; el código propio del pasajero se
+    # genera siempre y es otro distinto.
+    codigo_invitacion = (cliente.codigo_referido or "").strip().upper()
+
     cliente_dict = cliente.model_dump()
+    cliente_dict.pop("codigo_referido", None)
     cliente_dict["numero_de_telefono"] = normalizar_telefono(cliente.numero_de_telefono)
+    cliente_dict["referido_por"] = None
+    cliente_dict["descuentos_disponibles"] = 0
+    cliente_dict["viajes_completados"] = 0
+
+    if codigo_invitacion:
+        try:
+            from routers.promociones import leer_promocion
+            referidos_activos = bool(leer_promocion().get("referidos_activos", True))
+        except Exception:
+            referidos_activos = True
+
+        if not referidos_activos:
+            raise HTTPException(
+                status_code=400,
+                detail="El sistema de referidos está desactivado.")
+
+        referidor = cliente_coleccion.find_one(
+            {"codigo_referido": codigo_invitacion})
+        if not referidor:
+            raise HTTPException(
+                status_code=400, detail="Código de referido no válido")
+
+        cliente_dict["referido_por"] = str(referidor["_id"])
+        # Igual que /referidos/canjear-codigo: el pasajero referido recibe su
+        # descuento de bienvenida. El referidor recibe el suyo cuando este
+        # pasajero complete su primer viaje (complete_trip).
+        cliente_dict["descuentos_disponibles"] = 1
+
+    try:
+        from routers.referidos import generate_referral_code
+        cliente_dict["codigo_referido"] = generate_referral_code()
+    except Exception:
+        import secrets
+        cliente_dict["codigo_referido"] = secrets.token_urlsafe(6)[:8].upper()
+
     # Hashear la contrasena
     cliente_dict["password"] = bcrypt.hashpw(
         cliente_dict["password"].encode('utf-8'), 
@@ -432,6 +473,8 @@ async def update_cliente(id: str, cliente: CLIENTE, token: str = Depends(oauth2_
         raise HTTPException(status_code=401, detail="Token inválido")
     
     cliente_dict = cliente.model_dump()
+    # El código propio no se toca desde este endpoint: se generó al registrarse.
+    cliente_dict.pop("codigo_referido", None)
     if cliente_dict.get("password"):
         cliente_dict["password"] = bcrypt.hashpw(cliente_dict["password"].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     

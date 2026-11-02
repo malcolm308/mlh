@@ -20,6 +20,7 @@ from routers import incidencias
 from routers import soporte
 from routers import referidos
 from routers import users
+from routers import auth_reset
 from services import indices
 from services.traccar_listener import listen_traccar
 
@@ -82,12 +83,14 @@ app.include_router(incidencias.router)
 app.include_router(soporte.router)
 app.include_router(referidos.router)
 app.include_router(users.router)
+app.include_router(auth_reset.router)
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la
 # app arranca igualmente: lo reintentan el startup y el job de APScheduler.
 try:
     chofer_cancelaciones.asegurar_tabla_cancelaciones()
     promociones.asegurar_tabla_promociones()
+    auth_reset.init_password_resets()
 except Exception:
     logger.warning("No se pudo asegurar la tabla de cancelaciones o la de "
                    "promociones en el import; se reintentara", exc_info=True)

@@ -147,6 +147,47 @@ def _registrar_movimiento(conn, driver_id, admin, tipo, monto, saldo_anterior,
     return movement_id
 
 
+def acreditar_bono_referido(driver_identifier: str, monto: float, nota: str) -> bool:
+    """Acredita un bono al fondo de un chofer sin pasar por el panel de admin.
+
+    Se usa para el premio de 500 CUP del sistema de referidos de choferes.
+    Devuelve True solo si el saldo y el movimiento quedaron guardados.
+    """
+    doc = _driver_doc(driver_identifier)
+    if not doc:
+        logger.warning("Bono de referido: chofer %s no encontrado", driver_identifier)
+        return False
+
+    monto = round(float(monto), 2)
+    if monto <= 0:
+        return False
+
+    driver_id = str(doc["_id"])
+    anterior = _saldo(doc)
+    nuevo = round(anterior + monto, 2)
+    sistema = {"id": "sistema", "email": "sistema@rapitaxi"}
+
+    try:
+        chofer_coleccion.update_one({"_id": doc["_id"]}, {"$inc": {"Fondo": monto}})
+        with get_connection() as conn:
+            _registrar_movimiento(
+                conn, driver_id, sistema, "recarga", monto, anterior, nuevo,
+                "promocion", "BONO-REFERIDO", nota,
+            )
+            conn.commit()
+        logger.info("Bono de referido de %.2f CUP acreditado a %s", monto, driver_id)
+        return True
+    except Exception:
+        # Si falla el libro de movimientos se revierte el saldo.
+        try:
+            chofer_coleccion.update_one(
+                {"_id": doc["_id"]}, {"$inc": {"Fondo": -monto}})
+        except Exception:
+            logger.exception("No se pudo revertir el bono de referido de %s", driver_id)
+        logger.exception("No se pudo acreditar el bono de referido a %s", driver_id)
+        return False
+
+
 # ===================== ENDPOINTS =====================
 
 @router.get("/saldo/{driver_id}")

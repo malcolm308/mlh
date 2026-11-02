@@ -98,3 +98,6 @@ navlog_*.txt
 12-10/
 screenshots/
 capturas/
+
+# Artefactos de Gradle dentro de android/ (los genera flutter build)
+frontend/*/android/build/

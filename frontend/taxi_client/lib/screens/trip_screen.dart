@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
@@ -73,7 +73,7 @@ class _TripScreenState extends State<TripScreen> {
       if (t.status == 'completed' || t.status == 'cancelled' || t.status == 'expired') {
         _poll?.cancel();
       }
-      // Si el viaje fue cancelado por el chofer o expirÃ³, notificar al home
+      // Si el viaje fue cancelado por el chofer o expiró, notificar al home
       if ((t.status == 'cancelled' || t.status == 'expired') && mounted && !_popped) {
         _popped = true;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -216,12 +216,12 @@ class _TripScreenState extends State<TripScreen> {
   }
 
   Future<void> _cancel() async {
-    // ConfirmaciÃ³n para evitar cancelaciÃ³n accidental
+    // Confirmación para evitar cancelación accidental
     final confirmar = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Â¿Cancelar este viaje?'),
-        content: const Text('Esta acciÃ³n no se puede deshacer.'),
+        title: const Text('¿Cancelar este viaje?'),
+        content: const Text('Esta acción no se puede deshacer.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -232,7 +232,7 @@ class _TripScreenState extends State<TripScreen> {
               foregroundColor: Theme.of(context).colorScheme.error,
             ),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('SÃ­, cancelar'),
+            child: const Text('Sí, cancelar'),
           ),
         ],
       ),
@@ -251,7 +251,7 @@ class _TripScreenState extends State<TripScreen> {
       // Marcar como popped para evitar double pop
       _popped = true;
       
-      // NO llamar a _refresh() aquÃ­ - causarÃ­a double pop
+      // NO llamar a _refresh() aquí - causaría double pop
       // Pop directamente con resultado 'cancelled'
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -295,7 +295,7 @@ class _TripScreenState extends State<TripScreen> {
       case 'accepted':
         return 'Chofer asignado, en camino';
       case 'driver_arrived':
-        return 'El chofer llegÃ³';
+        return 'El chofer llegó';
       case 'in_progress':
         return 'Viaje en curso';
       case 'completed':
@@ -319,7 +319,7 @@ class _TripScreenState extends State<TripScreen> {
         leading: (_stepIndex == 0 || _stepIndex == 4)
             ? null
             : IconButton(
-                tooltip: 'Salir (el viaje continÃºa)',
+                tooltip: 'Salir (el viaje continúa)',
                 icon: const Icon(Icons.close),
                 onPressed: () => Navigator.of(context).pop(),
               ),
@@ -532,7 +532,7 @@ class _TripScreenState extends State<TripScreen> {
                 dense: true,
                 leading: const Icon(Icons.route),
                 title: Text(
-                    '${t.vehicleType} Â· ${t.currency} Â· ${t.requestedAt ?? ''}'),
+                    '${t.vehicleType} · ${t.currency} · ${t.requestedAt ?? ''}'),
                 subtitle: Text(
                     'Precio estimado: ${t.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP'),
               ),

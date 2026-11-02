@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel,EmailStr
 
 class CLIENTE(BaseModel):
@@ -8,6 +10,9 @@ class CLIENTE(BaseModel):
     Enable: bool = True
     Fondo: float = 0.0
     password: str
+    # Codigo de quien lo invito. Es solo de entrada: al crear la cuenta se
+    # traduce a `referido_por` y no se guarda tal cual.
+    codigo_referido: Optional[str] = None
 
     class Config:
         json_schema_extra = {

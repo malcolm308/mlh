@@ -70,6 +70,25 @@ class ApiService {
     return null;
   }
 
+  /// Pide al backend que envie un codigo de recuperacion al correo.
+  Future<Map<String, dynamic>> forgotPassword(String email) async {
+    return _map('POST', '/auth/forgot-password',
+        body: {'email': email.trim()});
+  }
+
+  /// Cambia la contrasena usando el codigo recibido por correo.
+  Future<Map<String, dynamic>> resetPassword({
+    required String email,
+    required String codigo,
+    required String nuevaPassword,
+  }) async {
+    return _map('POST', '/auth/reset-password', body: {
+      'email': email.trim(),
+      'codigo': codigo.trim(),
+      'nueva_password': nuevaPassword,
+    });
+  }
+
   // ---------------- PERFIL ----------------
 
   Future<ClientProfile> getCliente(String id) async {
@@ -82,6 +101,7 @@ class ApiService {
     required String apellidos,
     required String email,
     required String telefono,
+    String? codigoReferido,
     required String password,
   }) async {
     return _map('POST', '/cliente', body: {
@@ -89,6 +109,7 @@ class ApiService {
       'Apellidos': apellidos,
       'email': email,
       'numero_de_telefono': telefono,
+      'codigo_referido': (codigoReferido ?? '').trim(),
       'Enable': true,
       'Fondo': 0,
       'password': password,

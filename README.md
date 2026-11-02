@@ -76,6 +76,29 @@ flutter build apk --release `
 En produccion los valores llegan por variables de entorno; no se escriben
 credenciales ni URLs privadas en el repositorio.
 
+## Recuperacion de contrasena por correo (SMTP)
+
+Los endpoints `POST /auth/forgot-password` y `POST /auth/reset-password`
+envian un codigo de 6 digitos al correo de la cuenta. El envio usa `smtplib`
+(libreria estandar de Python) y estas variables de entorno, que deben
+configurarse en Render (**Environment > Environment Variables**):
+
+| Variable | Valor | Obligatoria |
+|---|---|---|
+| `SMTP_SERVER` | `smtp.gmail.com` | No (ese es el default) |
+| `SMTP_PORT` | `587` (STARTTLS) o `465` (SSL) | No (default `587`) |
+| `SMTP_USER` | `rapitaxicuba@gmail.com` | No (ese es el default) |
+| `SMTP_PASSWORD` | Contrasena de aplicacion de Google (16 caracteres) | **Si** |
+
+Para generar `SMTP_PASSWORD`: entra en la cuenta de Gmail, activa la
+verificacion en dos pasos y crea una **Contrasena de aplicacion** en
+<https://myaccount.google.com/apppasswords>. La contrasena normal de la
+cuenta no funciona por SMTP.
+
+El codigo vence a los 30 minutos, es de un solo uso y se guarda hasheado en
+la coleccion `Cliente.password_resets` (indice TTL). Si `SMTP_PASSWORD` falta
+o el envio falla, el endpoint responde `502` y borra el codigo generado.
+
 ## Mapas vectoriales (Martin + MapLibre)
 
 Las dos apps usan el motor MapLibre con teselas vectoriales servidas por Martin.

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_config.dart';
@@ -17,7 +18,6 @@ import '../widgets/client_map_view.dart';
 import '../widgets/vehicle_selector_sheet.dart';
 import 'favorite_locations_screen.dart';
 import 'history_screen.dart';
-import 'referral_screen.dart';
 import 'support_screen.dart';
 import 'trip_screen.dart';
 
@@ -226,15 +226,26 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   }
 
   /// Usa la ubicacion actual como punto de recogida.
+  ///
+  /// No reutiliza `_applyGpsPosition` a proposito: esa funcion respeta
+  /// `_pickupTouched` y no mueve el punto si el pasajero toco el mapa antes.
+  /// La flecha azul debe forzar el GPS como recogida aunque haya un pin manual.
   Future<void> _useMyLocation() async {
     final p = await LocationService.current() ?? await LocationService.lastKnown();
     if (p == null || !mounted) {
       _showError('No se pudo obtener la ubicacion. Revisa el GPS del telefono.');
       return;
     }
-    setState(() => _pickupTouched = false);
-    _applyGpsPosition(p, moveMap: true);
-    _reverseToAddress(p);
+    setState(() {
+      _gpsState = LocationPermissionState.granted;
+      _pickupTouched = false;
+      _myLoc = p;
+      _pickup = p;
+      _pickupAddr = null;
+    });
+    _mapController.move(p, 16);
+    _loadRoutePreview();
+    _reverseToAddress(p, updateSearch: true);
   }
 
   bool _samePoint(LatLng a, LatLng b) =>
@@ -298,26 +309,45 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     _reverseToAddress(p);
   }
 
-  Future<void> _reverseToAddress(LatLng p) async {
+  Future<void> _reverseToAddress(LatLng p, {bool updateSearch = false}) async {
     final key =
         '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
     final cached = _reverseCache[key];
     if (cached != null) {
-      _applyReverseAddress(p, cached);
+      _applyReverseAddress(p, cached, updateSearch: updateSearch);
       return;
     }
     final dir = await AddressService.de(p);
     final addr = dir.vacia ? null : dir.texto;
     if (addr != null) _reverseCache[key] = addr;
     if (!mounted) return;
-    _applyReverseAddress(p, addr);
+    _applyReverseAddress(p, addr, updateSearch: updateSearch);
   }
 
-  void _applyReverseAddress(LatLng p, String? addr) {
+  void _applyReverseAddress(LatLng p, String? addr,
+      {bool updateSearch = false}) {
     if (_pickup != null && _samePoint(p, _pickup!)) {
-      if (_pickupAddr != addr) setState(() => _pickupAddr = addr);
+      // Al usar "mi ubicacion", el buscador debe mostrar la direccion real y
+      // no el texto de una busqueda anterior.
+      if (updateSearch && addr != null && addr.trim().isNotEmpty) {
+        setState(() {
+          _pickupAddr = addr;
+          _searchController.text = addr;
+          _suggestions = const [];
+        });
+      } else if (_pickupAddr != addr) {
+        setState(() => _pickupAddr = addr);
+      }
     } else if (_dropoff != null && _samePoint(p, _dropoff!)) {
-      if (_dropoffAddr != addr) setState(() => _dropoffAddr = addr);
+      if (updateSearch && addr != null && addr.trim().isNotEmpty) {
+        setState(() {
+          _dropoffAddr = addr;
+          _searchController.text = addr;
+          _suggestions = const [];
+        });
+      } else if (_dropoffAddr != addr) {
+        setState(() => _dropoffAddr = addr);
+      }
     }
   }
 
@@ -1293,6 +1323,15 @@ onTap: () => setState(() {
     );
   }
 
+  Future<void> _shareApp() async {
+    const mensaje = '¡Descarga RapiTaxi, la app para pedir taxis de forma '
+        'rápida y segura en Cuba!\n\n'
+        'Búscala en Google Play como "RapiTaxi". Si aún no está disponible, '
+        'escríbenos a rapitaxicuba@gmail.com y te ayudamos a instalarla.';
+    // ignore: deprecated_member_use
+    await Share.share(mensaje, subject: 'RapiTaxi');
+  }
+
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
@@ -1370,20 +1409,6 @@ onTap: () => setState(() {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.card_giftcard, color: Color(0xFF333333)),
-              title: const Text('Código de referidos'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ReferralScreen(
-                    api: widget.api,
-                    clientId: widget.clientId,
-                    fullName: widget.profile.fullName,
-                  ),
-                ));
-              },
-            ),
-            ListTile(
               leading: const Icon(Icons.help_outline, color: Color(0xFF333333)),
               title: const Text('Ayuda y soporte'),
               onTap: () {
@@ -1392,6 +1417,11 @@ onTap: () => setState(() {
                   builder: (_) => SupportScreen(api: widget.api),
                 ));
               },
+            ),
+            ListTile(
+              leading: const Icon(Icons.share, color: Color(0xFF333333)),
+              title: const Text('Compartir App'),
+              onTap: _shareApp,
             ),
             const Divider(height: 16),
             ListTile(
@@ -1413,8 +1443,8 @@ onTap: () => setState(() {
   }
 }
 
-/// Widget stateful que maneja la selecci�n de veh�culo internamente.
-/// Evita reconstruir el padre y apilar m�ltiples layouts.
+/// Widget stateful que maneja la selección de vehículo internamente.
+/// Evita reconstruir el padre y apilar múltiples layouts.
 class _VehicleSelectorStateful extends StatefulWidget {
   final String pickupAddress;
   final String dropoffAddress;

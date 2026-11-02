@@ -23,6 +23,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _apellidos = TextEditingController();
   final _email = TextEditingController();
   final _telefono = TextEditingController();
+  final _referido = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
 
@@ -61,7 +62,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _vehiculos.removeListener(_alCambiarTipos);
     _vehiculos.dispose();
     for (final c in [
-      _nombre, _apellidos, _email, _telefono, _password, _confirm,
+      _nombre, _apellidos, _email, _telefono, _referido, _password, _confirm,
       _marca, _model, _year, _chapa, _color,
       _maxPassengers,
     ]) {
@@ -142,6 +143,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         apellidos: _apellidos.text.trim(),
         email: _email.text.trim(),
         telefono: _telefono.text.trim(),
+        codigoReferido: _referido.text.trim(),
         password: _password.text,
         marca: _marca.text.trim(),
         model: _model.text.trim(),
@@ -249,6 +251,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: (v) => (v == null || v.trim().isEmpty)
                       ? 'Ingresa tu teléfono'
                       : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _referido,
+                  textCapitalization: TextCapitalization.characters,
+                  autocorrect: false,
+                  decoration: _dec('Código de referido (Opcional)',
+                      Icons.card_giftcard,
+                      helper: 'Si otro chofer te invitó, escribe su código'),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(

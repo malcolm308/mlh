@@ -18,6 +18,7 @@ El administrador las revisa desde el panel y aprueba o rechaza el chofer.
 """
 import logging
 import os
+import secrets
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -38,6 +39,14 @@ router = APIRouter(prefix="/documentos", tags=["Documentos del chofer"])
 
 chofer_coleccion = chofer_db.users
 admin_coleccion = admin_db.users
+
+
+def _generar_codigo_referido_chofer() -> str:
+    """Codigo unico que el chofer comparte para invitar a otros choferes."""
+    while True:
+        codigo = secrets.token_urlsafe(6)[:8].upper()
+        if not chofer_coleccion.find_one({"codigo_referido": codigo}):
+            return codigo
 
 # Raiz de las imagenes: E:\Taxi_Rapid\uploads\documentos
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -248,6 +257,7 @@ async def registro_con_fotos(
     servicio: str = Form(...),
     license_number: str = Form(""),
     max_passengers: int = Form(4),
+    codigo_referido: str = Form(""),
     # --- los 10 documentos (prefijo doc_ para no chocar con `circulacion` del vehiculo) ---
     doc_rostro: Optional[UploadFile] = File(None),
     doc_carnet_frente: Optional[UploadFile] = File(None),
@@ -305,6 +315,18 @@ async def registro_con_fotos(
             status_code=409,
             detail="El número de teléfono ya está asociado a otra cuenta.")
 
+    # Referido de chofer: el código pertenece a otro chofer y se traduce al
+    # `_id` del referidor. El bono de 500 CUP se paga cuando este chofer
+    # complete su primer viaje (ver complete_trip).
+    codigo_invitacion = (codigo_referido or "").strip().upper()
+    referidor_doc = None
+    if codigo_invitacion:
+        referidor_doc = chofer_coleccion.find_one(
+            {"codigo_referido": codigo_invitacion})
+        if not referidor_doc:
+            raise HTTPException(
+                status_code=400, detail="Código de referido no válido")
+
     ahora = datetime.utcnow()
     doc = {
         "Nombre": Nombre.strip(),
@@ -321,6 +343,10 @@ async def registro_con_fotos(
         "type_vehicle": servicio.strip() or "basico",
         "license_number": license_number.strip(),  # vacio si no se envio
         "max_passengers": max_passengers,
+        "codigo_referido": _generar_codigo_referido_chofer(),
+        "referido_por": str(referidor_doc["_id"]) if referidor_doc else None,
+        "referido_recompensado": False,
+        "viajes_completados": 0,
         "vehicle": {
             "Marca": marca.strip(),
             "model": model.strip(),

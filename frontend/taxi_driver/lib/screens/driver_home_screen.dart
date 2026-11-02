@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
-
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_config.dart';
@@ -3080,6 +3080,15 @@ if (pickup != null)
     }
   }
 
+  Future<void> _shareApp() async {
+    const mensaje = '¡Únete a RapiTaxi, la app para conductores que quieren '
+        'más viajes en Cuba!\n\n'
+        'Búscala en Google Play como "RapiTaxi Chofer". Si aún no está '
+        'disponible, escríbenos a rapitaxicuba@gmail.com y te ayudamos.';
+    // ignore: deprecated_member_use
+    await Share.share(mensaje, subject: 'RapiTaxi Chofer');
+  }
+
   Widget _buildDrawer() {
     return Drawer(
       backgroundColor: Colors.white,
@@ -3213,6 +3222,11 @@ if (pickup != null)
                   builder: (_) => const SupportScreen(),
                 ));
               },
+            ),
+            ListTile(
+              leading: const Icon(Icons.share, color: Color(0xFF333333)),
+              title: const Text('Compartir App'),
+              onTap: _shareApp,
             ),
             const Divider(height: 16),
             ListTile(

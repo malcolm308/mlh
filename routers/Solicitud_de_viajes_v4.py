@@ -1360,6 +1360,50 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             except Exception as e:
                 logger.warning("Error en lógica de referidos: %s", e)
 
+            # 11-b. Referidos de choferes: cuando un chofer invitado completa su
+            # primer viaje, el chofer que lo refirió recibe 500 CUP en su fondo.
+            try:
+                driver_oid = to_mongo_id(updated_trip.get("driver_id") or "")
+                driver_doc = (chofer_coleccion.find_one({"_id": driver_oid})
+                              if driver_oid else None)
+                if driver_doc:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM trips "
+                        "WHERE driver_id = %s AND status = 'completed'",
+                        (str(updated_trip.get("driver_id")),))
+                    total_completados = int(cur.fetchone()[0] or 0)
+
+                    if (driver_doc.get("referido_por")
+                            and not driver_doc.get("referido_recompensado")
+                            and total_completados == 1):
+                        from routers import billetera
+
+                        nombre = " ".join(filter(None, [
+                            driver_doc.get("Nombre"),
+                            driver_doc.get("Apellidos"),
+                        ])).strip()
+                        if billetera.acreditar_bono_referido(
+                                str(driver_doc["referido_por"]), 500.0,
+                                "Bono por referido: primer viaje de %s" % (
+                                    nombre or driver_doc.get("email")
+                                    or driver_doc.get("_id"))):
+                            chofer_coleccion.update_one(
+                                {"_id": driver_doc["_id"]},
+                                {"$set": {"referido_recompensado": True}})
+                            logger.info(
+                                "Bono de 500 CUP otorgado al chofer referidor %s",
+                                driver_doc["referido_por"])
+
+                    # Informativo: el conteo real de viajes se calcula en
+                    # PostgreSQL, pero este campo ayuda al panel.
+                    chofer_coleccion.update_one(
+                        {"_id": driver_doc["_id"]},
+                        {"$inc": {"viajes_completados": 1}})
+            except Exception:
+                logger.exception(
+                    "complete_trip: fallo en referidos de chofer %s",
+                    updated_trip.get("driver_id"))
+
             # 11. Retornar el viaje completo con informacion adicional
             completed_at_iso = None
             try:

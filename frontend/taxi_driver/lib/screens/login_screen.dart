@@ -1,9 +1,10 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/models.dart';
 import '../services/api_service.dart';
 import 'driver_home_screen.dart';
+import 'forgot_password_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -234,13 +235,29 @@ class _LoginScreenState extends State<LoginScreen> {
                               ],
                             ),
                           ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '¿Olvidaste tu contraseña? Restablécela desde el bot de '
-                            'Telegram: abre @RapiTaxiSoporte_bot, comparte tu número y '
-                            'escribe /restablecer.',
+                          const SizedBox(height: 4),
+                          TextButton(
+                            onPressed: _loading
+                                ? null
+                                : () => Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const ForgotPasswordScreen(),
+                                      ),
+                                    ),
+                            child: const Text(
+                              '¿Olvidaste tu contraseña?',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Soporte: rapitaxicuba@gmail.com',
                             textAlign: TextAlign.center,
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: Colors.white70,
                               fontSize: 11,
                             ),

@@ -37,7 +37,7 @@ class SupportScreen extends StatelessWidget {
           _card(
             Icons.mail_outline,
             'Correo',
-            'malcolmlamar308@gmail.com',
+            'rapitaxicuba@gmail.com',
           ),
           const SizedBox(height: 12),
           _card(

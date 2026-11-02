@@ -5,6 +5,7 @@ import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import 'client_home_screen.dart';
+import 'forgot_password_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -230,6 +231,24 @@ class _LoginScreenState extends State<LoginScreen> {
                                   style: OutlinedButton.styleFrom(
                                     minimumSize: const Size.fromHeight(48),
                                     foregroundColor: const Color(0xFF007AFF),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                TextButton(
+                                  onPressed: _loading
+                                      ? null
+                                      : () => Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  const ForgotPasswordScreen(),
+                                            ),
+                                          ),
+                                  child: const Text(
+                                    '¿Olvidaste tu contraseña?',
+                                    style: TextStyle(
+                                      color: Color(0xFF007AFF),
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
                               ],

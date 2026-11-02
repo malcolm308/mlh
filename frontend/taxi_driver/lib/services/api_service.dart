@@ -76,6 +76,25 @@ class ApiService {
     return null;
   }
 
+  /// Pide al backend que envie un codigo de recuperacion al correo.
+  Future<Map<String, dynamic>> forgotPassword(String email) async {
+    return _map('POST', '/auth/forgot-password',
+        body: {'email': email.trim()});
+  }
+
+  /// Cambia la contrasena usando el codigo recibido por correo.
+  Future<Map<String, dynamic>> resetPassword({
+    required String email,
+    required String codigo,
+    required String nuevaPassword,
+  }) async {
+    return _map('POST', '/auth/reset-password', body: {
+      'email': email.trim(),
+      'codigo': codigo.trim(),
+      'nueva_password': nuevaPassword,
+    });
+  }
+
   // ------------------- PERFIL -------------------
 
   Future<DriverProfile> getChofer(String id) async {
@@ -148,12 +167,14 @@ class ApiService {
     required String servicio,
     required int maxPassengers,
     required Map<String, String> fotos,
+    String? codigoReferido,
   }) async {
     final fields = <String, String>{
       'Nombre': nombre,
       'Apellidos': apellidos,
       'email': email,
       'numero_de_telefono': telefono,
+      'codigo_referido': (codigoReferido ?? '').trim(),
       'password': password,
       'marca': marca,
       'model': model,
