@@ -736,6 +736,11 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final bothSet = _pickup != null && _dropoff != null;
+    // Los botones flotantes NO pueden arrancar en el borde fisico: la app
+    // dibuja edge-to-edge y la barra de estado se come el primer centimetro.
+    // Con el inset real quedan debajo de la hora/bateria y clickeables (asi
+    // lo hace la app del chofer).
+    final topPad = MediaQuery.of(context).padding.top;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -773,7 +778,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           ),
           if (_error != null)
             Positioned(
-              top: 64,
+              top: topPad + 64,
               left: 8,
               right: 8,
               child: Material(
@@ -798,7 +803,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
               ),
             ),
           Positioned(
-            top: 8,
+            top: topPad + 8,
             left: 8,
             child: _circularButton(
               Icons.menu,
@@ -806,7 +811,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
             ),
           ),
           Positioned(
-            top: 8,
+            top: topPad + 8,
             right: 8,
             child: _circularButton(
               _gpsState == LocationPermissionState.granted
