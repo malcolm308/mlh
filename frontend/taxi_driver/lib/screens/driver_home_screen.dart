@@ -3271,7 +3271,7 @@ if (pickup != null)
     }
     final mensaje = '¡Únete al equipo de RapiTaxi! Usa mi código $codigo al '
         'registrarte y empieza a ganar. Yo recibiré un bono cuando hagas tu '
-        'primer viaje. Descarga aquí: ${ApiConfig.appDownloadUrl}';
+        'primer viaje. Descarga aquí: ${ApiConfig.driverDownloadUrl}';
     // ignore: deprecated_member_use
     await Share.share(mensaje, subject: 'RapiTaxi Chofer');
   }

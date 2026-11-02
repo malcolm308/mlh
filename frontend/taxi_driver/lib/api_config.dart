@@ -25,6 +25,11 @@ class ApiConfig {
   /// APK publicado por el backend en `/static` y que se comparte por WhatsApp.
   static const String appDownloadUrl = '$baseUrl/static/app-release.apk';
 
+  /// APK de la app del CHOFER. Es el que reparte un chofer al invitar a otro
+  /// chofer: quien se lo descarga termina en el registro de choferes, no en
+  /// el del pasajero.
+  static const String driverDownloadUrl = '$baseUrl/static/app-chofer.apk';
+
   /// URL del estilo de MapLibre, servido por Martin desde el MBTiles.
   /// Se sirve de [martinUrl] y no admite override aparte.
   static String get mapStyleUrl => '$martinUrl/styles/taxi';
