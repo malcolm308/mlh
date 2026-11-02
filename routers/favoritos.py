@@ -84,6 +84,11 @@ async def crear_favorito(body: FavoritoCreate, user: dict = Depends(get_current_
         "created_at": datetime.utcnow(),
     }
     result = favoritos_coleccion.insert_one(favorito)
+    # `insert_one` escribe `_id` (un ObjectId) dentro del propio dict que
+    # devuelve: si se expande tal cual en la respuesta, `jsonable_encoder` no
+    # sabe serializarlo y el POST responde 500 AUNQUE el favorito ya se haya
+    # guardado. Se saca y se devuelve el id como texto.
+    favorito.pop("_id", None)
     return {"id": str(result.inserted_id), **favorito}
 
 
