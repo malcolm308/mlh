@@ -1,5 +1,13 @@
 import 'package:flutter/material.dart';
 
+// El mapa va en TextureView y NO en Virtual Display: mismo motivo que la app
+// de cliente. El camino Virtual Display del motor tiene el bug abierto
+// flutter/flutter#154613 (un resize del mapa que choca con su dispose mata el
+// proceso) y el chofer vive redimensionando el mapa: teclado, hoja de
+// vehiculos, drawer, modos de navegacion. Sin este modo, un crash nativo
+// cierra la app en pleno turno.
+import 'package:maplibre_gl/maplibre_gl.dart' show MapLibreMap;
+
 import 'services/ofertas_background_service.dart';
 import 'screens/login_screen.dart';
 
@@ -20,6 +28,7 @@ Future<void> main() async {
   // encuentra el canal. Defensa extra: onStartOfertas tambien lo crea por si
   // el isolate del servicio corre primero.
   WidgetsFlutterBinding.ensureInitialized();
+  MapLibreMap.useHybridComposition = true;
   try {
     await crearCanalServicio();
   } catch (_) {
