@@ -879,7 +879,17 @@ def create_trip(
             distance_km = distancia_por_calle_km(
                 request_lat, request_lng, dropoff_lat, dropoff_lng)
 
-            precio_estimado = calculate_estimated_price(distance_km, vehicle_type)
+            # Precio IDENTICO al que ve el pasajero en la estimacion: misma
+            # distancia por calle y MISMA funcion completa (`_price_breakdown`
+            # con las dos coordenadas). Antes aqui se llamaba
+            # `calculate_estimated_price` SIN coordenadas: la fila guardaba la
+            # tarifa normal y la oferta que recibia el chofer tenia OTRO
+            # precio que el desglose del pasajero (con zona especial el
+            # salto era grosero). El chofer cobra lo que el cliente ve.
+            breakdown = _price_breakdown(
+                distance_km, vehicle_type,
+                request_lat, request_lng, dropoff_lat, dropoff_lng)
+            precio_estimado = breakdown["precio_estimado"]
 
             # Si hay driver_id, el estado es 'accepted'; si no, queda 'requested' sin chofer
             initial_status = "accepted" if driver_id else "requested"
@@ -2272,6 +2282,11 @@ async def offer_trip_to_nearby_drivers(
             "vehicle_type": vehicle_type,
             "distance_to_pickup_km": round(dist_km, 2),
             "expires_in_secs": offer_ttl_secs,
+            # Mismo precio que ve el pasajero (fila `trips.precio_estimado`,
+            # ya corregida para pasar por la zona especial y el coeficiente).
+            # Si el row no lo trae, no se inventa: la app lo pedira.
+            "precio_estimado": trip.get("precio_estimado"),
+            "currency": "CUP",
         }))
 
         # 6. Notificar tambien al canal del viaje (para que el cliente vea el dispatch)
