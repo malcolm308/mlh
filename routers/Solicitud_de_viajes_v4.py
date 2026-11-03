@@ -736,6 +736,11 @@ def _price_breakdown(distance_km: float, vehicle_type: str, pickup_lat=None, pic
     )
     if precio_km_aplicable is not None:
         price_per_km = float(precio_km_aplicable)
+        # La zona especial (aeropuerto) se cobra SIN el descuento del
+        # coeficiente: coeficiente 1.0 siempre, sea recogida o destino. Sin
+        # esto, un viaje corto al aeropuerto salia con el tramo corto (x0.5)
+        # y el cobro ni siquiera reflejaba la tabla de la zona.
+        coeficiente = 1.0
 
     distance_fare = distance_km * price_per_km * float(coeficiente)
     distance_fare_sin_coeficiente = distance_km * price_per_km
@@ -1242,6 +1247,10 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
             # El coeficiente por distancia se aplica aqui y en la estimacion
             coeficiente = coeficiente_por_distancia(distance_km, promo)
+            if precio_km_aplicable_zona is not None:
+                # Zona especial (aeropuerto): SIEMPRE coeficiente 1.0, tanto si
+                # la recogida cae en la zona como si lo hace el destino.
+                coeficiente = 1.0
             distance_fare = distance_km * price_per_km * float(coeficiente)
             distance_fare_sin_coeficiente = distance_km * price_per_km
             time_fare = duration_min * price_per_minute
