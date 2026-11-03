@@ -90,28 +90,52 @@ def _punto_en_zona_especial(lat: float, lng: float, promo: dict) -> bool:
         return False
 
 
+def _zona_especial_precio(promo: dict, vehicle_type: str,
+                          dropoff_lat=None, dropoff_lng=None,
+                          pickup_lat=None, pickup_lng=None):
+    """Precio por km de la zona especial si el DESTINO o la RECOGIDA caen
+    dentro del polígono.
+
+    Los viajes al aeropuerto Y desde el aeropuerto se cobran con la tarifa de
+    zona. El destino manda si los dos extremos caen dentro (es el mismo precio
+    de todas formas; solo cambia la etiqueta del lado). Devuelve
+    (precio_km, lado) con lado en None si no toca.
+    """
+    for lado, lat, lng in (("destino", dropoff_lat, dropoff_lng),
+                           ("recogida", pickup_lat, pickup_lng)):
+        if lat is None or lng is None:
+            continue
+        precio = _precio_km_por_zona(promo, vehicle_type, lat, lng)
+        if precio is not None:
+            return precio, lado
+    return None, None
+
+
 def _precio_km_por_zona(promo: dict, vehicle_type: str, lat: float, lng: float):
-    if _punto_en_zona_especial(lat, lng, promo):
-        tipo = str(vehicle_type).lower()
-        if tipo == "confort":
-            try:
-                return float(promo.get("precio_km_zona_confort") or 1200.0)
-            except Exception:
-                return 1200.0
-        if tipo == "triciclo":
-            try:
-                return float(promo.get("precio_km_zona_triciclo") or 700.0)
-            except Exception:
-                return 700.0
-        if tipo == "moto":
-            try:
-                return float(promo.get("precio_km_zona_moto") or 600.0)
-            except Exception:
-                return 600.0
+    if promo.get("zona_especial_activa") is False:
+        return None
+    if not _punto_en_zona_especial(lat, lng, promo):
+        return None
+    tipo = str(vehicle_type).lower()
+    if tipo == "confort":
         try:
-            return float(promo.get("precio_km_zona_basico") or 1000.0)
+            return float(promo.get("precio_km_zona_confort") or 1200.0)
         except Exception:
-            return 1000.0
+            return 1200.0
+    if tipo == "triciclo":
+        try:
+            return float(promo.get("precio_km_zona_triciclo") or 700.0)
+        except Exception:
+            return 700.0
+    if tipo == "moto":
+        try:
+            return float(promo.get("precio_km_zona_moto") or 600.0)
+        except Exception:
+            return 600.0
+    try:
+        return float(promo.get("precio_km_zona_basico") or 1000.0)
+    except Exception:
+        return 1000.0
     return None
 
 
@@ -701,10 +725,14 @@ def _price_breakdown(distance_km: float, vehicle_type: str, pickup_lat=None, pic
 
     coeficiente = coeficiente_por_distancia(distance_km, promo)
 
-    precio_km_aplicable = _precio_km_por_zona(
+    # Precio por km ESPECIAL si el DESTINO o la RECOGIDA caen dentro del
+    # polígono (viajes al aeropuerto y desde el aeropuerto). Antes solo se
+    # miraba el destino: quien despegaba desde la terminal pagaba tarifa
+    # normal, justo la mitad de los casos que el aeropuerto genera.
+    precio_km_aplicable, lado_zona = _zona_especial_precio(
         promo, vehicle_type,
-        dropoff_lat if dropoff_lat is not None else pickup_lat,
-        dropoff_lng if dropoff_lng is not None else pickup_lng,
+        dropoff_lat=dropoff_lat, dropoff_lng=dropoff_lng,
+        pickup_lat=pickup_lat, pickup_lng=pickup_lng,
     )
     if precio_km_aplicable is not None:
         price_per_km = float(precio_km_aplicable)
@@ -732,9 +760,8 @@ def _price_breakdown(distance_km: float, vehicle_type: str, pickup_lat=None, pic
         "precio_estimado": round(precio_final, 2),
         "precio_final": round(precio_final, 2),
         "vehicle_type": vehicle_type,
-        "zona_especial_aplicada": _precio_km_por_zona(promo, vehicle_type,
-                                                       dropoff_lat if dropoff_lat is not None else pickup_lat,
-                                                       dropoff_lng if dropoff_lng is not None else pickup_lng) is not None,
+        "zona_especial_aplicada": precio_km_aplicable is not None,
+        "zona_especial_lado": lado_zona,
     }
 
 
@@ -1191,10 +1218,24 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             except Exception:
                 pass
 
-            # Zona especial según DESTINO
-            precio_km_aplicable_zona = _precio_km_por_zona(
+            # Zona especial: DESTINO o RECOGIDA dentro del polígono (aeropuerto
+            # hacia y desde la ciudad).
+            cur_x = conn.cursor()
+            cur_x.execute("""
+                SELECT ST_Y(COALESCE(pickup_location, request_location)::geometry) AS lat,
+                       ST_X(COALESCE(pickup_location, request_location)::geometry) AS lng
+                FROM trips WHERE trip_id = %s
+            """, (trip_id,))
+            punto_recogida = cur_x.fetchone()
+            cur_x.close()
+
+            precio_km_aplicable_zona, _lado_zona = _zona_especial_precio(
                 promo, vehicle_type,
-                dropoff_lat, dropoff_lng,
+                dropoff_lat=dropoff_lat, dropoff_lng=dropoff_lng,
+                pickup_lat=(float(punto_recogida["lat"])
+                            if punto_recogida and punto_recogida["lat"] is not None else None),
+                pickup_lng=(float(punto_recogida["lng"])
+                            if punto_recogida and punto_recogida["lng"] is not None else None),
             )
             if precio_km_aplicable_zona is not None:
                 price_per_km = float(precio_km_aplicable_zona)

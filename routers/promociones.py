@@ -665,12 +665,10 @@ class TarifasEsperaIn(BaseModel):
 
 
 def _validar_tarifas(datos: "TarifasEsperaIn") -> Dict[str, Any]:
-    """Valida coeficientes y espera, y devuelve solo esos seis campos.
+    """Valida coeficientes, espera y zona especial de la pestaña de tarifas.
 
-    Vive suelta para que la guarde tanto el formulario general de promociones
-    como la pestaña de tarifas: son las mismas reglas y no tiene sentido que se
-    pursiguen en dos sitios, porque un día se tocan una y la otra se queda vieja
-    sin que nada lo delate.
+    Devuelve SOLO los campos que se guardan en la fila id=1 de `promociones`.
+    Vive suelta para que la use el guardado de tarifas sin duplicar reglas.
     """
     corto_km = _a_numero(datos.coef_corto_km, "el límite de las carreras cortas")
     medio_km = _a_numero(datos.coef_medio_km, "el límite de las carreras medias")
@@ -683,12 +681,12 @@ def _validar_tarifas(datos: "TarifasEsperaIn") -> Dict[str, Any]:
             detail="El límite de las carreras cortas (%s km) tiene que ser menor que el "
                    "de las medias (%s km)." % (corto_km, medio_km))
 
-    tarifas = {
+    coeficientes = {
         "coef_corto_valor": _a_numero(datos.coef_corto_valor, "el coeficiente de las cortas"),
         "coef_medio_valor": _a_numero(datos.coef_medio_valor, "el coeficiente de las medias"),
         "coef_largo_valor": _a_numero(datos.coef_largo_valor, "el coeficiente de las largas"),
     }
-    for nombre, valor in tarifas.items():
+    for nombre, valor in coeficientes.items():
         if valor <= 0:
             raise HTTPException(
                 status_code=400,
@@ -700,8 +698,61 @@ def _validar_tarifas(datos: "TarifasEsperaIn") -> Dict[str, Any]:
         raise HTTPException(
             status_code=400, detail="La espera de cortesía no puede ser negativa.")
 
-    return {"coef_corto_km": corto_km, "coef_medio_km": medio_km,
-            "tiempo_espera_cortesia_minutos": espera, **tarifas}
+    tarifas = {
+        "coef_corto_km": corto_km,
+        "coef_medio_km": medio_km,
+        "tiempo_espera_cortesia_minutos": espera,
+        **coeficientes,
+    }
+
+    # --- Zona especial del aeropuerto -------------------------------
+    # Se valida y se GUARDA: antes este formulario recibia los precios y el
+    # polígono pero NUNCA los escribia en la base, y asi el administrador
+    # cambiaba la zona desde el panel y el cobro seguia con lo que hubiera
+    # en la fila.
+    precios_zona = {}
+    for nombre in ("basico", "confort", "triciclo", "moto"):
+        precios_zona["precio_km_zona_" + nombre] = _a_numero(
+            getattr(datos, "precio_km_zona_" + nombre),
+            "el precio por km de la zona (%s)" % nombre)
+    tarifas.update(precios_zona)
+    for nombre, valor in precios_zona.items():
+        if valor <= 0:
+            raise HTTPException(status_code=400, detail=
+                "%s debe ser mayor que cero." % nombre.replace("_", " "))
+
+    tarifas["zona_especial_activa"] = bool(datos.zona_especial_activa)
+
+    coords = datos.zona_especial_coords
+    puntos_limpios = []
+    if isinstance(coords, str):
+        try:
+            coords = json.loads(coords)
+        except Exception:
+            raise HTTPException(status_code=400, detail=
+                "El polígono de la zona no es JSON valido.")
+    if coords in (None, "", [],):
+        raise HTTPException(status_code=400, detail=
+            "El polígono de la zona necesita al menos 3 puntos [lat, lng].")
+    if not isinstance(coords, list) or len(coords) < 3:
+        raise HTTPException(status_code=400, detail=
+            "El polígono de la zona necesita al menos 3 puntos [lat, lng].")
+    for c in coords:
+        if not isinstance(c, (list, tuple)) or len(c) != 2:
+            raise HTTPException(status_code=400, detail=
+                "Cada punto del polígono es [lat, lng].")
+        try:
+            lat_c, lng_c = float(c[0]), float(c[1])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=
+                "Los puntos del polígono deben ser numericos.")
+        if not (-90 <= lat_c <= 90 and -180 <= lng_c <= 180):
+            raise HTTPException(status_code=400, detail=
+                "Un punto del polígono esta fuera de rango.")
+        puntos_limpios.append([lat_c, lng_c])
+    tarifas["zona_especial_coords"] = puntos_limpios
+
+    return tarifas
 
 
 @router.get("/tarifas-espera")
@@ -727,6 +778,8 @@ async def obtener_tarifas_espera():
         "precio_km_zona_confort": _a_dinero(promo["precio_km_zona_confort"]),
         "precio_km_zona_triciclo": _a_dinero(promo["precio_km_zona_triciclo"]),
         "precio_km_zona_moto": _a_dinero(promo["precio_km_zona_moto"]),
+        "zona_especial_activa": bool(promo.get("zona_especial_activa", True)),
+        "zona_especial_coords": promo.get("zona_especial_coords"),
         "tramos": [
             {"hasta_km": _a_dinero(promo["coef_corto_km"]),
              "coeficiente": _a_dinero(promo["coef_corto_valor"])},
@@ -743,7 +796,9 @@ async def guardar_tarifas_espera(datos: TarifasEsperaIn,
     limpio = _validar_tarifas(datos)
 
     columnas = ("coef_corto_km, coef_corto_valor, coef_medio_km, "
-                "coef_medio_valor, coef_largo_valor, tiempo_espera_cortesia_minutos")
+                "coef_medio_valor, coef_largo_valor, tiempo_espera_cortesia_minutos, "
+                "precio_km_zona_basico, precio_km_zona_confort, precio_km_zona_triciclo, "
+                "precio_km_zona_moto, zona_especial_activa")
     asignaciones = ", ".join("%s = %%s" % c for c in columnas.split(", "))
     valores = tuple(limpio[c.strip()] for c in columnas.split(", "))
 
@@ -797,6 +852,7 @@ def _a_json(promo: Dict[str, Any]) -> Dict[str, Any]:
         "precio_km_zona_confort": float(promo["precio_km_zona_confort"]),
         "precio_km_zona_triciclo": float(promo["precio_km_zona_triciclo"]),
         "precio_km_zona_moto": float(promo["precio_km_zona_moto"]),
+        "zona_especial_activa": bool(promo.get("zona_especial_activa", True)),
         "zona_especial_coords": promo.get("zona_especial_coords"),
         "actualizado_at": (promo["actualizado_at"].isoformat()
                            if promo["actualizado_at"] else None),
