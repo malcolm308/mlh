@@ -176,6 +176,7 @@ ALTER_PROMOCIONES = """
             ADD COLUMN IF NOT EXISTS precio_km_zona_confort NUMERIC(12,2) DEFAULT 1200.00,
             ADD COLUMN IF NOT EXISTS precio_km_zona_triciclo NUMERIC(12,2) DEFAULT 700.00,
             ADD COLUMN IF NOT EXISTS precio_km_zona_moto NUMERIC(12,2) DEFAULT 600.00,
+            ADD COLUMN IF NOT EXISTS zona_especial_activa BOOLEAN NOT NULL DEFAULT TRUE,
             ADD COLUMN IF NOT EXISTS zona_especial_coords JSONB;
     """
 
@@ -253,6 +254,7 @@ def leer_promocion() -> Dict[str, Any]:
         "precio_km_zona_confort": Decimal("1200.0"),
         "precio_km_zona_triciclo": Decimal("700.0"),
         "precio_km_zona_moto": Decimal("600.0"),
+        "zona_especial_activa": True,
         "zona_especial_coords": [
             [23.001228, -82.416735],
             [23.007982, -82.394788],
@@ -298,6 +300,11 @@ def leer_promocion() -> Dict[str, Any]:
             "precio_km_zona_confort": _a_decimal(fila.get("precio_km_zona_confort"), Decimal("1200.0")),
             "precio_km_zona_triciclo": _a_decimal(fila.get("precio_km_zona_triciclo"), Decimal("700.0")),
             "precio_km_zona_moto": _a_decimal(fila.get("precio_km_zona_moto"), Decimal("600.0")),
+            # La zona esta ENCENDIDA por defecto: filas viejas sin el campo
+            # booleano no deben apagar el precio especial que ya cobraban.
+            "zona_especial_activa": bool(
+                fila.get("zona_especial_activa")
+                if fila.get("zona_especial_activa") is not None else True),
             "zona_especial_coords": fila.get("zona_especial_coords") or [
                 [23.001228, -82.416735],
                 [23.007982, -82.394788],
