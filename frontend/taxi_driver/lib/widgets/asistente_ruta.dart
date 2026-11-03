@@ -88,18 +88,21 @@ class AsistenteRutaWidget extends StatelessWidget {
                   Expanded(
                     child: Text.rich(
                       TextSpan(
-                        text: '${distanciaLegible(estado.distanciaMetros)} · ',
+                        // La MANIOBRA primero, la distancia despues: es lo
+                        // que el chofer lee de un vistazo ("Gire a la derecha
+                        // en Avenida 26 · en 272 m").
+                        text: estado.instruccion,
                         style: const TextStyle(
-                          color: Color(0xFFFFC107),
-                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
                           fontSize: 15,
                         ),
                         children: [
                           TextSpan(
-                            text: estado.instruccion,
+                            text: ' · ${distanciaLegible(estado.distanciaMetros)}',
                             style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
+                              color: Color(0xFFFFC107),
+                              fontWeight: FontWeight.bold,
                               fontSize: 15,
                             ),
                           ),
