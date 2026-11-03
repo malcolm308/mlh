@@ -10,6 +10,30 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_config.dart';
 
+/// Crea el canal del SERVICIO (no confundir con el de ofertas).
+///
+/// flutter_background_service publica su notificacion persistente en este
+/// canal. Android exige que el canal EXISTA antes de que el servicio entre
+/// en primer plano: si no existe, `startForeground` muere con
+/// "Bad notification for startForeground" y la app se cierra en el instante
+/// de activar "En linea". Se crea con importancia `low`: silencioso y
+/// silencio, solo el "RapiTaxi: Buscando viajes..."; las ofertas usan el
+/// canal `trip_offers_v3` con el tono spacebell.
+Future<void> crearCanalServicio() async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(AndroidNotificationChannel(
+        'rapitaxi_service_v1',
+        'Servicio de solicitudes',
+        description: 'Mantiene la busqueda de viajes activa en segundo plano.',
+        importance: Importance.low,
+        playSound: false,
+        enableVibration: false,
+      ));
+}
+
 /// Servicio en primer plano del chofer "En linea".
 ///
 /// Sin FCM a proposito (no es fiable en Cuba), el aviso de ofertas depende de
@@ -58,6 +82,12 @@ class OfertasBackgroundService {
   /// toggle "En linea" del chofer.
   Future<void> configurar() async {
     if (_configurado) return;
+    // El canal del servicio debe existir ANTES de configure()/startService():
+    // sin canal, el `startForeground` muere ("Bad notification") y la app se
+    // cierra justo al ponerse en linea.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      await crearCanalServicio();
+    }
     _configurado = true;
     // La notificacion persistente usa su propio canal sin sonido ni
     // vibracion: SOLO avisa de que el servicio vive. Las ofertas usan el
