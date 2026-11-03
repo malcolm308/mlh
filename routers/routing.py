@@ -200,7 +200,9 @@ async def navegacion(req: RecalcularRequest):
     for etapa in ruta.get("legs", []):
         for s in etapa.get("steps", []):
             maniobra = s.get("maneuver") or {}
-            lat_m, lng_m = maniobra.get("location") or [None, None]
+            punto = maniobra.get("location") or [None, None]
+            # OSRM entrega location en orden [lng, lat].
+            lng_m, lat_m = punto
             if lng_m is None or lat_m is None:
                 continue
             pasos.append({
