@@ -822,7 +822,7 @@ async def guardar_tarifas_espera(datos: TarifasEsperaIn,
         try:
             cur.execute("UPDATE promociones SET %s, actualizado_at = NOW(), "
                         "actualizado_por = %%s WHERE id = 1" % asignaciones,
-                        valores + (admin.get("email"),))
+                        tuple(valores) + (admin.get("email"),))
             conn.commit()
         except HTTPException:
             raise
