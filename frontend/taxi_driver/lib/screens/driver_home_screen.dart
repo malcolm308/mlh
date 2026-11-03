@@ -972,15 +972,19 @@ double? _rumboParaFlecha() {
     }
   }
 
-  void _setDriverPos(LatLng p) {
+  void _setDriverPos(LatLng p, {double? rumbo}) {
     setState(() => _driverPos = p);
     _publicarRuta();
     // Ultima posicion que conoce el servicio en primer plano: si tiene que
     // relevar el sondeo (app cerrada), usa este punto.
     unawaited(OfertasBackgroundService.guardarUltimaPosicion(p.latitude, p.longitude));
     if (_online) {
+      // El rumbo viaja con la posicion: el cliente lo usa para orientar la
+      // camara 3D hacia adelante, como la vista del chofer. Solo con rumbo
+      // DE VERDAD (sensor o GPS con bandera),nunca un 0 inventado.
       widget.api
-          .setDriverLocation(widget.driverId, p.latitude, p.longitude)
+          .setDriverLocation(widget.driverId, p.latitude, p.longitude,
+              bearing: rumbo)
           .catchError((_) {});
     }
 
@@ -1068,7 +1072,13 @@ double? _rumboParaFlecha() {
       // La posicion movida a mano tiene prioridad sobre el GPS.
       if (_manualPos) return;
       setState(() => _gpsState = LocationPermissionState.granted);
-      _setDriverPos(fix.position);
+      // `fix.rumbo` ya combina sensor y GPS (ver `GeoFix`). Mientras el coche
+      // va despacio o esta parado el rumbo no vale nada: mejor no enviarlo y
+      // que el cliente conserve el ultimo valido.
+      final rumbo = (fix.velocidadKmh > 3.0 && fix.rumbo != null)
+          ? fix.rumbo
+          : null;
+      _setDriverPos(fix.position, rumbo: rumbo);
     });
   }
 

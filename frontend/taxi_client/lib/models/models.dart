@@ -52,6 +52,10 @@ class ClientTrip {
   final double? commission;
   final String? driverId;
 
+  /// Rumbo del vehiculo (0 = norte, sentido horario) tal como lo reporto el
+  /// chofer con su GPS. `null` = sin dato (chofer parado o sin viaje).
+  final double? driverBearing;
+
   const ClientTrip({
     required this.tripId,
     required this.status,
@@ -71,6 +75,7 @@ class ClientTrip {
     this.totalFare,
     this.commission,
     this.driverId,
+    this.driverBearing,
   });
 
   factory ClientTrip.fromJson(Map<String, dynamic> j) => ClientTrip(
@@ -92,6 +97,7 @@ class ClientTrip {
         totalFare: (j['total_fare'] as num?)?.toDouble(),
         commission: (j['commission'] as num?)?.toDouble(),
         driverId: j['driver_id']?.toString(),
+        driverBearing: (j['driver_bearing'] as num?)?.toDouble(),
       );
 
   /// El backend entrega las coordenadas como "POINT(lng lat)".

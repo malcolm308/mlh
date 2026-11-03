@@ -114,6 +114,33 @@ class _TripScreenState extends State<TripScreen> {
     } catch (_) {}
   }
 
+  /// Asegura que la camara este EN VISTA 3D siguiendo al vehiculo, solo cuando
+  /// toca:
+  ///
+  ///  * El viaje esta activo (`accepted` yendo a buscar, o `in_progress`).
+  ///  * El pasajero no ha movido el mapa (`_siguiendo`).
+  ///  * El chofer reporta rumbo (GPS en marcha; parado no llega bearing).
+  ///
+  /// Es la emulacion en el cliente de la vista 3D del chofer: la camara se
+  /// anima (1000 ms) al punto del vehiculo con `bearing` de su rumbo, `tilt`
+  /// 50 y zoom 16, para que avance mirando hacia adelante por la calle.
+  ///
+  /// El `await` es fire-and-forget a proposito: el siguiente tick (3 s) lanza
+  /// otro y MapLibre cancela el anterior.
+  void _aplicarVista3D() {
+    if (!_siguiendo) return;
+    final t = _trip;
+    final vehiculo = _driverPos;
+    final rumbo = t?.driverBearing;
+    if (t == null ||
+        vehiculo == null ||
+        rumbo == null ||
+        (t.status != 'accepted' && t.status != 'in_progress')) {
+      return;
+    }
+    unawaited(_mapController.animar3D(vehiculo, rumbo));
+  }
+
   /// Encuadre automatico del cliente.
   ///
   /// Dos momentos distintos, porque el pasajero necesita cosas distintas:
@@ -121,9 +148,10 @@ class _TripScreenState extends State<TripScreen> {
   ///  1. Al aparecer el chofer, o el punto de recogida: `fitBounds` con los
   ///     tres puntos (origen, destino y vehiculo). Ahi encaja el trayecto
   ///     entero, que es lo que responde a "de donde salgo y a donde voy".
-  ///  2. En cada refresh posterior: solo seguir al vehiculo, con el zoom que
-  ///     toque por lo cerca que este. Reencuadrar el trayecto entero cada 3 s
-  ///     haria que el mapa le temblase al pasajero.
+  ///  2. En cada refresh posterior con viaje ACTIVO y rumbo del chofer: la
+  ///     camara 3D ([_aplicarVista3D]) sigue al vehiculo y se adelanta. Sin
+  ///     rumbo (chofer parado, viaje sin vehiculo) se mantiene el acompanamien-
+  ///     to plano con el norte arriba, con el zoom que toque segun distancia.
   ///
   /// Cuando el pasajero ha tocado el mapa no se hace nada: manda el usuario.
   void _seguirVehiculo(LatLng? antes) {
@@ -142,10 +170,19 @@ class _TripScreenState extends State<TripScreen> {
       unawaited(_reencuadrarSiElVehiculoSalio(vehiculo));
     }
 
-    if (_trip?.status != 'in_progress') return;
+    final rumbo = t.driverBearing;
+    final activo = t.status == 'accepted' || t.status == 'in_progress';
 
-    // Distancia al objetivo: destino durante el viaje, punto de partida si el
-    // chofer aun esta yendo a buscar al pasajero.
+    // Mientras el chofer rueda: vista 3D, que es la emulacion pedida. La
+    // direccion (bearing) la manda él y el motor cancela la animacion previa.
+    if (activo && rumbo != null) {
+      _aplicarVista3D();
+      return;
+    }
+
+    // Chofer parado (driver_arrived) o sin rumbo todavia: acompanamiento
+    // plano, con el zoom que toque por lo cerca que este. Reencuadrar todo el
+    // trayecto cada 3 s haria que el mapa le temblase al pasajero.
     final objetivo = _objetivoDelPasajero();
     if (objetivo == null) return;
 
@@ -383,21 +420,21 @@ class _TripScreenState extends State<TripScreen> {
                           right: 12,
                           child: _statusBanner(),
                         ),
-                      // Boton de recentrado del pasajero: mismo criterio que
-                      // el chofer, pero sin rotacion ni tilt.
-                      if (_siguiendo)
-                        const SizedBox.shrink()
-                      else
-                        Positioned(
-                          right: 12,
-                          bottom: 12,
-                          child: FloatingActionButton.small(
-                            heroTag: 'recentrar',
-                            tooltip: 'Seguir al vehiculo',
-                            onPressed: _recentrarEnVehiculo,
-                            child: const Icon(Icons.my_location),
-                          ),
+                      // Boton flotante "Centrar": SIEMPRE visible, para que el
+                      // pasajero pueda volver a la vista 3D del vehiculo en
+                      // cualquier momento. Si ya va siguiendo, el toque
+                      // re-aplica el encuadre; la proxima indicacion del
+                      // sondeo (3 s) re-anima la camara con bearing + tilt.
+                      Positioned(
+                        right: 12,
+                        bottom: 12,
+                        child: FloatingActionButton.small(
+                          heroTag: 'recentrar',
+                          tooltip: 'Volver a seguir al vehiculo (vista 3D)',
+                          onPressed: _recentrarEnVehiculo,
+                          child: const Icon(Icons.my_location),
                         ),
+                      ),
                     ],
                   ),
                 ),

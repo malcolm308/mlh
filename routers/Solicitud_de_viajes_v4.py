@@ -2843,6 +2843,19 @@ async def api_get_trip(trip_id: str):
     # pintar el contador sin tener que recordar un número que el administrador
     # puede cambiar en cualquier momento.
     trip["tiempo_espera_cortesia_minutos"] = _cortesia_minutos_actual()
+
+    # Rumbo del vehiculo para que el cliente emule la vista 3D del chofer
+    # (bearing + tilt en su camara). TTL de 120 s con lo que la key de Garnet
+    # caduca sola si el chofer deja de reportar.
+    trip["driver_bearing"] = None
+    driver_id = trip.get("driver_id")
+    if driver_id:
+        try:
+            rumbo = await garnet.get(f"driver:bearing:{driver_id}")
+            if rumbo is not None:
+                trip["driver_bearing"] = float(rumbo)
+        except Exception:
+            logger.exception("No se pudo leer el rumbo de %s", driver_id)
     return trip
 
 
@@ -3569,6 +3582,10 @@ async def api_init_db():
 class DriverLocation(BaseModel):
     lat: float
     lng: float
+    # Rumbo del vehiculo (0 = norte, sentido horario). Lo envia la app del
+    # chofer con cada fix del GPS: el cliente lo usa para inclinar y orientar
+    # el mapa hacia adelante, como la vista 3D del chofer.
+    bearing: Optional[float] = None
 
 class DriverStatusUpdate(BaseModel):
     status: str  # available | busy | on_trip | offline
@@ -3576,6 +3593,15 @@ class DriverStatusUpdate(BaseModel):
 @router.post("/drivers/{driver_id}/location")
 async def api_set_driver_location(driver_id: str, body: DriverLocation):
     await update_driver_location(driver_id, body.lng, body.lat)
+    if body.bearing is not None:
+        try:
+            await garnet.set(
+                f"driver:bearing:{driver_id}",
+                str(round(float(body.bearing) % 360, 1)),
+                ex=120,
+            )
+        except Exception:
+            logger.exception("No se pudo guardar el rumbo de %s", driver_id)
     # Envia la posicion a Traccar para ir tejiendo la ruta del viaje.
     asyncio.create_task(
         asyncio.to_thread(_forward_driver_position_to_traccar, driver_id, body.lat, body.lng)

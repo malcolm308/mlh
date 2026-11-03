@@ -119,6 +119,39 @@ class ClientMapController {
     }
   }
 
+  /// Anima la camara al estilo "vista 3D": target en el vehiculo, bearing con
+  /// su rumbo, tilt fijo y zoom cerca. Es la emulacion en el cliente de la
+  /// camara de navegacion del chofer.
+  ///
+  /// La animacion va con [duration] para que no sea un salto seco, y mientras
+  /// corre se ignora el `onCameraMove` que provoca del propio movimiento
+  /// (misma ventana que usa `move`), de modo que la pantalla no confunda el
+  /// seguimiento automatico con un arrastre del usuario.
+  Future<void> animar3D(LatLng destino, double rumbo,
+      {double zoom = 16.0,
+      double tilt = 50.0,
+      int durationMs = 1000}) async {
+    final ctl = _ctl;
+    if (ctl == null) return;
+    _ignorarGestosHasta =
+        DateTime.now().add(Duration(milliseconds: durationMs + 200));
+    try {
+      await ctl.animateCamera(
+        mlib.CameraUpdate.newCameraPosition(
+          mlib.CameraPosition(
+            target: _ml(destino),
+            zoom: zoom,
+            bearing: rumbo % 360,
+            tilt: tilt,
+          ),
+        ),
+        duration: Duration(milliseconds: durationMs),
+      );
+    } catch (_) {
+      // Un fallo de animacion no debe tumbar el seguimiento.
+    }
+  }
+
   void dispose() {
     _ctl = null;
   }
