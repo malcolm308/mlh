@@ -125,6 +125,103 @@ async def recalcular(req: RecalcularRequest):
         geometry=geometria,
     )
 
+@router.post("/navegacion")
+async def navegacion(req: RecalcularRequest):
+    """Ruta con INDICACIONES paso a paso, para el asistente del chofer.
+
+    Same path que `/recalculate` pero pidiendo `steps=true` a OSRM. A cada paso
+    se le entrega ya traducido y tipado, en este orden:
+
+        instruccion     texto humano ("Gire a la derecha en San Lazaro")
+        tipo_maniobra   turn_left | turn_right | straight | roundabout | ...
+        distancia_metros
+        coordenada      {lat, lng} del punto donde ocurre la maniobra (para
+                        que el asistente anote "pase por aki" por radio)
+    """
+    url = (
+        f"{OSRM_BASE}/{req.origin.lng},{req.origin.lat};"
+        f"{req.destination.lng},{req.destination.lat}"
+        "?overview=full&geometries=geojson&steps=true&alternatives=false"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as cliente:
+            resp = await cliente.get(url)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="OSRM no respondio a tiempo.")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"No se pudo contactar OSRM: {e}")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"OSRM devolvio {resp.status_code}.")
+    try:
+        cuerpo = resp.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail="OSRM devolvio una respuesta ilegible.")
+
+    rutas = cuerpo.get("routes") or []
+    if not rutas:
+        raise HTTPException(status_code=404, detail="No hay ruta entre los puntos dados.")
+    ruta = rutas[0]
+
+    pasos = []
+    def _instr(tipo: str, modificador: Optional[str], nombre: str) -> str:
+        nombre = (nombre or "").strip()
+        calle = f" por {nombre}" if nombre else ""
+        segun_mod = {
+            "left": "Gire a la izquierda%s" % calle,
+            "right": "Gire a la derecha%s" % calle,
+            "slight left": "Ligero cambio a la izquierda%s" % calle,
+            "slight right": "Ligero cambio a la derecha%s" % calle,
+            "sharp left": "Giro fuerte a la izquierda%s" % calle,
+            "sharp right": "Giro fuerte a la derecha%s" % calle,
+            "straight": "Siga recto%s" % calle,
+            "uturn": "De la vuelta en U%s" % calle,
+        }
+        switch = {
+            "depart": "Salga%s" % calle,
+            "straight": "Continúe recto%s" % calle,
+            "turn": segun_mod.get(modificador, "Gire%s" % calle),
+            "new name": "Continúe%s" % calle,
+            "merge": "Incorpórese%s" % calle,
+            "on ramp": "Tome el acceso%s" % calle,
+            "off ramp": "Tome la salida%s" % calle,
+            "end of road": segun_mod.get(modificador, "Al final de la calle gire%s" % calle),
+            "roundabout": "Rotonda: prepárese para girar%s" % calle,
+            "rotary": "Roseta: prepárese para girar%s" % calle,
+            "exit roundabout": "Salga de la rotonda%s" % calle,
+            "fork": segun_mod.get(modificador, "Manténgase en la bifurcación%s" % calle),
+            "arrive": "Llegó a su destino",
+        }
+        texto = switch.get(tipo)
+        if not texto and modificador:
+            texto = segun_mod.get(modificador)
+        return texto or "Continúe hacia su destino"
+    for etapa in ruta.get("legs", []):
+        for s in etapa.get("steps", []):
+            maniobra = s.get("maneuver") or {}
+            lat_m, lng_m = maniobra.get("location") or [None, None]
+            if lng_m is None or lat_m is None:
+                continue
+            pasos.append({
+                "instruccion": _instr(
+                    str(maniobra.get("type") or ""),
+                    maniobra.get("modifier"),
+                    s.get("name") or "",
+                ),
+                "distancia_metros": float(s.get("distance") or 0),
+                "tipo_maniobra": str(maniobra.get("type") or ""),
+                "coordenada": {"lat": float(lat_m), "lng": float(lng_m)},
+            })
+    return {
+        "origin": {"lat": req.origin.lat, "lng": req.origin.lng},
+        "destination": {"lat": req.destination.lat, "lng": req.destination.lng},
+        "geometry": ruta.get("geometry"),
+        "distance_meters": float(ruta.get("distance") or 0),
+        "duration_seconds": float(ruta.get("duration") or 0),
+        "steps": pasos,
+    }
+
 
 @router.get("/salud")
 async def salud():
