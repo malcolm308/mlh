@@ -650,19 +650,17 @@ class TarifasEsperaIn(BaseModel):
     tiempo_espera_cortesia_minutos: Optional[float] = Field(
         4.0, description="Minutos gratis de espera. Lo que pase de ahi se paga al chofer.")
     precio_por_minuto: Optional[float] = Field(5.0)
-    precio_km_zona_basico: Optional[float] = Field(1000.0)
-    precio_km_zona_confort: Optional[float] = Field(1200.0)
-    precio_km_zona_triciclo: Optional[float] = Field(700.0)
-    precio_km_zona_moto: Optional[float] = Field(600.0)
-    zona_especial_activa: Optional[bool] = Field(True)
-    zona_especial_coords: Optional[Any] = Field(
-        default_factory=lambda: [
-            [23.001228, -82.416735],
-            [23.007982, -82.394788],
-            [22.989298, -82.413242],
-            [23.001007, -82.389251],
-        ],
-    )
+    # Zona especial del aeropuerto. Todo OPCIONAL a proposito: el panel Tkinter
+    # guarda SIN estos campos, y si el UPDATE los tocara igual, cada guardado
+    # de coeficientes pisaria los precios anclados al USD con los defaults
+    # "pelados" (1000/1200 en vez del valor x tasa del dia). Solo se escribe
+    # lo que la llamada trae de verdad.
+    precio_km_zona_basico: Optional[float] = None
+    precio_km_zona_confort: Optional[float] = None
+    precio_km_zona_triciclo: Optional[float] = None
+    precio_km_zona_moto: Optional[float] = None
+    zona_especial_activa: Optional[bool] = None
+    zona_especial_coords: Optional[Any] = None
 
 
 def _validar_tarifas(datos: "TarifasEsperaIn") -> Dict[str, Any]:
@@ -707,51 +705,53 @@ def _validar_tarifas(datos: "TarifasEsperaIn") -> Dict[str, Any]:
     }
 
     # --- Zona especial del aeropuerto -------------------------------
-    # Se valida y se GUARDA: antes este formulario recibia los precios y el
-    # polígono pero NUNCA los escribia en la base, y asi el administrador
-    # cambiaba la zona desde el panel y el cobro seguia con lo que hubiera
-    # en la fila.
+    # Se valida y se GUARDA solo si la llamada la trae. Antes este formulario
+    # recibia los precios y el poligono pero NUNCA los escribia en la base, y
+    # el administrador cambiaba la zona desde el panel y el cobro seguia con
+    # lo que hubiera en la fila.
     precios_zona = {}
     for nombre in ("basico", "confort", "triciclo", "moto"):
-        precios_zona["precio_km_zona_" + nombre] = _a_numero(
-            getattr(datos, "precio_km_zona_" + nombre),
-            "el precio por km de la zona (%s)" % nombre)
+        campo = "precio_km_zona_" + nombre
+        valor = getattr(datos, campo)
+        if valor is None:
+            continue
+        precios_zona[campo] = _a_numero(
+            valor, "el precio por km de la zona (%s)" % nombre)
     tarifas.update(precios_zona)
-    for nombre, valor in precios_zona.items():
+    for campo, valor in precios_zona.items():
         if valor <= 0:
             raise HTTPException(status_code=400, detail=
-                "%s debe ser mayor que cero." % nombre.replace("_", " "))
+                "%s debe ser mayor que cero." % campo.replace("_", " "))
 
-    tarifas["zona_especial_activa"] = bool(datos.zona_especial_activa)
+    if datos.zona_especial_activa is not None:
+        tarifas["zona_especial_activa"] = bool(datos.zona_especial_activa)
 
     coords = datos.zona_especial_coords
-    puntos_limpios = []
-    if isinstance(coords, str):
-        try:
-            coords = json.loads(coords)
-        except Exception:
+    if coords is not None:
+        puntos_limpios = []
+        if isinstance(coords, str):
+            try:
+                coords = json.loads(coords)
+            except Exception:
+                raise HTTPException(status_code=400, detail=
+                    "El polígono de la zona no es JSON valido.")
+        if not isinstance(coords, list) or len(coords) < 3:
             raise HTTPException(status_code=400, detail=
-                "El polígono de la zona no es JSON valido.")
-    if coords in (None, "", [],):
-        raise HTTPException(status_code=400, detail=
-            "El polígono de la zona necesita al menos 3 puntos [lat, lng].")
-    if not isinstance(coords, list) or len(coords) < 3:
-        raise HTTPException(status_code=400, detail=
-            "El polígono de la zona necesita al menos 3 puntos [lat, lng].")
-    for c in coords:
-        if not isinstance(c, (list, tuple)) or len(c) != 2:
-            raise HTTPException(status_code=400, detail=
-                "Cada punto del polígono es [lat, lng].")
-        try:
-            lat_c, lng_c = float(c[0]), float(c[1])
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail=
-                "Los puntos del polígono deben ser numericos.")
-        if not (-90 <= lat_c <= 90 and -180 <= lng_c <= 180):
-            raise HTTPException(status_code=400, detail=
-                "Un punto del polígono esta fuera de rango.")
-        puntos_limpios.append([lat_c, lng_c])
-    tarifas["zona_especial_coords"] = puntos_limpios
+                "El polígono de la zona necesita al menos 3 puntos [lat, lng].")
+        for c in coords:
+            if not isinstance(c, (list, tuple)) or len(c) != 2:
+                raise HTTPException(status_code=400, detail=
+                    "Cada punto del polígono es [lat, lng].")
+            try:
+                lat_c, lng_c = float(c[0]), float(c[1])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=
+                    "Los puntos del polígono deben ser numericos.")
+            if not (-90 <= lat_c <= 90 and -180 <= lng_c <= 180):
+                raise HTTPException(status_code=400, detail=
+                    "Un punto del polígono esta fuera de rango.")
+            puntos_limpios.append([lat_c, lng_c])
+        tarifas["zona_especial_coords"] = puntos_limpios
 
     return tarifas
 
@@ -796,12 +796,24 @@ async def guardar_tarifas_espera(datos: TarifasEsperaIn,
                                 admin: dict = Depends(require_admin)):
     limpio = _validar_tarifas(datos)
 
-    columnas = ("coef_corto_km, coef_corto_valor, coef_medio_km, "
-                "coef_medio_valor, coef_largo_valor, tiempo_espera_cortesia_minutos, "
-                "precio_km_zona_basico, precio_km_zona_confort, precio_km_zona_triciclo, "
-                "precio_km_zona_moto, zona_especial_activa")
-    asignaciones = ", ".join("%s = %%s" % c for c in columnas.split(", "))
-    valores = tuple(limpio[c.strip()] for c in columnas.split(", "))
+    # La zona especial (precios, interruptor y polígono) se escribe SOLO si
+    # la llamada la trae: asi el guardado normal del panel no pisa los
+    # precios anclados al USD.
+    columnas = ["coef_corto_km", "coef_corto_valor", "coef_medio_km",
+                "coef_medio_valor", "coef_largo_valor",
+                "tiempo_espera_cortesia_minutos"]
+    valores = [limpio[c] for c in columnas]
+    for campo in ("precio_km_zona_basico", "precio_km_zona_confort",
+                  "precio_km_zona_triciclo", "precio_km_zona_moto",
+                  "zona_especial_activa"):
+        if campo in limpio:
+            columnas.append(campo)
+            valores.append(limpio[campo])
+    if "zona_especial_coords" in limpio:
+        columnas.append("zona_especial_coords")
+        valores.append(psycopg2.extras.Json(limpio["zona_especial_coords"]))
+
+    asignaciones = ", ".join("%s = %%s" % c for c in columnas)
 
     with _conexion() as conn:
         cur = conn.cursor()
