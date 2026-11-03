@@ -654,6 +654,7 @@ class TarifasEsperaIn(BaseModel):
     precio_km_zona_confort: Optional[float] = Field(1200.0)
     precio_km_zona_triciclo: Optional[float] = Field(700.0)
     precio_km_zona_moto: Optional[float] = Field(600.0)
+    zona_especial_activa: Optional[bool] = Field(True)
     zona_especial_coords: Optional[Any] = Field(
         default_factory=lambda: [
             [23.001228, -82.416735],
