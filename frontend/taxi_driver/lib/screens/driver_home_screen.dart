@@ -20,8 +20,10 @@ import '../models/geo_fix.dart';
 import '../services/route_recalculation_service.dart';
 import '../services/trip_notification_service.dart';
 import '../services/ofertas_background_service.dart';
+import '../services/asistente_ruta.dart';
 import '../services/whatsapp_service.dart';
 import '../widgets/navigation_map_view.dart';
+import '../widgets/asistente_ruta.dart';
 import '../widgets/cancel_reason_dialog.dart';
 import '../widgets/cancel_trip_dialog.dart';
 import '../widgets/trip_info_panel.dart';
@@ -194,6 +196,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// cambiaba las ofertas hasta reiniciar la app. Ahora es estado, y "Mi
   /// Garaje" lo actualiza de vuelta al seleccionar otro vehiculo.
   String? _tipoVehiculoActivo;
+
+  /// El asistente de ruta paso a paso. Con viaje activo pide `steps` del OSRM
+  /// via backend y avanza pasos por radio de 30 m con cada fix del GPS.
+  final AsistenteRutaService _asistente = AsistenteRutaService();
 
   /// Vista previa del panel de viaje en curso, para desarrollo.
   ///
@@ -978,6 +984,8 @@ double? _rumboParaFlecha() {
     // Ultima posicion que conoce el servicio en primer plano: si tiene que
     // relevar el sondeo (app cerrada), usa este punto.
     unawaited(OfertasBackgroundService.guardarUltimaPosicion(p.latitude, p.longitude));
+    // El asistente aprende la posicion y avanza pasos por radio de 30 m.
+    _asistente.conPosicion(p);
     if (_online) {
       // El rumbo viaja con la posicion: el cliente lo usa para orientar la
       // camara 3D hacia adelante, como la vista del chofer. Solo con rumbo
@@ -1714,6 +1722,12 @@ final inTripPhase = active != null && active.status == 'in_progress';
       // cuando empieza a contar, y asi el boton llega con el numero correcto
       // desde el primer segundo.
       _cancelacion.cargar(driverId: widget.driverId);
+      // Asistente de ruta paso a paso: destino del viaje activo.
+      unawaited(_asistente.iniciar(
+        tripId: trip.tripId,
+        origen: _driverPos,
+        destino: trip.dropoff ?? trip.pickup ?? _driverPos,
+      ));
       _refreshRoutes();
     } catch (e) {
       _aceptandoTripId = null;
@@ -1835,6 +1849,9 @@ final updated = await widget.api.getTrip(trip.tripId);
     _tripPoller?.cancel();
     _tripPoller = null;
     _recalc.detener();
+    // El asistente de ruta se apaga con el viaje: ni mensajes ni peticiones
+    // fantasma al proxy de navegacion.
+    _asistente.detener();
     // El modo navegacion se apaga: sin viaje no hay rumbo que seguir ni tilt
     // que mantener. `NavCamera.reset()` olvida la fase y el zoom cacheados; el
     // bearing y el tilt a cero los aplica el siguiente tic del widget, que ya
@@ -2158,6 +2175,19 @@ final pts = await widget.api.getTripRoute(trip.tripId);
               onControlador: (c) => _controlador = c,
             ),
           ),
+          // El asistente de ruta paso a paso (Fase 3): arriba y centrado,
+          // con SafeArea. Aparece solo con viaje activo y pasos vigentes.
+          if (_asistente.activo)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: ListenableBuilder(
+                listenable: _asistente,
+                builder: (context, _) =>
+                    AsistenteRutaWidget(estado: _asistente.estado()),
+              ),
+            ),
           if (_error != null)
             Positioned(
               top: 64,

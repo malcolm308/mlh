@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/osrm_service.dart';
 import '../widgets/client_map_view.dart';
 
 class TripScreen extends StatefulWidget {
@@ -102,14 +103,29 @@ class _TripScreenState extends State<TripScreen> {
       status == 'in_progress';
 
   Future<void> _loadRoute(String tripId) async {
+    final t = _trip;
+    if (t == null) return;
+    final antes = _driverPos;
     try {
-      final pts = await widget.api.getTripRoute(tripId);
-      if (!mounted) return;
-      final antes = _driverPos;
-      setState(() {
-        _route = pts.map((p) => p.point).toList();
-        if (pts.isNotEmpty) _driverPos = pts.last.point;
-      });
+      if (t.status == 'in_progress' && t.driverId != null) {
+        // Viaje en marcha: la linea es la ruta RECORRIDA (Traccar).
+        final pts = await widget.api.getTripRoute(tripId);
+        if (!mounted) return;
+        setState(() {
+          _route = pts.map((p) => p.point).toList();
+          if (pts.isNotEmpty) _driverPos = pts.last.point;
+        });
+      } else if (t.driverId != null) {
+        // Esperando/recogida: la ruta PLANEADA por calles entre la recogida y
+        // el destino. Antes aqui solo habia una linea RECTA entre los dos
+        // puntos: no correspondia a ninguna calle y despistaba.
+        final pickup = t.pickupLocation ?? t.requestLocation;
+        if (pickup != null && t.dropoffLocation != null) {
+          final planificada = await OsrmService.route(pickup, t.dropoffLocation!);
+          if (!mounted) return;
+          setState(() => _route = planificada?.points ?? const []);
+        }
+      }
       _seguirVehiculo(antes);
     } catch (_) {}
   }
