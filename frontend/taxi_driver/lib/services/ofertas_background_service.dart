@@ -178,6 +178,15 @@ class OfertasBackgroundService {
 Future<void> onStartOfertas(ServiceInstance servicio) async {
   DartPluginRegistrant.ensureInitialized();
 
+  // El servicio puede ser reiniciado por el sistema en CUALQUIER momento
+  // (app cerrada, crash previo). Los canales de notificacion se crean aqui
+  // otra vez por si este isolate es lo primero que corre del proceso: sin el
+  // canal del servicio y el de ofertas, el primer `startForeground`/`show`
+  // tumbaria el proceso.
+  try {
+    await crearCanalServicio();
+  } catch (_) {}
+
   // Contexto desde SharedPreferences: token, driver_id, tipo activo y la
   // ultima posicion que la pantalla guardo con cada fix del GPS.
   final prefs = await SharedPreferences.getInstance();
