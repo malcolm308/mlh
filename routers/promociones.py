@@ -806,11 +806,23 @@ async def guardar_tarifas_espera(datos: TarifasEsperaIn,
         cur = conn.cursor()
         # Sin esto el UPDATE no tocaria nada en una base recien creada.
         cur.execute("INSERT INTO promociones (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
-        cur.execute("UPDATE promociones SET %s, actualizado_at = NOW(), "
-                    "actualizado_por = %%s WHERE id = 1" % asignaciones,
-                    valores + (admin.get("email"),))
-        conn.commit()
-        cur.close()
+        try:
+            cur.execute("UPDATE promociones SET %s, actualizado_at = NOW(), "
+                        "actualizado_por = %%s WHERE id = 1" % asignaciones,
+                        valores + (admin.get("email"),))
+            conn.commit()
+        except HTTPException:
+            raise
+        except Exception as e:
+            conn.rollback()
+            # Diagnostico de operacion: un 500 seco no decia QUE fallo el
+            # UPDATE (columna ausente, tipo, conexion del pool...).
+            logger.exception("tarifas-espera: fallo el UPDATE")
+            raise HTTPException(
+                status_code=500,
+                detail="tarifas-espera fallo: %r" % e)
+        finally:
+            cur.close()
 
     logger.info("tarifas-espera: guardada por %s -> coeficientes=%s/%s/%s "
                 "cortesia=%s min", admin.get("email"), limpio["coef_corto_valor"],
