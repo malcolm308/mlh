@@ -35,7 +35,7 @@ class PasoRuta {
   }
 }
 
-/// El estado que consume el widget flotante.
+/// Estado que consume el widget flotante.
 class EstadoAsistente {
   final String instruccion;
   final double distanciaMetros;
@@ -50,32 +50,43 @@ class EstadoAsistente {
   bool get activa => instruccion.isNotEmpty;
 }
 
-/// El asistente de ruta paso a paso.
+/// Asistente de ruta paso a paso, con ROUTE SNAPPING.
 ///
-/// Trabaja en dos capas:
+/// Tres piezas evitan el mareo del asistente:
 ///
-///  * **Ruta**: se pide al backend (`POST /api/routing/navegacion`, OSRM con
-///    `steps=true`) la lista de maniobras desde el punto del chofer hasta el
-///    destino del viaje activo. Se refresca cada [refrescoRuta] y tambien al
-///    terminar cada tramo (sirve para rutas largas con mas tramos).
-///  * **Posicion**: con cada fix del GPS mido Haversine al punto de maniobra
-///    siguiente; a menos de [radioAvance] metros se avanza al paso que sigue
-///    sin pedir nada al backend, y el contador del mensaje se refresca en
-///    caliente (5 m de tolerancia para no vibrar el numero).
+///  1. **Polyline**: se guarda la geometria completa que devuelve
+///     `/api/routing/navegacion` (LineString de OSRM). La distancia a la
+///     proxima maniobra NO se parte del GPS crudo: se parte del punto de la
+///     ruta mas cercano al coche (`snap`), caminando el trazo hasta el punto
+///     de maniobra.
+///  2. **Snap**: en cada fix se busca el punto mas cercano SOLO alrededor del
+///     ultimo indice conocido (ventana de [snapVentana] puntos): barato y sin
+///     confundir calles paralelas. Si el mejor queda > 150 m (desvio grande),
+///     se busca global una vez y la ruta se re-pide desde ahi.
+///  3. **Filtro GPS**: con velocidad < [velocidadBajaKmh] (parado, trafico)
+///     NO se actualiza la distancia ni se avanza: queda la ultima instrucccion
+///     valida.
+///
+/// El paso avanza al pasar a menos de [radioAvance] (20 m) del punto de
+/// maniobra, medido desde el punto ENCAJADO (no desde el GPS crudo).
 class AsistenteRutaService extends ChangeNotifier {
-  static const double radioAvance = 30.0;
+  static const double radioAvance = 20.0;
+  static const double velocidadBajaKmh = 5.0;
   static const Duration refrescoRuta = Duration(seconds: 60);
+  static const int snapVentana = 60;
 
   final List<PasoRuta> _pasos = [];
+  final List<LatLng> _polyline = [];
   int _indice = 0;
+  int _snapIndex = 0;
   double _restoAlPunto = 0;
   Timer? _refresco;
   String? _tripId;
+  String? _fase; // 'recogida' | 'destino'
   LatLng? _origen;
   LatLng? _destino;
   bool _pidiendo = false;
 
-  /// Estado actual para el widget (paso activo + metros que faltan).
   EstadoAsistente estado() {
     if (_pasos.isEmpty || _indice >= _pasos.length) {
       return EstadoAsistente(
@@ -92,77 +103,146 @@ class AsistenteRutaService extends ChangeNotifier {
 
   bool get activo => _destino != null && _pasos.isNotEmpty;
 
-  /// Arranca (o rearrranca con destino nuevo). [origen] es la posicion
-  /// actual del chofer, [destino] el final del viaje activo.
+  /// Arranca (o rearraanca con destino/fase nueva). [fase]=`recogida` al
+  /// aceptar, `destino` al presionar "Iniciar Viaje": el cambio de fase
+  /// OBLIGA a borrar los pasos viejos y pedir la ruta hacia el nuevo destino
+  /// (si no, el asistente seguiria dando indicaciones de la ruta vieja).
   Future<void> iniciar({
     required String tripId,
+    required String fase,
     required LatLng origen,
     required LatLng destino,
   }) async {
-    final repetido = _tripId == tripId &&
+    final mismo = _tripId == tripId &&
+        _fase == fase &&
         _destino != null &&
-        (_destino!.latitude - destino.latitude).abs() < 1e-5 &&
-        (_destino!.longitude - destino.longitude).abs() < 1e-5;
-    if (repetido) return;
+        _pasos.isNotEmpty;
+    if (mismo) return;
     _tripId = tripId;
+    _fase = fase;
     _origen = origen;
     _destino = destino;
-    _indice = 0;
     _pasos.clear();
+    _polyline.clear();
+    _indice = 0;
+    _snapIndex = 0;
+    _restoAlPunto = 0;
     notifyListeners();
     await _pedirRuta();
     _refresco?.cancel();
     _refresco = Timer.periodic(refrescoRuta, (_) => unawaited(_pedirRuta()));
   }
 
-  /// Termina todo: al completar o cancelar el viaje.
+  /// Reset completo (completar, cancelar, perder el viaje).
   void detener() {
     _tripId = null;
+    _fase = null;
     _destino = null;
     _pasos.clear();
+    _polyline.clear();
     _indice = 0;
+    _snapIndex = 0;
     _refresco?.cancel();
     _refresco = null;
     notifyListeners();
   }
 
-  /// El fix nuevo del chofer: avanza pasos por radio y actualiza el contador.
-  void conPosicion(LatLng p) {
+  /// Llega el fix del chofer. Con velocidad < 5 km/h se ignora para el
+  /// calculo: mantine la ultima instruccion valida.
+  void conPosicion(LatLng p, {double? velocidadKmh}) {
     if (_pasos.isEmpty || _indice >= _pasos.length) return;
     _origen = p;
-    final resto = _distancia(p, _pasos[_indice].coordenada);
-    if (resto <= radioAvance) {
-      // Punto de maniobra alcanzado: se salta cada paso pegado a este (las
-      // rotondas pueden mandar 2-3 pasos muy juntos) y el contador del nuevo
-      // mensaje apunta al paso siguiente.
-      while (_indice < _pasos.length - 1 &&
-          _distancia(p, _pasos[_indice].coordenada) <= radioAvance) {
-        _indice++;
-      }
-      _restoAlPunto = 0;
-      notifyListeners();
-      unawaited(_pedirRuta());
+    if (velocidadKmh != null && velocidadKmh < velocidadBajaKmh) return;
+    if (_polyline.length < 2) {
+      // Sin polyline (OSRAM fallo): fallback con el GPS crudo.
+      _apuntarResto(_distancia(p, _pasos[_indice].coordenada), radioAvance);
       return;
     }
-    // El contador muestra "en N m" con la distancia REAL al punto de
-    // maniobra, no la del tramo: el delta de 5 m evita vibrar el numero con
-    // el cruego normal del GPS.
+
+    // 1. Snap: punto de la ruta mas cercano alrededor del ultimo indice.
+    _snapIndex = _snap(p);
+    final enRuta = _polyline[_snapIndex];
+
+    // 2. Distancia POR LA RUTA: del punto encajado, caminando el trazo
+    //    hasta el punto de maniobra del paso vigente.
+    final hasta = _pasos[_indice].coordenada;
+    var idx = _snapIndex;
+    var anterior = enRuta;
+    var resto = 0.0;
+    while (idx < _polyline.length - 1) {
+      final siguiente = _polyline[idx + 1];
+      resto += _distancia(anterior, siguiente);
+      if (_distancia(siguiente, hasta) <= radioAvance) break;
+      anterior = siguiente;
+      idx++;
+    }
+    if (idx >= _polyline.length - 1) resto = _distancia(enRuta, hasta);
+
+    // 3. Avance: la distancia del punto ENCAJADO al punto de maniobra:
+    //    < radioAvance => paso siguiente.
+    if (_distancia(enRuta, hasta) <= radioAvance) {
+      var i = _indice;
+      while (i < _pasos.length - 1 &&
+          _distancia(enRuta, _pasos[i].coordenada) <= radioAvance) {
+        i++;
+      }
+      _indice = i + 1 <= _pasos.length - 1 ? i + 1 : _pasos.length - 1;
+      _snapIndex = _snap(enRuta);
+      _restoAlPunto = 0;
+      notifyListeners();
+      // Si se agotaron los pasos de ESTA ruta (fase terminada), el refresco
+      // periodic re-pide desde el punto actual con el destino vigente.
+      return;
+    }
+    _apuntarResto(resto, radioAvance);
+  }
+
+  /// Al recalcular por desvio, se regeneran pasos desde el punto actual.
+  Future<void> recalcularDesde(LatLng p) async {
+    _origen = p;
+    _polyline.clear();
+    _snapIndex = 0;
+    await _pedirRuta();
+  }
+
+  void _apuntarResto(double resto, double radio) {
     if ((resto - _restoAlPunto).abs() > 5) {
       _restoAlPunto = resto;
       notifyListeners();
     }
   }
 
-  /// Al recalcular por desvio, se regeneran los pasos desde el punto actual.
-  Future<void> recalcularDesde(LatLng p) async {
-    _origen = p;
-    await _pedirRuta();
-  }
-
   static double _distancia(LatLng a, LatLng b) {
     final dx = (a.latitude - b.latitude) * 111000;
     final dy = (a.longitude - b.longitude) * 111000 * math.cos(a.latitude);
     return math.sqrt(dx * dx + dy * dy);
+  }
+
+  /// Indice del punto de la ruta mas cercano, buscando cerca de [_snapIndex].
+  int _snap(LatLng p) {
+    if (_polyline.isEmpty) return 0;
+    final desde = math.max(0, _snapIndex - snapVentana ~/ 4);
+    final hasta = math.min(_polyline.length - 1, _snapIndex + snapVentana);
+    var mejorIdx = _snapIndex;
+    var mejor = double.infinity;
+    for (var i = desde; i <= hasta; i++) {
+      final d = _distancia(p, _polyline[i]);
+      if (d < mejor) {
+        mejor = d;
+        mejorIdx = i;
+      }
+    }
+    if (mejor > 150) {
+      // Desvio: buscar global y con esto el proximo refresco re-pide pasos.
+      for (var i = 0; i < _polyline.length; i++) {
+        final d = _distancia(p, _polyline[i]);
+        if (d < mejor) {
+          mejor = d;
+          mejorIdx = i;
+        }
+      }
+    }
+    return mejorIdx;
   }
 
   Future<void> _pedirRuta() async {
@@ -184,12 +264,19 @@ class AsistenteRutaService extends ChangeNotifier {
           .whereType<Map<String, dynamic>>()
           .map(PasoRuta.fromJson)
           .toList();
-      // El primer paso ("Salga...") esta en la posicion ACTUAL: el asistente
-      // apunta directamente al segundo, que es la primera instruccion real.
+      final geo = json['geometry'] as Map<String, dynamic>?;
+      final coords = geo?['coordinates'] as List<dynamic>? ?? const [];
+      _polyline
+        ..clear()
+        ..addAll(coords.whereType<List>().map(
+            (c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())));
       _pasos
         ..clear()
         ..addAll(lista);
+      // El primer paso ("Salga...") ya es la posicion actual: apuntar al
+      // segundo, la instruccion real.
       _indice = _pasos.length > 1 ? 1 : 0;
+      _snapIndex = _polyline.isEmpty ? 0 : _snap(origen);
       notifyListeners();
     } catch (e) {
       debugPrint('[ASISTENTE] ruta paso a paso fallo: $e');

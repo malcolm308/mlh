@@ -153,25 +153,25 @@ class _TripScreenState extends State<TripScreen> {
       status == 'driver_arrived' ||
       status == 'in_progress';
 
+  /// Llenado de la ruta segun el estado del viaje:
+  ///
+  ///  * `requested` / `accepted` / `driver_arrived`: ruta PLANEADA por calles
+  ///    entre recogida y destino (OSRM). En `requested` tambien: el pasajero
+  ///    ya contenido la ruta real mientras espera, no una recta inventada.
+  ///  * `in_progress`: NO se usa el Traccar suelto ni rectas: se recarga la
+  ///    ruta planeada recogida->destino. Cada estado hace UNA peticion (la
+  ///    cache de [OsrmService] paga el resto del sondeo).
+  ///
+  /// El fallback en linea recta ya no se dibuja aqui: se pasa un
+  /// `straightLine` vacio a proposito (la unica recta SUTIL/punteada existe,
+  /// pero solo si OSRM devil ni ni siquiera se toca).
   Future<void> _loadRoute(String tripId) async {
     final t = _trip;
     if (t == null) return;
     final antes = _driverPos;
     try {
-      if (t.status == 'in_progress' && t.driverId != null) {
-        // Viaje en marcha: la linea es la ruta RECORRIDA (Traccar).
-        final pts = await widget.api.getTripRoute(tripId);
-        if (!mounted) return;
-        setState(() {
-          _route = pts.map((p) => p.point).toList();
-          if (pts.isNotEmpty) _driverPos = pts.last.point;
-        });
-      } else {
-        //TODO (`requested` sin chofrer, `accepted`, `driver_arrived`): la
-        // ruta PLANEADA por calles entre la recogida y el destino. Antes
-        // aqui solo habia una linea RECTA entre los dos puntos (el pasajero
-        // veia una raya negra que no correspondia a ninguna calle mientras
-        // esperaba). SOLO si OSRM falla queda la recta sutil de respaldo.
+      if (t.driverId != null || t.status == 'requested') {
+        // Ruta PLANEADA por calles, tanto esperando como en curso.
         final pickup = t.pickupLocation ?? t.requestLocation;
         if (pickup != null && t.dropoffLocation != null) {
           final planificada = await OsrmService.route(pickup, t.dropoffLocation!);
@@ -446,10 +446,10 @@ class _TripScreenState extends State<TripScreen> {
                         minZoom: ApiConfig.minZoom.toDouble(),
                         maxZoom: ApiConfig.maxZoom.toDouble(),
                         route: _route,
-                        straightLine: t.requestLocation != null &&
-                                t.dropoffLocation != null
-                            ? [t.requestLocation!, t.dropoffLocation!]
-                            : const [],
+                        // Fase 1: SIN recta de dos puntos en el viaje. Si
+                        // OSRM falla, no se dibuja nada: la app re-pide en
+                        // el siguiente sondeo de 3 s.
+                        straightLine: const [],
                         // Ruta real por calles: AZUL OSCURO, grosor 5 (Fase 1).
                         // La recta de dos puntos SOLO queda como respaldo si
                         // OSRM fallo, y sale PUNTEADA y sutil (ver wrapper).

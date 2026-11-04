@@ -994,14 +994,14 @@ double? _rumboParaFlecha() {
     }
   }
 
-  void _setDriverPos(LatLng p, {double? rumbo}) {
+  void _setDriverPos(LatLng p, {double? rumbo, double? velocidadKmh}) {
     setState(() => _driverPos = p);
     _publicarRuta();
     // Ultima posicion que conoce el servicio en primer plano: si tiene que
     // relevar el sondeo (app cerrada), usa este punto.
     unawaited(OfertasBackgroundService.guardarUltimaPosicion(p.latitude, p.longitude));
     // El asistente aprende la posicion y avanza pasos por radio de 30 m.
-    _asistente.conPosicion(p);
+    _asistente.conPosicion(p, velocidadKmh: velocidadKmh);
     // Y via WebSocket (push) al pasajero del viaje activo.
     _ws.posicion(p.latitude, p.longitude, rumbo);
     if (_online) {
@@ -1104,7 +1104,10 @@ double? _rumboParaFlecha() {
       final rumbo = (fix.velocidadKmh > 3.0 && fix.rumbo != null)
           ? fix.rumbo
           : null;
-      _setDriverPos(fix.position, rumbo: rumbo);
+      // El asistente usa la velocidad cruda (el filtro de 5 km/h es suyo
+      // interno); el rumbo solo viaja si el fix trae uno de verdad.
+      _setDriverPos(fix.position,
+          rumbo: rumbo, velocidadKmh: fix.velocidadKmh);
     });
   }
 
@@ -1740,11 +1743,12 @@ final inTripPhase = active != null && active.status == 'in_progress';
       // cuando empieza a contar, y asi el boton llega con el numero correcto
       // desde el primer segundo.
       _cancelacion.cargar(driverId: widget.driverId);
-      // Asistente de ruta paso a paso: destino del viaje activo.
+      // Asistente de ruta paso a paso: PRIMERA fase = ir por la RECOGIDA.
       unawaited(_asistente.iniciar(
         tripId: trip.tripId,
+        fase: 'recogida',
         origen: _driverPos,
-        destino: trip.dropoff ?? trip.pickup ?? _driverPos,
+        destino: trip.pickup ?? trip.requestLocation ?? _driverPos,
       ));
       _refreshRoutes();
     } catch (e) {
@@ -1836,7 +1840,17 @@ final updated = await widget.api.getTrip(trip.tripId);
       }
       });
       // Al pasar a 'in_progress' la ruta de recogida se borra al instante y
-      // aparece la ruta hacia el destino.
+      // aparece la ruta hacia el destino. Y el ASISTENTE tambien: reset
+      // completo de pasos + nueva ruta hacia el destino final (si no,
+      // seguiria dando indicaciones de la ruta de recogida).
+      if (updated.status == 'in_progress') {
+        unawaited(_asistente.iniciar(
+          tripId: updated.tripId,
+          fase: 'destino',
+          origen: _driverPos,
+          destino: updated.dropoff ?? _driverPos,
+        ));
+      }
       await _refreshRoutes();
     } catch (e) {
       if (!mounted) return;
