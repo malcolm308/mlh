@@ -1235,7 +1235,13 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
             # Zona especial: DESTINO o RECOGIDA dentro del polígono (aeropuerto
             # hacia y desde la ciudad).
-            cur_x = conn.cursor()
+            # Zona especial: DESTINO o RECOGIDA dentro del poligono (aeropuerto
+            # hacia y desde la ciudad).
+            # Con RealDictCursor: el cursor base devuelve TUPLAS y
+            # `punto_recogida["lat"]` reventaba con
+            # "tuple indices must be integers, not str" — ese es el 500 que
+            # impedia COMPLETAR el viaje después del deploy de la zona.
+            cur_x = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur_x.execute("""
                 SELECT ST_Y(COALESCE(pickup_location, request_location)::geometry) AS lat,
                        ST_X(COALESCE(pickup_location, request_location)::geometry) AS lng
