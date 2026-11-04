@@ -153,7 +153,10 @@ class _TripScreenState extends State<TripScreen> {
         Navigator.of(context).pop('cancelled');
         return;
       }
-      if (t.driverId != null && _inActive(t.status)) {
+      // La ruta se dibuja en TODOS los estados del viaje, incluyendo
+      // `requested` (en espera): el pasajero debe ver el recorrido aunque
+      // nadie haya aceptado todavia.
+      if (t.driverId != null || t.status == 'requested') {
         await _loadRoute(t.tripId);
       }
     } catch (e) {
