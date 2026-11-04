@@ -230,6 +230,23 @@ def health():
     return {"status": "ok"}
 
 
+# ===================== DIAGNOSTICO DE 500 =====================
+# Temporal: el 500 generico de FastAPI se come el mensaje y desde el movil no
+# hay forma de saber QUE endpoint y por que fallo. Con este handler el snackbar
+# de la app muestra `TipoError: mensaje` y el despliegue se depura en un solo
+# intento. Quitar cuando la causa del 500 este cerrada.
+from fastapi.responses import JSONResponse  # noqa: E402
+
+
+@app.exception_handler(Exception)
+async def handler_500_generico(request, exc):
+    logger.exception("500 en %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"[{type(exc).__name__}] {exc}"},
+    )
+
+
 @app.post("/admin/init")
 def admin_init(x_admin_token: str = Header(..., alias="X-Admin-Token")):
     """Fuerza la creacion de las 8 tablas. Protegido por ADMIN_INIT_TOKEN."""
