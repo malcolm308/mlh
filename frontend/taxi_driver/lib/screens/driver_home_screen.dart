@@ -1748,7 +1748,7 @@ final inTripPhase = active != null && active.status == 'in_progress';
         tripId: trip.tripId,
         fase: 'recogida',
         origen: _driverPos,
-        destino: trip.pickup ?? trip.requestLocation ?? _driverPos,
+        destino: trip.pickup ?? trip.dropoff ?? _driverPos,
       ));
       _refreshRoutes();
     } catch (e) {
