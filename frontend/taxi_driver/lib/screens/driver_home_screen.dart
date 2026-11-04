@@ -21,6 +21,7 @@ import '../services/route_recalculation_service.dart';
 import '../services/trip_notification_service.dart';
 import '../services/ofertas_background_service.dart';
 import '../services/asistente_ruta.dart';
+import '../services/ws_chofer.dart';
 import '../services/whatsapp_service.dart';
 import '../widgets/navigation_map_view.dart';
 import '../widgets/asistente_ruta.dart';
@@ -201,6 +202,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// via backend y avanza pasos por radio de 30 m con cada fix del GPS.
   final AsistenteRutaService _asistente = AsistenteRutaService();
 
+  /// WebSocket (`/ws/chofer/{id}`): envia la posicion con rumbo para el
+  /// cliente y recibe la oferta empujada. El sondeo queda de respaldo.
+  final WsChofer _ws = WsChofer();
+
   /// Vista previa del panel de viaje en curso, para desarrollo.
   ///
   /// Se activa solo con `flutter run --dart-define=PANEL_DEMO=true`: al abrir
@@ -364,6 +369,11 @@ double? _rumboParaFlecha() {
     _initNotificaciones();
     _bg.configurar();
     _tipoVehiculoActivo = widget.profile.tipoVehiculo;
+    // Oferta empujada por el despacho: la app re-polling al instante para
+    // levantar la tarjeta con TODOS sus filtros (tipo, rechazados, plazo).
+    _ws.onDatos = (canal, datos) {
+      if ((datos['event'] ?? '') == 'trip_offer') unawaited(_tick());
+    };
 
     // El saldo decide si se puede aceptar un viaje, asi que se lee al abrir y
     // se refresca con el mismo ritmo que el sondeo de ofertas.
@@ -599,6 +609,7 @@ double? _rumboParaFlecha() {
         // en primer plano ya no tiene nada que custodiar.
         unawaited(WakelockPlus.disable());
         unawaited(_bg.detener());
+        _ws.detener();
         if (!mounted) return;
         setState(() {
           _online = false;
@@ -654,6 +665,11 @@ double? _rumboParaFlecha() {
           driverId: widget.driverId,
           token: widget.api.token ?? '',
           tipoVehiculo: _tipoVehiculoActivo,
+        );
+        // WebSocket: posicion + ofertas empujadas.
+        _ws.iniciar(
+          driverId: widget.driverId,
+          token: widget.api.token ?? '',
         );
         OfertasBackgroundService.guardarTipo(_tipoVehiculoActivo);
         _startTicker();
@@ -986,6 +1002,8 @@ double? _rumboParaFlecha() {
     unawaited(OfertasBackgroundService.guardarUltimaPosicion(p.latitude, p.longitude));
     // El asistente aprende la posicion y avanza pasos por radio de 30 m.
     _asistente.conPosicion(p);
+    // Y via WebSocket (push) al pasajero del viaje activo.
+    _ws.posicion(p.latitude, p.longitude, rumbo);
     if (_online) {
       // El rumbo viaja con la posicion: el cliente lo usa para orientar la
       // camara 3D hacia adelante, como la vista del chofer. Solo con rumbo
@@ -2115,6 +2133,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     if (_online) {
       unawaited(WakelockPlus.disable());
       unawaited(_bg.detener());
+      _ws.detener();
       // Salir en linea deja al chofer "available" en el backend para siempre:
       // gana ofertas sin estar conectado. Se marca offline, sin bloquear el
       // cierre si falla.

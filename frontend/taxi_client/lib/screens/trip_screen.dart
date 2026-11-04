@@ -7,6 +7,7 @@ import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/osrm_service.dart';
+import '../services/ws_cliente.dart';
 import '../widgets/client_map_view.dart';
 
 class TripScreen extends StatefulWidget {
@@ -37,6 +38,10 @@ class _TripScreenState extends State<TripScreen> {
   List<LatLng> _route = [];
   LatLng? _driverPos;
 
+  /// WebSocket del cliente: push del viaje activo (posiciones del chofer y
+  /// cambios de estado) por encima del sondeo de 3 s, que queda de respaldo.
+  final WsCliente _ws = WsCliente();
+
   /// `true` cuando el mapa sigue al vehiculo.
   ///
   /// En cuanto el pasajero toca el mapa se pone en `false` y la camara pasa a
@@ -54,11 +59,48 @@ class _TripScreenState extends State<TripScreen> {
     super.initState();
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
+    // Push del viaje: posiciones del chofer y cambios de estado al instante.
+    _ws.onDatos = (canal, datos) {
+      if (!mounted) return;
+      final evento = (datos['event'] ?? '').toString();
+      if (evento == 'driver_position') {
+        final lat = (datos['lat'] as num?)?.toDouble();
+        final lng = (datos['lng'] as num?)?.toDouble();
+        if (lat == null || lng == null) return;
+        setState(() => _driverPos = LatLng(lat, lng));
+        // Vista 3D inmediata: el sondeo tarda 3 s mas; el rumbo del push es
+        // mas fresco que el de la base de datos. Si el pasajero movio el
+        // mapa, `_aplicarVista3D` respeta eso y no toca nada.
+        final rumbo = (datos['bearing'] as num?)?.toDouble();
+        if (rumbo != null) {
+          unawaited(
+              _mapController.animar3D(LatLng(lat, lng), rumbo));
+        } else {
+          _aplicarVista3D();
+        }
+        return;
+      }
+      switch (evento) {
+        case 'trip_accepted' ||
+        'trip_started' ||
+        'trip_cancelled' ||
+        'trip_expired' ||
+        'trip_completed':
+          unawaited(_refresh());
+      }
+    };
+    // arranca el socket (token del usuario sesionado) y suscribe el viaje
+    _ws.iniciar(
+      clienteId: widget.clientId,
+      token: widget.api.token ?? '',
+    );
+    _ws.suscribirViaje(widget.tripId);
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _ws.detener();
     _mapController.dispose();
     super.dispose();
   }

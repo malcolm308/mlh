@@ -28,6 +28,8 @@ from routers import referidos
 from routers import users
 from routers import auth_reset
 from routers import app_init
+from routers import tiempo_real
+from routers import app_init
 from services import indices
 from services.traccar_listener import listen_traccar
 
@@ -117,6 +119,7 @@ app.include_router(referidos.router)
 app.include_router(users.router)
 app.include_router(auth_reset.router)
 app.include_router(app_init.router)
+app.include_router(tiempo_real.router)
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la
 # app arranca igualmente: lo reintentan el startup y el job de APScheduler.
