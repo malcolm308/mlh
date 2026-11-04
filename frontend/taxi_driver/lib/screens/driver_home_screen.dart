@@ -2233,9 +2233,13 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                 ),
               ),
             ),
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            left: 8,
+          // Menu hamburguesa SOLO cuando el chofer no tiene viaje activo:
+          // during navegacion estorban la vista (mismo criterio que la
+          // campana a la derecha). El busque de GPS si queda: funcional.
+          if (_activeTrip == null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 8,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -2263,31 +2267,38 @@ final pts = await widget.api.getTripRoute(trip.tripId);
               ],
             ),
           ),
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 24,
-            right: 8,
-            child: Column(
-              children: [
-                _circularButton(
-                  Icons.notifications_none,
-                  tooltip: 'Notificaciones',
-                  onTap: _showNotifications,
-                ),
-                const SizedBox(height: 8),
-                _circularButton(
-                  _gpsState == LocationPermissionState.granted
-                      ? (Icons.gps_fixed)
-                      : (Icons.gps_off),
-                  tooltip: _gpsState == LocationPermissionState.granted
-                      ? 'Recentrar en mi posición'
-                      : 'Activar GPS',
-                  onTap: _gpsState == LocationPermissionState.granted
-                      ? _followGpsAgain
-                      : _enableGps,
-                ),
-              ],
+          // Campana SOLO con el chofer libre; el GPS queda visible porque es
+          // funcional en el viaje. Aparecen si `_alPerderElViaje` borra
+          // `_activeTrip` y desaparecen en el `setState` al aceptar.
+          if (_activeTrip == null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 24,
+              right: 8,
+              child: Column(
+                children: [
+                  if (_activeTrip == null) ...[
+                    _circularButton(
+                      Icons.notifications_none,
+                      tooltip: 'Notificaciones',
+                      onTap: _showNotifications,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  // GPS SIEMPRE visible: funcional (recetar) durante el viaje.
+                  _circularButton(
+                    _gpsState == LocationPermissionState.granted
+                        ? (Icons.gps_fixed)
+                        : (Icons.gps_off),
+                    tooltip: _gpsState == LocationPermissionState.granted
+                        ? 'Recentrar en mi posición'
+                        : 'Activar GPS',
+                    onTap: _gpsState == LocationPermissionState.granted
+                        ? _followGpsAgain
+                        : _enableGps,
+                  ),
+                ],
+              ),
             ),
-          ),
           if (_selectedOffer != null || _lostOffer != null)
             _buildOfferOverlay(),
           if (_selectedOffer == null && _lostOffer == null) _buildPanelInferior(),

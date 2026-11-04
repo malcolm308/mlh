@@ -38,6 +38,14 @@ class _TripScreenState extends State<TripScreen> {
   List<LatLng> _route = [];
   LatLng? _driverPos;
 
+  /// Ultimo rumbo CONOCIDO del vehiculo.
+  ///
+  /// El chófer solo envia bearing cuando anda (por debajo de 3 km/h ninguno
+  /// es fiable). Con el conservado, la vista 3D sigue apuntando hacia
+  /// adelante aunque el GPS del chofer no envie uno nuevo (luz roja, rotonda,
+  /// GPS sin fix momentáneo).
+  double? _ultimoRumboVehiculo;
+
   /// WebSocket del cliente: push del viaje activo (posiciones del chofer y
   /// cambios de estado) por encima del sondeo de 3 s, que queda de respaldo.
   final WsCliente _ws = WsCliente();
@@ -69,10 +77,11 @@ class _TripScreenState extends State<TripScreen> {
         if (lat == null || lng == null) return;
         setState(() => _driverPos = LatLng(lat, lng));
         // Vista 3D inmediata: el sondeo tarda 3 s mas; el rumbo del push es
-        // mas fresco que el de la base de datos. Si el pasajero movio el
-        // mapa, `_aplicarVista3D` respeta eso y no toca nada.
+        // mas fresco, pero SIEL chofer va lento o parado NO llega bearing
+        // (el chofrice no lo manda): se conserva el ULTIMO CONOCIDO.
         final rumbo = (datos['bearing'] as num?)?.toDouble();
         if (rumbo != null) {
+          _ultimoRumboVehiculo = rumbo;
           unawaited(
               _mapController.animar3D(LatLng(lat, lng), rumbo));
         } else {
@@ -157,10 +166,12 @@ class _TripScreenState extends State<TripScreen> {
           _route = pts.map((p) => p.point).toList();
           if (pts.isNotEmpty) _driverPos = pts.last.point;
         });
-      } else if (t.driverId != null) {
-        // Esperando/recogida: la ruta PLANEADA por calles entre la recogida y
-        // el destino. Antes aqui solo habia una linea RECTA entre los dos
-        // puntos: no correspondia a ninguna calle y despistaba.
+      } else {
+        //TODO (`requested` sin chofrer, `accepted`, `driver_arrived`): la
+        // ruta PLANEADA por calles entre la recogida y el destino. Antes
+        // aqui solo habia una linea RECTA entre los dos puntos (el pasajero
+        // veia una raya negra que no correspondia a ninguna calle mientras
+        // esperaba). SOLO si OSRM falla queda la recta sutil de respaldo.
         final pickup = t.pickupLocation ?? t.requestLocation;
         if (pickup != null && t.dropoffLocation != null) {
           final planificada = await OsrmService.route(pickup, t.dropoffLocation!);
@@ -177,7 +188,8 @@ class _TripScreenState extends State<TripScreen> {
   ///
   ///  * El viaje esta activo (`accepted` yendo a buscar, o `in_progress`).
   ///  * El pasajero no ha movido el mapa (`_siguiendo`).
-  ///  * El chofer reporta rumbo (GPS en marcha; parado no llega bearing).
+  ///  * Hay rumbo: el traumatizado del WS/poll, o el ULTIMO conocido
+  ///    ([_ultimoRumboVehiculo]) para chofers lentos o parados.
   ///
   /// Es la emulacion en el cliente de la vista 3D del chofer: la camara se
   /// anima (1000 ms) al punto del vehiculo con `bearing` de su rumbo, `tilt`
@@ -189,7 +201,7 @@ class _TripScreenState extends State<TripScreen> {
     if (!_siguiendo) return;
     final t = _trip;
     final vehiculo = _driverPos;
-    final rumbo = t?.driverBearing;
+    final rumbo = t?.driverBearing ?? _ultimoRumboVehiculo;
     if (t == null ||
         vehiculo == null ||
         rumbo == null ||
@@ -228,7 +240,7 @@ class _TripScreenState extends State<TripScreen> {
       unawaited(_reencuadrarSiElVehiculoSalio(vehiculo));
     }
 
-    final rumbo = t.driverBearing;
+    final rumbo = t.driverBearing ?? _ultimoRumboVehiculo;
     final activo = t.status == 'accepted' || t.status == 'in_progress';
 
     // Mientras el chofer rueda: vista 3D, que es la emulacion pedida. La
@@ -438,10 +450,14 @@ class _TripScreenState extends State<TripScreen> {
                                 t.dropoffLocation != null
                             ? [t.requestLocation!, t.dropoffLocation!]
                             : const [],
-                        // El cliente ve la escena en plano, con el norte arriba:
-                        // no rota ni inclina.
-                        routeColor: const Color(0xFF007AFF),
-                        routeWidth: 4,
+                        // Ruta real por calles: AZUL OSCURO, grosor 5 (Fase 1).
+                        // La recta de dos puntos SOLO queda como respaldo si
+                        // OSRM fallo, y sale PUNTEADA y sutil (ver wrapper).
+                        routeColor: const Color(0xFF0047B3),
+                        routeWidth: 5,
+                        // Fallback punteado, azul muy tenue: visible pero no
+                        // confundible con la ruta real.
+                        straightColor: const Color(0x33007AFF),
                         pins: [
                           if (_driverPos != null)
                             MapPin(

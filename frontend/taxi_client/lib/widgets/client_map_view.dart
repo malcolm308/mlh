@@ -360,8 +360,9 @@ class _ClientMapViewState extends State<ClientMapView> {
         belowLayerId: _debajoDe,
       );
 
-      // La recta es provisional, mientras OSRM no responde: sin halo y con el
-      // negro translucido que se usaba antes.
+      // La recta es PROVISIONAL, mientras OSRM no responde: azul muy sutil y
+      // PUNTEADA, para que nadie la confunda con la ruta real ni con la
+      // recta negra que era antes.
       await ctl.addGeoJsonSource(_srcRecta, _geojsonLineaSegura(const []));
       await ctl.addLineLayer(
         _srcRecta,
@@ -369,9 +370,10 @@ class _ClientMapViewState extends State<ClientMapView> {
         mlib.LineLayerProperties(
           lineColor: _hex(widget.straightColor),
           lineWidth: _grosor(widget.routeWidth - 1),
-          lineOpacity: 1,
+          lineOpacity: 0.55,
           lineJoin: 'round',
           lineCap: 'round',
+          lineDasharray: const [2.0, 2.5],
         ),
         belowLayerId: _layerRutaHalo,
       );
