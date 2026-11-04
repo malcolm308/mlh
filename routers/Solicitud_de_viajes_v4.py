@@ -2282,8 +2282,10 @@ async def offer_trip_to_nearby_drivers(
             "expires_in_secs": offer_ttl_secs,
             # Mismo precio que ve el pasajero (fila `trips.precio_estimado`,
             # ya corregida para pasar por la zona especial y el coeficiente).
-            # Si el row no lo trae, no se inventa: la app lo pedira.
-            "precio_estimado": trip.get("precio_estimado"),
+            # NUMERIC llega como Decimal de Pydantic/psycopg2: OJO con
+            # `json.dumps`, que no serializa Decimal a si mismo (ese noqa
+            # causaba un 500 en POST /trips con chofers cercanos).
+            "precio_estimado": float(trip.get("precio_estimado") or 0),
             "currency": "CUP",
         }))
 
