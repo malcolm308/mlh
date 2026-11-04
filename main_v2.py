@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import ORJSONResponse
@@ -64,6 +65,29 @@ app = FastAPI(
     # moviles lentas.
     default_response_class=ORJSONResponse,
 )
+
+from fastapi.encoders import jsonable_encoder  # noqa: E402
+import orjson  # noqa: E402
+
+
+class RespuestaJSON(ORJSONResponse):
+    """orjson, pero pasando antes `jsonable_encoder`.
+
+    El `ORJSONResponse` por defecto lanza `TypeError: Object of type Decimal
+    is not JSON serializable` si un endpoint deja escapar un Decimal (lo que
+    pasaba en POST /trips cuando habia chofres cerca y la respuesta traia el
+    bloque de despacho). Antes el `JSONResponse` de FastAPI pasaba TODO por
+    `jsonable_encoder`, que convierte Decimal->float, ObjectId->str, etc.
+    Con esta subclase conservamos la velocidad de orjson SIN perder esa
+    conversion, y cualquier endpoint sigue viendo su contenido igual que
+    antes.
+    """
+
+    def render(self, content: Any) -> bytes:
+        return orjson.dumps(
+            jsonable_encoder(content),
+            option=orjson.OPT_SERIALIZE_NUMPY,
+        )
 
 # ---- Archivos estaticos ----
 # Aqui vive el APK que se comparte desde el menu de las apps. Se monta antes de
