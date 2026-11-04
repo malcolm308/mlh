@@ -3106,19 +3106,15 @@ async def api_complete_trip(trip_id: str, body: TripComplete, background: Backgr
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
-    except Exception:
-        # Cualquier otra excepcion (Mongo caido, campo nulo, error de Postgres)
-        # llegaba como un 500 sin texto. Se registra con traza y se devuelve un
-        # mensaje que el chofer pueda entender, sin filtrar detalles internos.
+    except Exception as e:
+        # Diagnostico TEMPORAL: el 500 enmascarado con texto generico es
+        # impossible de depurar desde el movil. Se devuelve el tipo y mensaje
+        # del fallo real; se quita cuando el 500 este cerrado.
         logger.exception("api_complete_trip fallo para el viaje %s", trip_id)
         raise HTTPException(
             status_code=500,
-            detail=(
-                "No se pudo completar el viaje. Vuelve a intentarlo; si sigue "
-                "fallando, el viaje quedo pendiente y hay que cerrarlo a mano."
-            ),
+            detail=f"[{type(e).__name__}] {e}",
         )
-
     # Los pasos siguientes (comision, bono, status del chofer) se ejecutan
     # DESPUES de que el viaje ya esta 'completed' en BD. Si alguno falla, el
     # viaje sigue cerrado: no hay que devolver 500 al chofer por eso.
