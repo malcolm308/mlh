@@ -164,7 +164,9 @@ class _TripScreenState extends State<TripScreen> {
     }
   }
 
+  /// `true` en los estados activos de la ventana del viaje.
   bool _inActive(String status) =>
+      status == 'requested' ||
       status == 'accepted' ||
       status == 'driver_arrived' ||
       status == 'in_progress';
