@@ -374,6 +374,13 @@ double? _rumboParaFlecha() {
     _ws.onDatos = (canal, datos) {
       if ((datos['event'] ?? '') == 'trip_offer') unawaited(_tick());
     };
+    // El chofer es el DUEÑO de la ruta: cada trazo nuevo del asistente
+    // (fase/recalculo) viaja por WS al cliente activo del viaje.
+    _asistente.onRutaNueva = (puntos) {
+      final trip = _activeTrip;
+      if (trip == null) return;
+      _ws.rutaViaje(trip.tripId, puntos);
+    };
 
     // El saldo decide si se puede aceptar un viaje, asi que se lee al abrir y
     // se refresca con el mismo ritmo que el sondeo de ofertas.
@@ -1104,10 +1111,15 @@ double? _rumboParaFlecha() {
       final rumbo = (fix.velocidadKmh > 3.0 && fix.rumbo != null)
           ? fix.rumbo
           : null;
-      // El asistente usa la velocidad cruda (el filtro de 5 km/h es suyo
-      // interno); el rumbo solo viaja si el fix trae uno de verdad.
-      _setDriverPos(fix.position,
-          rumbo: rumbo, velocidadKmh: fix.velocidadKmh);
+      // RUMBO BASADO EN LA RUTA (geometria del asistente snap→siguiente), por
+      // encima del CourseOfGround del GPS: es el mismo bearing que consume el
+      // cliente (WS y /drivers/location) para que ambos mapas apunten igual.
+      final rumboRuta = _asistente.rumboDesdeRuta(fix.position);
+      _setDriverPos(
+        fix.position,
+        rumbo: rumboRuta ?? rumbo,
+        velocidadKmh: fix.velocidadKmh,
+      );
     });
   }
 

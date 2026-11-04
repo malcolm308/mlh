@@ -96,6 +96,19 @@ class _TripScreenState extends State<TripScreen> {
         'trip_expired' ||
         'trip_completed':
           unawaited(_refresh());
+        case 'trip_route':
+          // El chofer es el DUEÑO de la ruta: replica SU geometria (mismas
+          // calles, mismo asistente) en vez de pedir la propia.
+          final geo = (datos['geometry'] ?? const {}) as Map;
+          final coords = geo['coordinates'] as List<dynamic>? ?? const [];
+          final pts = <LatLng>[
+            for (final c in coords)
+              if (c is List && c.length >= 2)
+                LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
+          ];
+          if (pts.length >= 2 && mounted) {
+            setState(() => _route = pts);
+          }
       }
     };
     // arranca el socket (token del usuario sesionado) y suscribe el viaje

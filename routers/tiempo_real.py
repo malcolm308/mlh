@@ -65,6 +65,45 @@ def _viaje_activo_de(driver_id: str) -> Optional[str]:
         return None
 
 
+async def _ruta_viaje_chofer(driver_id: str, datos: dict) -> None:
+    """El chofer comparte la ROUTA acttiva del viaje (dueño de la ruta).
+
+    Se valida que el viaje pertenezca al chofer que la manda y se retransmite
+    en `trip:{trip_id}:events` como evento `trip_route`; el cliente activo lo
+    repl senza su propia consulta OSRM (misma geometria, misma vista 3D).
+    """
+    trip_id = (datos.get("trip_id") or "").strip()
+    geo = datos.get("geometry") or {}
+    if not trip_id or geo.get("type") != "LineString":
+        return
+    coords = geo.get("coordinates")
+    if not isinstance(coords, list) or len(coords) < 2:
+        return
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM trips WHERE trip_id = %s AND driver_id = %s",
+                (trip_id, driver_id),
+            )
+            fila = cur.fetchone()
+            cur.close()
+        if not fila:
+            logger.warning(
+                "ruta_viaje rechazada: %s no pertenece a %s", trip_id, driver_id)
+            return
+    except Exception:
+        logger.exception("No se pudo validar el owner de la ruta %s", trip_id)
+        return
+    await publish_trip_event(trip_id, "trip_route", {
+        "trip_id": trip_id,
+        "geometry": {
+            "type": "LineString",
+            "coordinates": coords[:1500],
+        },
+    })
+
+
 async def _posicion_chofer(driver_id: str, datos: dict) -> None:
     """Update de posicion por WS: misma logica que el endpoint HTTP."""
     lat = datos.get("lat")
@@ -171,6 +210,8 @@ async def ws_tiempo_real(
                             {"suscripcion": viaje}))
                 elif rol == "chofer" and isinstance(datos.get("posicion"), dict):
                     await _posicion_chofer(user_id, datos["posicion"])
+                elif rol == "chofer" and isinstance(datos.get("ruta_viaje"), dict):
+                    await _ruta_viaje_chofer(user_id, datos["ruta_viaje"])
 
         bombeo_task = asyncio.create_task(bombeo())
         receptor_task = asyncio.create_task(receptor())

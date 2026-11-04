@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../api_config.dart';
@@ -60,6 +61,24 @@ class WsChofer {
         'lat': lat,
         'lng': lng,
         'bearing': ?bearing,
+      },
+    });
+  }
+
+  /// Ruta completa del viaje activo (the DUEÑO de la ruta la comparte): the
+  /// geometry es el mismo LineString que consume el asistente, para que el
+  /// cliente replique la ruta exacta del chofer.
+  void rutaViaje(String tripId, List<LatLng> puntos) {
+    if (puntos.length < 2) return;
+    _enviar({
+      'ruta_viaje': {
+        'trip_id': tripId,
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': [
+            for (final p in puntos) [p.longitude, p.latitude],
+          ],
+        },
       },
     });
   }

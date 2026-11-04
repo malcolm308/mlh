@@ -70,7 +70,7 @@ class EstadoAsistente {
 /// El paso avanza al pasar a menos de [radioAvance] (20 m) del punto de
 /// maniobra, medido desde el punto ENCAJADO (no desde el GPS crudo).
 class AsistenteRutaService extends ChangeNotifier {
-  static const double radioAvance = 20.0;
+  static const double radioAvance = 30.0;
   static const double velocidadBajaKmh = 5.0;
   static const Duration refrescoRuta = Duration(seconds: 60);
   static const int snapVentana = 60;
@@ -102,6 +102,12 @@ class AsistenteRutaService extends ChangeNotifier {
   }
 
   bool get activo => _destino != null && _pasos.isNotEmpty;
+
+  /// Aviso de RUTA NUEVA (fase o recalculo): ahi arriba camino todo el trazo
+  /// para que el chofer sea el DUEÑO de la ruta y el cliente la replique
+  /// copiando la misma geometria.
+  void Function(List<LatLng> puntos)? _onRutaNueva;
+  set onRutaNueva(void Function(List<LatLng> puntos)? cb) => _onRutaNueva = cb;
 
   /// Arranca (o rearraanca con destino/fase nueva). [fase]=`recogida` al
   /// aceptar, `destino` al presionar "Iniciar Viaje": el cambio de fase
@@ -160,8 +166,20 @@ class AsistenteRutaService extends ChangeNotifier {
     }
 
     // 1. Snap: punto de la ruta mas cercano alrededor del ultimo indice.
-    _snapIndex = _snap(p);
+    final snap = _snap(p);
+    _snapIndex = snap.$1;
     final enRuta = _polyline[_snapIndex];
+    if (snap.$2 > 150) {
+      // DESVIO: el chofer ya no esta cerca del trazo. Se vuelve a pedir la
+      // ruta a OSRM y la cola REINICIA desde el punto actual (comportamiento
+      // de navegadores reales). La polyline se limpia para que no quede
+      // ninguna instruccion del trazado viejo.
+      _polyline.clear();
+      _indice = 0;
+      notifyListeners();
+      unawaited(_pedirRuta());
+      return;
+    }
 
     // 2. Distancia POR LA RUTA: del punto encajado, caminando el trazo
     //    hasta el punto de maniobra del paso vigente.
@@ -187,7 +205,7 @@ class AsistenteRutaService extends ChangeNotifier {
         i++;
       }
       _indice = i + 1 <= _pasos.length - 1 ? i + 1 : _pasos.length - 1;
-      _snapIndex = _snap(enRuta);
+      _snapIndex = _snap(enRuta).$1;
       _restoAlPunto = 0;
       notifyListeners();
       // Si se agotaron los pasos de ESTA ruta (fase terminada), el refresco
@@ -195,6 +213,31 @@ class AsistenteRutaService extends ChangeNotifier {
       return;
     }
     _apuntarResto(resto, radioAvance);
+  }
+
+  /// Rumbo del VEHICULO calculado analiticamente desdee la ruta (no la
+  /// brujula del telefono): punto snap -> punto 2-3 posiciones adelante.
+  ///
+  /// Es el bearing que viaja forward: al cliente (WS y `/drivers/location`)
+  /// para que ambos mapas apunten igual, y como respaldo para el modo
+  /// navegacion del chofer cuando el GPS.CourseOfGround no vale.
+  ///
+  /// Devuelve null si el snap es muy cerca del final (no queda adelante) o
+  /// si la velocidad no lo avala (la capa llamante ya resolvera conservar
+  /// el ultimo rumbo conocido).
+  double? rumboDesdeRuta(LatLng p) {
+    if (_polyline.length < 3) return null;
+    final idx = _snap(p).$1;
+    final desde = _polyline[idx];
+    final hasta = _polyline[math.min(_polyline.length - 1, idx + 2)];
+    const M = 111000.0;
+    final dLat = (hasta.latitude - desde.latitude) * M;
+    final dLng = (hasta.longitude - desde.longitude) *
+        M *
+        math.cos(desde.latitude);
+    if (dLat.abs() < 1e-9 && dLng.abs() < 1e-9) return null;
+    var deg = math.atan2(dLng, dLat) * 180 / math.pi;
+    return (deg + 360) % 360;
   }
 
   /// Al recalcular por desvio, se regeneran pasos desde el punto actual.
@@ -219,8 +262,9 @@ class AsistenteRutaService extends ChangeNotifier {
   }
 
   /// Indice del punto de la ruta mas cercano, buscando cerca de [_snapIndex].
-  int _snap(LatLng p) {
-    if (_polyline.isEmpty) return 0;
+  /// Devuelve `(indice, distanciaMetros)`.
+  (int, double) _snap(LatLng p) {
+    if (_polyline.isEmpty) return (0, 0);
     final desde = math.max(0, _snapIndex - snapVentana ~/ 4);
     final hasta = math.min(_polyline.length - 1, _snapIndex + snapVentana);
     var mejorIdx = _snapIndex;
@@ -242,7 +286,7 @@ class AsistenteRutaService extends ChangeNotifier {
         }
       }
     }
-    return mejorIdx;
+    return (mejorIdx, mejor);
   }
 
   Future<void> _pedirRuta() async {
@@ -276,8 +320,11 @@ class AsistenteRutaService extends ChangeNotifier {
       // El primer paso ("Salga...") ya es la posicion actual: apuntar al
       // segundo, la instruccion real.
       _indice = _pasos.length > 1 ? 1 : 0;
-      _snapIndex = _polyline.isEmpty ? 0 : _snap(origen);
+      _snapIndex = _polyline.isEmpty ? 0 : _snap(origen).$1;
       notifyListeners();
+      // Nueva ruta (fase/num recalculo): avisar a quien quiera dibujar el
+      // mismo trazo (el cliente lo recibe por WS desde el chofer).
+      _onRutaNueva?.call(_polyline);
     } catch (e) {
       debugPrint('[ASISTENTE] ruta paso a paso fallo: $e');
     } finally {
