@@ -8,6 +8,7 @@ python-multipart==0.0.32
 Pillow==11.1.0
 pillow-heif==1.8.0
 httpx==0.28.1
+orjson==3.13.0
 apscheduler==3.11.3
 psycopg2-binary==2.9.12
 redis==7.4.0

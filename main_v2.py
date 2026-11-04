@@ -1,9 +1,11 @@
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi.responses import ORJSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from routers import billetera
 from routers import CRUD_MONGODB
@@ -25,6 +27,7 @@ from routers import soporte
 from routers import referidos
 from routers import users
 from routers import auth_reset
+from routers import app_init
 from services import indices
 from services.traccar_listener import listen_traccar
 
@@ -53,7 +56,12 @@ for _stream in (sys.stdout, sys.stderr):
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(
+    # orjson: serializacion ~2-4x mas rapida que el json de stdlib en cada
+    # respuesta JSON, la mayoria es listas de ofertas/estado para redes
+    # moviles lentas.
+    default_response_class=ORJSONResponse,
+)
 
 # ---- Archivos estaticos ----
 # Aqui vive el APK que se comparte desde el menu de las apps. Se monta antes de
@@ -72,6 +80,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# ---- GZip ----
+# El territorio manda: desde Cuba cada JSON viaja por 3G/GPRS, y las respuestas
+# de listas (ofertas, historial, tarifas) pesan 3-6x lo necesario sin comprimir.
+# El cliente de Dart (package:http con HttpClient) ya declara
+# `Accept-Encoding: gzip` y descomprime solo, asi que no hace falta tocar
+# nada en las apps para beneficiarse. Brotli NO se anuncia: dart:io no
+# descomprime br de forma transparente y se romperia.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # ---- Routers ----
 # El panel de administracion va antes que CRUD_MONGODB: si no, el GET /admin/{id}
@@ -100,6 +116,7 @@ app.include_router(soporte.router)
 app.include_router(referidos.router)
 app.include_router(users.router)
 app.include_router(auth_reset.router)
+app.include_router(app_init.router)
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la
 # app arranca igualmente: lo reintentan el startup y el job de APScheduler.

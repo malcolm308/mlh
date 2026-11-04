@@ -1550,14 +1550,13 @@ def get_trips_by_client(client_id: str, limit: int = 50) -> list[dict]:
                 ST_AsText(request_location) as request_location,
                 ST_AsText(pickup_location) as pickup_location,
                 ST_AsText(dropoff_location) as dropoff_location,
-                requested_at, started_at, completed_at, created_at,
-                hora_llegada, espera_secs, excedente_espera_secs,
-                coeficiente_aplicado,
+                requested_at, started_at, completed_at,
+                hora_llegada,
                 GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
-                distance_km, duration_secs,
-                base_fare, distance_fare, tip, total_fare,
+                distance_km,
+                base_fare, distance_fare, total_fare,
                 currency, payment_method,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
                 request_address, dropoff_address
@@ -1580,14 +1579,13 @@ def get_trips_by_driver(driver_id: str, limit: int = 50) -> list[dict]:
                 ST_AsText(request_location) as request_location,
                 ST_AsText(pickup_location) as pickup_location,
                 ST_AsText(dropoff_location) as dropoff_location,
-                requested_at, started_at, completed_at, created_at,
-                hora_llegada, espera_secs, excedente_espera_secs,
-                coeficiente_aplicado,
+                requested_at, started_at, completed_at,
+                hora_llegada,
                 GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
-                distance_km, duration_secs,
-                base_fare, distance_fare, tip, total_fare,
+                distance_km,
+                base_fare, distance_fare, total_fare,
                 currency, payment_method,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado
             FROM trips WHERE driver_id = %s ORDER BY requested_at DESC LIMIT %s;
