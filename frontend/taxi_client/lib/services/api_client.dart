@@ -31,6 +31,40 @@ class ApiClient {
 
   static const Duration _timeout = Duration(seconds: 15);
 
+  /// Cliente HTTP PERSISTENTE (Keep-Alive).
+  ///
+  /// Antes se usaban las funciones de nivel superior de `package:http`
+  /// (`http.get/post/...`), que crean y cierran un `HttpClient` nuevo POR
+  /// CADA peticion: a Render se lo negociaba el TLS desde cero cada vez
+  /// (~0.5-1 s extra por llamada desde Cuba). Un mismo cliente reutiliza
+  /// conexiones ociosas (`HttpClient.maxConnectionsPerHost` y el pool nativo
+  /// se encargan) y manda `Accept-Encoding: gzip` de serie, de modo que
+  /// cuando el backend responde comprimido se descomprime solo.
+  static final http.Client _cliente = http.Client();
+
+  /// Caché de lecturas GET por prefijo de URL con su TTL.
+  ///
+  /// Solo datos que no cambian con frecuencia (tarifas, tipos de vehiculo,
+  /// promociones). Un lectura MUTABLE (perfil, garaje descuentos) NO se
+  /// cachea para no romper escrituras posteriores.
+  static const Map<String, Duration> _ttlCacheGET = {
+    '/api/tariffs': Duration(minutes: 5),
+    '/vehiculos/tipos': Duration(minutes: 30),
+    '/admin/promociones/tarifas-espera': Duration(seconds: 60),
+    '/admin/promociones': Duration(minutes: 2),
+    '/driver/vehicles': Duration(seconds: 30),
+  };
+
+  static final Map<String, (DateTime, dynamic)> _cacheGET = {};
+
+  static Duration? _ttlPorCache(String url) {
+    final ruta = Uri.parse(url).path;
+    for (final e in _ttlCacheGET.entries) {
+      if (ruta.startsWith(e.key)) return e.value;
+    }
+    return null;
+  }
+
   /// Esperas entre reintentos de fallos de red (1 s y 3 s).
   static const List<Duration> _reintentos = [
     Duration(seconds: 1),
@@ -97,6 +131,31 @@ class ApiClient {
     return jsonDecode(utf8.decode(r.bodyBytes));
   }
 
+  /// GET con cache por TTL (solo rutas declaradas en [_ttlCacheGET]).
+  static Future<dynamic> _getConCache(String url, Map<String, String>? headers,
+      Duration? timeout) async {
+    final ttl = _ttlPorCache(url);
+    if (ttl != null) {
+      final r = _cacheGET[url];
+      if (r != null && DateTime.now().difference(r.$1) < ttl) {
+        return r.$2;
+      }
+    }
+    final datos = await _ejecutar(
+      () => _cliente.get(Uri.parse(url), headers: _headers(headers)),
+      timeout: timeout,
+    );
+    if (datos.statusCode >= 200 && datos.statusCode < 300) {
+      final decodificado = _descodificar(datos);
+      if (ttl != null) _cacheGET[url] = (DateTime.now(), decodificado);
+      return decodificado;
+    }
+    throw ApiException(
+      '${_errorLegible(datos)} (HTTP ${datos.statusCode})',
+      statusCode: datos.statusCode,
+    );
+  }
+
   static Future<dynamic> _request(
     String method,
     String url, {
@@ -104,25 +163,24 @@ class ApiClient {
     Map<String, String>? headers,
     Duration? timeout,
   }) async {
+    if (method == 'GET') return _getConCache(url, headers, timeout);
     final r = await _ejecutar(() {
       final uri = Uri.parse(url);
       switch (method) {
-        case 'GET':
-          return http.get(uri, headers: _headers(headers));
         case 'POST':
-          return http.post(uri,
+          return _cliente.post(uri,
               headers: _headers(headers),
               body: body == null ? null : jsonEncode(body));
         case 'PUT':
-          return http.put(uri,
+          return _cliente.put(uri,
               headers: _headers(headers),
               body: body == null ? null : jsonEncode(body));
         case 'PATCH':
-          return http.patch(uri,
+          return _cliente.patch(uri,
               headers: _headers(headers),
               body: body == null ? null : jsonEncode(body));
         case 'DELETE':
-          return http.delete(uri, headers: _headers(headers));
+          return _cliente.delete(uri, headers: _headers(headers));
         default:
           throw ApiException('Método HTTP no soportado: $method');
       }
@@ -173,7 +231,7 @@ class ApiClient {
     required Map<String, dynamic> body,
     Map<String, String>? headers,
   }) async {
-    final r = await _ejecutar(() => http.post(
+    final r = await _ejecutar(() => _cliente.post(
           Uri.parse(url),
           headers: _headers(headers),
           body: jsonEncode(body),
@@ -209,7 +267,7 @@ class ApiClient {
     }
     if (headers != null) req.headers.addAll(headers);
     try {
-      final streamed = await req.send().timeout(_timeout);
+      final streamed = await _cliente.send(req).timeout(_timeout);
       final r = await http.Response.fromStream(streamed);
       if (r.statusCode >= 200 && r.statusCode < 300) return _descodificar(r);
       throw ApiException(
