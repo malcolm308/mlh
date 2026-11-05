@@ -54,7 +54,7 @@ class DriverHomeScreen extends StatefulWidget {
 }
 
 class _DriverHomeScreenState extends State<DriverHomeScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const int _offerLimitSecs = 20;
   static const int _lostCloseSecs = 5;
 
@@ -159,6 +159,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   Timer? _ticker;
   Timer? _tripPoller;
+  Timer? _earningsTimer;
   Timer? _offerTimer;
   int _offerCountdown = 0;
   DateTime? _offerDeadlineAt;
@@ -370,6 +371,17 @@ double? _rumboParaFlecha() {
     _tiposVehiculo.cargar();
 
     _loadTodayEarnings();
+    // Reloj del servidor: el telefono puede ir una hora adelantado (Cuba no
+    // retraso la hora en 2026) y eso hacia que un viaje recien aceptado
+    // pareciera obsoleto.
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(widget.api.sincronizarReloj());
+    // La tarjeta de ganancias se refresca sola: antes solo cambiaba al
+    // completar un viaje o al pulsar el icono, y al volver de otra pantalla
+    // seguia mostrando el valor viejo.
+    _earningsTimer?.cancel();
+    _earningsTimer = Timer.periodic(
+        const Duration(seconds: 60), (_) => _loadTodayEarnings());
     _initGps();
     _initNotificaciones();
     _bg.configurar();
@@ -578,17 +590,21 @@ double? _rumboParaFlecha() {
 
   Future<void> _loadTodayEarnings() async {
     try {
-      print('Cargando ganancias para ${widget.driverId}...');
       final e = await widget.api.getTodayEarnings(widget.driverId);
-      print('Ganancias recibidas: ${e.totalEarnings}');
       if (!mounted) return;
-      setState(() {
-        _todayEarnings = e.totalEarnings;
-        print('_todayEarnings actualizado a: $_todayEarnings');
-      });
+      setState(() => _todayEarnings = e.totalEarnings);
     } catch (e) {
-      print('Error cargando ganancias: $e');
+      debugPrint('[GANANCIAS] no se pudo refrescar: $e');
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // Al volver del segundo plano el reloj pudo cambiar y las ganancias
+    // quedaron viejas: se resincroniza y se repinta la tarjeta.
+    unawaited(widget.api.sincronizarReloj());
+    _loadTodayEarnings();
   }
 
   @override
@@ -596,6 +612,8 @@ double? _rumboParaFlecha() {
     _gpsSub?.cancel();
     _ticker?.cancel();
     _tripPoller?.cancel();
+    _earningsTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _offerTimer?.cancel();
       _lostTimer?.cancel();
       _subNotif?.cancel();
@@ -1666,7 +1684,7 @@ final inTripPhase = active != null && active.status == 'in_progress';
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefViajeTrip, viaje.tripId);
     await prefs.setString(
-        _prefViajeTs, DateTime.now().toUtc().toIso8601String());
+        _prefViajeTs, widget.api.ahoraUtc.toIso8601String());
   }
 
   Future<void> _limpiarMarcadorViaje() async {
@@ -1682,7 +1700,9 @@ final inTripPhase = active != null && active.status == 'in_progress';
   /// del reloj del móvil; si el viaje no lo trae, se usa el timestamp que se
   /// guardó al aceptar o restaurar el viaje.
   Future<bool> _esViajeObsoleto(TripOffer viaje) async {
-    final ahora = DateTime.now().toUtc();
+    // `ahoraUtc` aplica el desfase del servidor: el reloj del movil puede ir
+    // una hora adelantado y un viaje recien aceptado parecia de 60 minutos.
+    final ahora = widget.api.ahoraUtc;
     DateTime? base = _parseTimestampUtc(viaje.requestedAt);
     if (base == null) {
       final ts =
@@ -3482,7 +3502,11 @@ if (pickup != null)
                     driverId: widget.driverId,
                     initialProfile: widget.profile,
                   ),
-                ));
+                )).then((_) {
+                  // El perfil pudo cambiar el Fondo o el estado: la tarjeta de
+                  // ganancias se refresca al volver.
+                  if (mounted) _loadTodayEarnings();
+                });
               },
             ),
             ListTile(
@@ -3500,7 +3524,9 @@ if (pickup != null)
                     driverId: widget.driverId,
                     fullName: widget.profile.fullName,
                   ),
-                ));
+                )).then((_) {
+                  if (mounted) _loadTodayEarnings();
+                });
               },
             ),
             ListTile(
@@ -3515,7 +3541,9 @@ if (pickup != null)
                     driverId: widget.driverId,
                     fullName: widget.profile.fullName,
                   ),
-                ));
+                )).then((_) {
+                  if (mounted) _loadTodayEarnings();
+                });
               },
             ),
             ListTile(

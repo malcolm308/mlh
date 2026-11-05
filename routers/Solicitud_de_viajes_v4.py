@@ -12,7 +12,14 @@ import psycopg2
 import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 from datetime import datetime, timedelta, date, timezone
-from zoneinfo import ZoneInfo
+
+from tiempo_cuba import (
+    CUBA_TZ,
+    ahora_cuba,
+    fecha_cuba,
+    offset_cuba,
+    rango_dia_utc,
+)
 
 try:
     from shapely.geometry import Point, Polygon
@@ -205,7 +212,9 @@ def _distancia_recta_km(lat1: float, lng1: float, lat2: float, lng2: float) -> f
         return valor
 
 # ===================== Zona horaria Cuba =====================
-CUBA_TZ = ZoneInfo("America/Havana")
+# `CUBA_TZ` viene de `tiempo_cuba`: desfase fijo configurable con
+# CUBA_UTC_OFFSET. Cuba no retraso el reloj en 2026 y `America/Havana` ya no
+# representa la hora oficial del pais.
 
 # ===================== Garnet (Redis) =====================
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -1053,7 +1062,7 @@ def daily_trip_metrics():
   choferes_activos, clientes_activos, actualizado_en
 )
 SELECT
-  DATE(completed_at AT TIME ZONE 'America/Havana') AS dia,
+  (completed_at + %s)::date AS dia,
   COUNT(*) AS viajes_completados,
   SUM(total_fare) AS facturado,
   AVG(total_fare) AS ticket_promedio,
@@ -1062,7 +1071,7 @@ SELECT
   NOW()
 FROM trips
 WHERE status = 'completed'
-  AND completed_at >= ((NOW() AT TIME ZONE 'America/Havana')::date - INTERVAL '2 days')::timestamp AT TIME ZONE 'America/Havana'
+  AND completed_at >= %s
 GROUP BY 1
 ON CONFLICT (dia) DO UPDATE SET
   viajes_completados = EXCLUDED.viajes_completados,
@@ -1072,7 +1081,12 @@ ON CONFLICT (dia) DO UPDATE SET
   clientes_activos   = EXCLUDED.clientes_activos,
   actualizado_en     = NOW();
             """
-            cur.execute(actualizar_daily_trip_metrics_table)
+            desde = fecha_cuba() - timedelta(days=2)
+            inicio, _ = rango_dia_utc(desde)
+            cur.execute(
+                actualizar_daily_trip_metrics_table,
+                (timedelta(hours=offset_cuba()), inicio),
+            )
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -1754,15 +1768,19 @@ def get_driver_earnings(driver_id: str, from_date: Optional[date] = None, to_dat
         where = "WHERE driver_id = %s AND status = 'completed'"
         params: list = [driver_id]
 
-        # `completed_at` se guarda en UTC, pero from_date/to_date son fechas
-        # locales de Cuba. Convertimos a hora Cuba antes de comparar para que
-        # el corte del dia coincida con la medianoche de Cuba, no con UTC.
+        # `completed_at` es un TIMESTAMP *sin* zona que guarda UTC. El corte
+        # del dia se calcula en Python (medianoche de Cuba pasada a UTC) y se
+        # compara directamente; usar `AT TIME ZONE 'America/Havana'` sobre una
+        # columna que ya es UTC corria el dia varias horas y mezclaba viajes de
+        # ayer con los de hoy.
         if from_date:
-            where += " AND (completed_at AT TIME ZONE 'America/Havana')::date >= %s"
-            params.append(from_date)
+            inicio, _ = rango_dia_utc(from_date)
+            where += " AND completed_at >= %s"
+            params.append(inicio)
         if to_date:
-            where += " AND (completed_at AT TIME ZONE 'America/Havana')::date < %s"
-            params.append(to_date + timedelta(days=1))
+            _, fin = rango_dia_utc(to_date)
+            where += " AND completed_at < %s"
+            params.append(fin)
 
         cur.execute(
             f"""
@@ -1779,6 +1797,48 @@ def get_driver_earnings(driver_id: str, from_date: Optional[date] = None, to_dat
         row = dict(cur.fetchone())
         cur.close()
         return row
+
+
+def get_driver_earnings_por_dia(driver_id: str, desde: date, hasta: date) -> list:
+    """Ganancias agrupadas por dia local de Cuba, de `hasta` hacia atras.
+
+    Se devuelven solo los dias con viajes; el cliente rellena los huecos con 0.
+    """
+    if hasta < desde:
+        desde, hasta = hasta, desde
+    inicio, _ = rango_dia_utc(desde)
+    _, fin = rango_dia_utc(hasta)
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # `completed_at` es UTC naive: sumarle el desfase de Cuba lo convierte
+        # en hora local y el `::date` ya corta a la medianoche correcta.
+        cur.execute(
+            """
+            SELECT
+                (completed_at + %s)::date AS dia,
+                COUNT(*) AS total_trips,
+                COALESCE(SUM(total_fare), 0) AS total_earnings
+            FROM trips
+            WHERE driver_id = %s
+              AND status = 'completed'
+              AND completed_at >= %s
+              AND completed_at < %s
+            GROUP BY 1
+            ORDER BY 1 DESC;
+            """,
+            (timedelta(hours=offset_cuba()), driver_id, inicio, fin),
+        )
+        filas = [
+            {
+                "date": r["dia"].isoformat(),
+                "trips": int(r["total_trips"] or 0),
+                "earnings": float(r["total_earnings"] or 0),
+            }
+            for r in cur.fetchall()
+        ]
+        cur.close()
+        return filas
 
 # ===================== BONIFICACION DIARIA =====================
 
@@ -1821,9 +1881,9 @@ def _etiqueta_tasa(rate) -> str:
 def get_daily_trip_count(driver_id: str) -> int:
     with get_connection() as conn:
         cur = conn.cursor()
-        # `completed_at` se guarda en UTC, pero queremos contar los viajes
-        # completados en el día local de Cuba. Convertimos en SQL.
-        today_cuba = datetime.now(CUBA_TZ).strftime('%Y-%m-%d')
+        # `completed_at` es UTC naive. El rango del dia se calcula en Python
+        # con la hora oficial de Cuba (ver `tiempo_cuba`) y se compara directo.
+        inicio, fin = rango_dia_utc(fecha_cuba())
 
         cur.execute(
             """
@@ -1831,9 +1891,10 @@ def get_daily_trip_count(driver_id: str) -> int:
             FROM trips
             WHERE driver_id = %s
               AND status = 'completed'
-              AND (completed_at AT TIME ZONE 'America/Havana')::date = %s
+              AND completed_at >= %s
+              AND completed_at < %s
             """,
-            (driver_id, today_cuba),
+            (driver_id, inicio, fin),
         )
         count = cur.fetchone()[0]
         cur.close()
@@ -3391,11 +3452,41 @@ async def find_nearby_drivers(
 
 
 @router.get("/drivers/{driver_id}/earnings")
-async def api_driver_earnings(driver_id: str, from_date: Optional[date] = None, to_date: Optional[date] = None):
-    # Ignoramos las fechas del frontend: el dispositivo puede estar en otra
-    # zona horaria y enviar el día equivocado. Siempre usamos la fecha de Cuba.
-    today_cuba = datetime.now(CUBA_TZ).date()
-    row = get_driver_earnings(driver_id, today_cuba, today_cuba)
+async def api_driver_earnings(
+    driver_id: str,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+    scope: str = "all",
+    days: int = 0,
+):
+    """Ganancias del chofer.
+
+    * sin parametros      -> total historico
+    * `scope=today`       -> solo el dia de hoy en Cuba
+    * `days=N`            -> ultimos N dias + desglose por dia
+    * `from_date/to_date` -> rango explicito (inclusive)
+
+    El dia lo decide SIEMPRE el servidor con `tiempo_cuba`: el reloj del
+    telefono puede estar mal (Cuba no retraso la hora en 2026) y antes eso
+    mezclaba viajes de ayer con los de hoy.
+    """
+    hoy = fecha_cuba()
+    desde: Optional[date] = None
+    hasta: Optional[date] = None
+
+    if days and days > 0:
+        days = min(days, 31)
+        desde = hoy - timedelta(days=days - 1)
+        hasta = hoy
+    elif scope == "today":
+        desde = hasta = hoy
+    elif from_date or to_date:
+        desde = from_date or to_date
+        hasta = to_date or from_date
+
+    row = get_driver_earnings(driver_id, desde, hasta)
+    by_day = get_driver_earnings_por_dia(driver_id, desde, hasta) if desde and hasta else []
+
     # Los agregados de Postgres vienen como Decimal; la app espera float.
     return {
         "total_trips": int(row.get("total_trips") or 0),
@@ -3403,6 +3494,12 @@ async def api_driver_earnings(driver_id: str, from_date: Optional[date] = None, 
         "avg_fare": float(row.get("avg_fare") or 0),
         "total_distance_km": float(row.get("total_distance_km") or 0),
         "total_duration_secs": int(row.get("total_duration_secs") or 0),
+        "from_date": desde.isoformat() if desde else None,
+        "to_date": hasta.isoformat() if hasta else None,
+        "by_day": by_day,
+        # El cliente usa esto para corregir el desfase de su reloj.
+        "server_time": ahora_cuba().isoformat(),
+        "utc_offset_hours": offset_cuba(),
     }
 
 

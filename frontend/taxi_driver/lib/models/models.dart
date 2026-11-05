@@ -437,6 +437,27 @@ class RoutePoint {
   LatLng get point => LatLng(lat, lng);
 }
 
+/// Ganancias de un dia concreto (hora oficial de Cuba).
+class DriverEarningsDay {
+  /// Fecha `yyyy-mm-dd` tal como la devuelve el backend.
+  final String date;
+  final int trips;
+  final double earnings;
+
+  const DriverEarningsDay({
+    required this.date,
+    required this.trips,
+    required this.earnings,
+  });
+
+  factory DriverEarningsDay.fromJson(Map<String, dynamic> j) =>
+      DriverEarningsDay(
+        date: (j['date'] ?? '').toString(),
+        trips: (j['trips'] ?? 0).toInt(),
+        earnings: (j['earnings'] ?? 0).toDouble(),
+      );
+}
+
 /// Ganancias del conductor: /drivers/{id}/earnings.
 class DriverEarnings {
   final int totalTrips;
@@ -445,12 +466,16 @@ class DriverEarnings {
   final double totalDistanceKm;
   final double totalDurationSecs;
 
+  /// Desglose por dia (solo cuando se pide con `days`).
+  final List<DriverEarningsDay> byDay;
+
   DriverEarnings({
     required this.totalTrips,
     required this.totalEarnings,
     required this.avgFare,
     required this.totalDistanceKm,
     required this.totalDurationSecs,
+    this.byDay = const [],
   });
 
   factory DriverEarnings.fromJson(Map<String, dynamic> j) => DriverEarnings(
@@ -458,6 +483,11 @@ class DriverEarnings {
         totalEarnings: (j['total_earnings'] ?? 0).toDouble(),
         avgFare: (j['avg_fare'] ?? 0).toDouble(),
         totalDistanceKm: (j['total_distance_km'] ?? 0).toDouble(),
-totalDurationSecs: (j['total_duration_secs'] ?? 0).toDouble(),
+        totalDurationSecs: (j['total_duration_secs'] ?? 0).toDouble(),
+        byDay: (j['by_day'] as List?)
+                ?.whereType<Map<String, dynamic>>()
+                .map(DriverEarningsDay.fromJson)
+                .toList() ??
+            const [],
       );
 }

@@ -24,6 +24,8 @@ class DriverProfileScreen extends StatefulWidget {
 class _DriverProfileScreenState extends State<DriverProfileScreen> {
   late DriverProfile _profile;
   DriverEarnings? _earnings;
+  DriverEarnings? _today;
+  DriverEarnings? _week;
   int _dailyTrips = 0;
   bool _loading = false;
   String? _error;
@@ -48,13 +50,21 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
     });
     try {
       final p = await widget.api.getChofer(widget.driverId);
-      final e = await widget.api.getEarnings(widget.driverId);
+      // Tres consultas distintas, no una: antes el endpoint devolvia siempre
+      // el dia de hoy y la etiqueta "Ganancia total" mostraba solo la jornada
+      // actual. Ahora el historico, hoy y los ultimos 7 dias van separados.
+      final total = await widget.api.getEarnings(widget.driverId);
+      final hoy = await widget.api.getTodayEarnings(widget.driverId);
+      final semana = await widget.api.getEarningsLastDays(widget.driverId, days: 7);
       final day = await widget.api.getDailyTripCount(widget.driverId);
       if (!mounted) return;
       setState(() {
         _profile = p;
-        _earnings = e;
+        _earnings = total;
+        _today = hoy;
+        _week = semana;
         _dailyTrips = (day['daily_trips'] ?? 0) as int;
+        if (_dailyTrips == 0) _dailyTrips = hoy.totalTrips;
         _loading = false;
       });
     } catch (e) {
@@ -80,9 +90,12 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          children: [
           Center(
             child: CircleAvatar(
               radius: 42,
@@ -148,24 +161,48 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
           _section('Estadísticas', [
             _info(Icons.account_balance_wallet_outlined, 'Fondo',
                 '${p.fondo.toStringAsFixed(2)} CUP'),
+            if (_today != null)
+              _info(Icons.today_outlined, 'Ganancia de hoy',
+                  '${_today!.totalEarnings.toStringAsFixed(2)} CUP'),
+            _info(Icons.event_available_outlined, 'Viajes de hoy', '$_dailyTrips'),
             if (_earnings != null) ...[
               _info(Icons.local_taxi_outlined, 'Viajes totales',
                   '${_earnings!.totalTrips}'),
-              _info(Icons.paid_outlined, 'Ganancia total',
+              _info(Icons.paid_outlined, 'Ganancia total (histórico)',
                   '${_earnings!.totalEarnings.toStringAsFixed(2)} CUP'),
               _info(Icons.route_outlined, 'Distancia total',
                   '${_earnings!.totalDistanceKm.toStringAsFixed(1)} km'),
             ],
-            _info(Icons.today_outlined, 'Viajes de hoy', '$_dailyTrips'),
           ]),
+          if (_week != null && _week!.byDay.isNotEmpty)
+            _section('Ganancias por día (últimos 7)', [
+              for (final d in _week!.byDay)
+                _info(
+                  Icons.calendar_today_outlined,
+                  '${_fechaCorta(d.date)} · ${d.trips} '
+                      'viaje${d.trips == 1 ? '' : 's'}',
+                  '${d.earnings.toStringAsFixed(2)} CUP',
+                ),
+            ]),
           if (_loading)
             const Padding(
               padding: EdgeInsets.only(top: 16),
               child: Center(child: CircularProgressIndicator()),
             ),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  /// `2026-11-05` -> `05/11`.
+  ///
+  /// La fecha ya viene resuelta por el servidor en hora de Cuba; aqui solo se
+  /// recorta para mostrarla. No se usa `DateTime.now()` ni la zona del movil.
+  String _fechaCorta(String iso) {
+    final p = iso.split('-');
+    if (p.length != 3) return iso;
+    return '${p[2]}/${p[1]}';
   }
 
   /// Etiqueta del tipo de vehiculo, desde la configuracion del backend.

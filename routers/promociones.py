@@ -349,11 +349,10 @@ def _esta_expirada(fecha: Optional[datetime]) -> bool:
 
 
 def _CUBA():
-    try:
-        from zoneinfo import ZoneInfo
-        return ZoneInfo("America/Havana")
-    except Exception:
-        return timezone.utc
+    # Desfase fijo configurable (CUBA_UTC_OFFSET). `America/Havana` ya no
+    # refleja la hora oficial: en 2026 el pais no retraso el reloj.
+    from tiempo_cuba import CUBA_TZ
+    return CUBA_TZ
 
 
 def calcular_descuento_cliente(precio_bruto: Decimal,

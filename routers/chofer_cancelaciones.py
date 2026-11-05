@@ -46,11 +46,10 @@ def _clave_dia() -> str:
     contados en el mismo dia suyo y podria cancelar seis veces.
     """
     try:
-        from zoneinfo import ZoneInfo
-        hoy = datetime.now(ZoneInfo("America/Havana"))
+        from tiempo_cuba import ahora_cuba
+        hoy = ahora_cuba()
     except Exception:
-        # Si no hay zona horaria instalada, se usa UTC menos 4, que es el
-        # desfase fijo de Cuba (no cambia con el horario de verano desde 2011).
+        # Respaldo: Cuba esta en UTC-4 desde que no se retraso el reloj.
         hoy = datetime.now(timezone.utc).astimezone(
             timezone(-__import__("datetime").timedelta(hours=4))
         )

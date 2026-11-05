@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import ORJSONResponse
@@ -7,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from tiempo_cuba import CUBA_TZ
 
 from routers import billetera
 from routers import CRUD_MONGODB
@@ -156,7 +159,7 @@ except Exception:
                    "promociones en el import; se reintentara", exc_info=True)
 
 # ---- Scheduler para expiracion de viajes ----
-scheduler = AsyncIOScheduler(timezone="America/Havana")
+scheduler = AsyncIOScheduler(timezone=CUBA_TZ)
 
 
 async def sweep_expired_trips():
@@ -250,8 +253,20 @@ async def job_reintento_bd():
 
 @app.get("/health")
 def health():
-    """Liveness: solo confirma que la app arranco (sin tocar las bases)."""
-    return {"status": "ok"}
+    """Liveness + hora del servidor.
+
+    `server_time` permite a las apps corregir el reloj del telefono. En Cuba
+    los moviles que no aplicaron el cambio de hora van una hora adelantados y
+    eso hacia que dieran por vencido un viaje recien aceptado.
+    """
+    from tiempo_cuba import ahora_cuba, offset_cuba
+
+    return {
+        "status": "ok",
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "cuba_time": ahora_cuba().isoformat(),
+        "utc_offset_hours": offset_cuba(),
+    }
 
 
 # ===================== DIAGNOSTICO DE 500 =====================

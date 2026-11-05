@@ -357,23 +357,48 @@ class ApiService {
 
   // ------------------- ECONÓMICO -------------------
 
+  /// Total historico de ganancias. El backend decide el corte de los dias en
+  /// hora de Cuba; el reloj del telefono no interviene.
   Future<DriverEarnings> getEarnings(String driverId) async {
     final j = await _map('GET', '/drivers/$driverId/earnings');
     return DriverEarnings.fromJson(j);
   }
 
-  /// Ganancias acumuladas hoy (hora local del dispositivo): el backend
-  /// filtra por `requested_at` entre `from_date` y `to_date`.
+  /// Ganancias de hoy. No se manda la fecha del dispositivo: si el movil tiene
+  /// la hora mal (Cuba no retraso el reloj en 2026), mandaria otro dia.
   Future<DriverEarnings> getTodayEarnings(String driverId) async {
-    final now = DateTime.now();
-    final month = now.month.toString().padLeft(2, '0');
-    final day = now.day.toString().padLeft(2, '0');
-    final today = '${now.year}-$month-$day';
-    final j = await _map(
-      'GET',
-      '/drivers/$driverId/earnings?from_date=$today&to_date=$today',
-    );
+    final j = await _map('GET', '/drivers/$driverId/earnings?scope=today');
     return DriverEarnings.fromJson(j);
+  }
+
+  /// Ultimos [days] dias con desglose diario, para separar cada jornada.
+  Future<DriverEarnings> getEarningsLastDays(String driverId, {int days = 7}) async {
+    final j = await _map('GET', '/drivers/$driverId/earnings?days=$days');
+    return DriverEarnings.fromJson(j);
+  }
+
+  // ------------------- RELOJ DEL SERVIDOR -------------------
+
+  /// Diferencia entre el reloj del servidor y el del telefono.
+  ///
+  /// Se aplica al calcular la antiguedad de un viaje aceptado. Con un movil
+  /// una hora adelantado, un viaje recien aceptado parecia de 60 minutos y la
+  /// app lo descartaba como obsoleto.
+  Duration _desfaseReloj = Duration.zero;
+
+  DateTime get ahoraUtc => DateTime.now().toUtc().add(_desfaseReloj);
+
+  Future<void> sincronizarReloj() async {
+    try {
+      final j = await _map('GET', '/health');
+      final s = j['server_time'];
+      if (s is! String) return;
+      final servidor = DateTime.tryParse(s)?.toUtc();
+      if (servidor == null) return;
+      _desfaseReloj = servidor.difference(DateTime.now().toUtc());
+    } catch (_) {
+      // Sin red se conserva el desfase anterior (o cero).
+    }
   }
 
   Future<Map<String, dynamic>> getDailyTripCount(String driverId) async {
