@@ -56,6 +56,15 @@ class ClientTrip {
   /// chofer con su GPS. `null` = sin dato (chofer parado o sin viaje).
   final double? driverBearing;
 
+  /// Ultima posicion conocida del chofer, cacheada por el backend. Es el
+  /// respaldo del WebSocket para que la camara 3D no se congele si el push
+  /// falla (el sondeo de 3 s sigue actualizando).
+  final double? driverLat;
+  final double? driverLng;
+
+  /// Velocidad del chofer en km/h. Decide el zoom dinamico de la camara 3D.
+  final double? driverSpeed;
+
   const ClientTrip({
     required this.tripId,
     required this.status,
@@ -76,6 +85,9 @@ class ClientTrip {
     this.commission,
     this.driverId,
     this.driverBearing,
+    this.driverLat,
+    this.driverLng,
+    this.driverSpeed,
   });
 
   factory ClientTrip.fromJson(Map<String, dynamic> j) => ClientTrip(
@@ -98,6 +110,9 @@ class ClientTrip {
         commission: (j['commission'] as num?)?.toDouble(),
         driverId: j['driver_id']?.toString(),
         driverBearing: (j['driver_bearing'] as num?)?.toDouble(),
+        driverLat: (j['driver_lat'] as num?)?.toDouble(),
+        driverLng: (j['driver_lng'] as num?)?.toDouble(),
+        driverSpeed: (j['driver_speed'] as num?)?.toDouble(),
       );
 
   /// El backend entrega las coordenadas como "POINT(lng lat)".

@@ -2040,6 +2040,14 @@ def commit_commission(driver_id: str, commission: float, discount_applied: bool,
 async def update_driver_location(driver_id: str, lon: float, lat: float):
     """Actualiza la posicion de un conductor en tiempo real."""
     await garnet.geoadd("drivers:geo", (lon, lat, driver_id))
+    # Cache de la ultima posicion: el cliente la recibe tambien por sondeo,
+    # no solo por WebSocket, para que la camara 3D siga funcionando si el
+    # canal push se cae. TTL de 120 s: si el chofer deja de reportar caduca.
+    try:
+        await garnet.set(
+            f"driver:pos:{driver_id}", f"{lat},{lon}", ex=120)
+    except Exception:
+        logger.exception("No se pudo cachear la posicion de %s", driver_id)
 
 async def get_nearby_drivers(lon: float, lat: float, radius_km: float = 3.0):
     """Devuelve lista de (driver_id, distancia_km) ordenados por cercania."""
@@ -2854,14 +2862,29 @@ async def api_get_trip(trip_id: str):
     # (bearing + tilt en su camara). TTL de 120 s con lo que la key de Garnet
     # caduca sola si el chofer deja de reportar.
     trip["driver_bearing"] = None
+    trip["driver_lat"] = None
+    trip["driver_lng"] = None
+    trip["driver_speed"] = None
     driver_id = trip.get("driver_id")
     if driver_id:
         try:
             rumbo = await garnet.get(f"driver:bearing:{driver_id}")
             if rumbo is not None:
                 trip["driver_bearing"] = float(rumbo)
+            velocidad = await garnet.get(f"driver:speed:{driver_id}")
+            if velocidad is not None:
+                trip["driver_speed"] = float(velocidad)
+            # Posicion cacheada: respaldo del WebSocket. El sondeo de 3 s del
+            # cliente puede asi seguir al coche y recalcular el bearing desde
+            # la geometria aunque el push falle.
+            pos = await garnet.get(f"driver:pos:{driver_id}")
+            if pos:
+                partes = str(pos).split(",")
+                if len(partes) == 2:
+                    trip["driver_lat"] = float(partes[0])
+                    trip["driver_lng"] = float(partes[1])
         except Exception:
-            logger.exception("No se pudo leer el rumbo de %s", driver_id)
+            logger.exception("No se pudo leer la telemetria de %s", driver_id)
     return trip
 
 
@@ -3588,6 +3611,9 @@ class DriverLocation(BaseModel):
     # chofer con cada fix del GPS: el cliente lo usa para inclinar y orientar
     # el mapa hacia adelante, como la vista 3D del chofer.
     bearing: Optional[float] = None
+    # Velocidad en km/h. Decide el zoom dinamico de la camara 3D del cliente
+    # (mas horizonte al acelerar) y viaja tambien por WebSocket.
+    speed: Optional[float] = None
 
 class DriverStatusUpdate(BaseModel):
     status: str  # available | busy | on_trip | offline
@@ -3604,6 +3630,15 @@ async def api_set_driver_location(driver_id: str, body: DriverLocation):
             )
         except Exception:
             logger.exception("No se pudo guardar el rumbo de %s", driver_id)
+    if body.speed is not None:
+        try:
+            await garnet.set(
+                f"driver:speed:{driver_id}",
+                str(round(float(body.speed), 1)),
+                ex=120,
+            )
+        except Exception:
+            logger.exception("No se pudo guardar la velocidad de %s", driver_id)
     # Envia la posicion a Traccar para ir tejiendo la ruta del viaje.
     asyncio.create_task(
         asyncio.to_thread(_forward_driver_position_to_traccar, driver_id, body.lat, body.lng)

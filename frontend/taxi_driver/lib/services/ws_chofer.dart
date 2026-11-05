@@ -54,13 +54,15 @@ class WsChofer {
     _canal = null;
   }
 
-  /// Posicion + rumbo del chofer, en el mismo contrato que el endpoint HTTP.
-  void posicion(double lat, double lng, double? bearing) {
+  /// Posicion + rumbo + velocidad del chofer, en el mismo contrato que el
+  /// endpoint HTTP. La velocidad (km/h) la usa el cliente para el zoom 3D.
+  void posicion(double lat, double lng, double? bearing, {double? speed}) {
     _enviar({
       'posicion': {
         'lat': lat,
         'lng': lng,
         'bearing': ?bearing,
+        'speed': ?speed,
       },
     });
   }

@@ -87,6 +87,12 @@ class AsistenteRutaService extends ChangeNotifier {
   LatLng? _destino;
   bool _pidiendo = false;
 
+  /// Generacion de la ruta. Cada `iniciar`/`detener` la incrementa: una
+  /// respuesta de OSRM que llega tarde (viaje completado, cambio de fase) se
+  /// descarta en vez de repoblar la cola de maniobras de un viaje que ya no
+  /// existe.
+  int _generacion = 0;
+
   EstadoAsistente estado() {
     if (_pasos.isEmpty || _indice >= _pasos.length) {
       return EstadoAsistente(
@@ -124,6 +130,8 @@ class AsistenteRutaService extends ChangeNotifier {
         _destino != null &&
         _pasos.isNotEmpty;
     if (mismo) return;
+    _generacion++;
+    _pidiendo = false;
     _tripId = tripId;
     _fase = fase;
     _origen = origen;
@@ -141,6 +149,8 @@ class AsistenteRutaService extends ChangeNotifier {
 
   /// Reset completo (completar, cancelar, perder el viaje).
   void detener() {
+    _generacion++;
+    _pidiendo = false;
     _tripId = null;
     _fase = null;
     _destino = null;
@@ -170,12 +180,15 @@ class AsistenteRutaService extends ChangeNotifier {
     _snapIndex = snap.$1;
     final enRuta = _polyline[_snapIndex];
     if (snap.$2 > 150) {
-      // DESVIO: el chofer ya no esta cerca del trazo. Se vuelve a pedir la
-      // ruta a OSRM y la cola REINICIA desde el punto actual (comportamiento
-      // de navegadores reales). La polyline se limpia para que no quede
-      // ninguna instruccion del trazado viejo.
+      // DESVIO: el chofer ya no esta cerca del trazo. Se vacia la COLA de
+      // maniobras, se vuelve a pedir la ruta a OSRM y el indice reinicia en
+      // 0 (comportamiento de navegadores reales). Ninguna instruccion del
+      // trazado viejo puede quedar visible.
       _polyline.clear();
+      _pasos.clear();
       _indice = 0;
+      _snapIndex = 0;
+      _restoAlPunto = 0;
       notifyListeners();
       unawaited(_pedirRuta());
       return;
@@ -244,7 +257,11 @@ class AsistenteRutaService extends ChangeNotifier {
   Future<void> recalcularDesde(LatLng p) async {
     _origen = p;
     _polyline.clear();
+    _pasos.clear();
+    _indice = 0;
     _snapIndex = 0;
+    _restoAlPunto = 0;
+    notifyListeners();
     await _pedirRuta();
   }
 
@@ -294,6 +311,7 @@ class AsistenteRutaService extends ChangeNotifier {
     final origen = _origen;
     final destino = _destino;
     if (origen == null || destino == null) return;
+    final generacion = _generacion;
     _pidiendo = true;
     try {
       final json = await ApiClient.post(
@@ -304,6 +322,8 @@ class AsistenteRutaService extends ChangeNotifier {
           'profile': 'driving',
         },
       );
+      // Respuesta tardia de un viaje/fase que ya no existe: no se toca la cola.
+      if (generacion != _generacion || _destino == null) return;
       final lista = (json['steps'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(PasoRuta.fromJson)
@@ -328,7 +348,9 @@ class AsistenteRutaService extends ChangeNotifier {
     } catch (e) {
       debugPrint('[ASISTENTE] ruta paso a paso fallo: $e');
     } finally {
-      _pidiendo = false;
+      // Solo la peticion vigente puede liberar el candado: si se reinicio la
+      // fase mientras esta volaba, el candado pertenece a la nueva.
+      if (generacion == _generacion) _pidiendo = false;
     }
   }
 }

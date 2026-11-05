@@ -95,7 +95,7 @@ async def _ruta_viaje_chofer(driver_id: str, datos: dict) -> None:
     except Exception:
         logger.exception("No se pudo validar el owner de la ruta %s", trip_id)
         return
-    await publish_trip_event(trip_id, "trip_route", {
+    await publish_trip_event(trip_id, "trip_route_updated", {
         "trip_id": trip_id,
         "geometry": {
             "type": "LineString",
@@ -109,6 +109,10 @@ async def _posicion_chofer(driver_id: str, datos: dict) -> None:
     lat = datos.get("lat")
     lng = datos.get("lng")
     bearing = datos.get("bearing")
+    # Velocidad en km/h. La app del chofer la calcula con el GPS (media movil)
+    # y la envia para que el cliente ajuste el zoom 3D sin inventarla con dos
+    # fixes separados (que en el sondeo de 3 s da saltos).
+    speed = datos.get("speed", datos.get("velocidad"))
     if not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
         return
     try:
@@ -119,18 +123,27 @@ async def _posicion_chofer(driver_id: str, datos: dict) -> None:
                 str(round(float(bearing) % 360, 1)),
                 ex=120,
             )
+        if isinstance(speed, (int, float)):
+            await garnet.set(
+                f"driver:speed:{driver_id}",
+                str(round(float(speed), 1)),
+                ex=120,
+            )
     except Exception:
         logger.exception("No se pudo registrar la posicion de %s", driver_id)
         return
     trip_id = await asyncio.to_thread(_viaje_activo_de, driver_id)
     if trip_id:
-        await publish_trip_event(trip_id, "driver_position", {
+        evento = {
             "trip_id": trip_id,
             "driver_id": driver_id,
             "lat": float(lat),
             "lng": float(lng),
             "bearing": (float(bearing) if isinstance(bearing, (int, float)) else None),
-        })
+        }
+        if isinstance(speed, (int, float)):
+            evento["speed"] = float(speed)
+        await publish_trip_event(trip_id, "driver_position", evento)
 
 
 @router.websocket("/ws/{rol}/{user_id}")

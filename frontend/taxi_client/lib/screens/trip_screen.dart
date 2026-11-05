@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/navegacion_geo.dart';
 import '../services/osrm_service.dart';
 import '../services/ws_cliente.dart';
 import '../widgets/client_map_view.dart';
@@ -46,6 +47,26 @@ class _TripScreenState extends State<TripScreen> {
   /// GPS sin fix momentáneo).
   double? _ultimoRumboVehiculo;
 
+  /// Filtro de posicion (media movil + rechazo de puntos fantasma) y seguidor
+  /// de la ruta para calcular el bearing por geometria, no por brujula.
+  final FiltroGps _filtroGps = FiltroGps();
+  final SeguidorRuta _seguidorRuta = SeguidorRuta();
+
+  /// Ultima velocidad conocida del chofer (km/h), para el zoom dinamico.
+  double? _velocidadKmh;
+
+  /// Instante del ultimo push de posicion. Evita que un sondeo con datos mas
+  /// viejos pise un fix recien llegado por WebSocket.
+  DateTime? _ultimoPushPos;
+
+  /// Primer encuadre del trayecto pendiente (origen + destino + vehiculo).
+  bool _encuadreInicialPendiente = true;
+
+  /// `true` mientras la ruta dibujada es la que comparte el chofer (dueño de
+  /// la ruta). Evita que el sondeo la pise con la ruta planificada propia.
+  bool _rutaDelChofer = false;
+  DateTime? _rutaChoferAt;
+
   /// WebSocket del cliente: push del viaje activo (posiciones del chofer y
   /// cambios de estado) por encima del sondeo de 3 s, que queda de respaldo.
   final WsCliente _ws = WsCliente();
@@ -75,18 +96,14 @@ class _TripScreenState extends State<TripScreen> {
         final lat = (datos['lat'] as num?)?.toDouble();
         final lng = (datos['lng'] as num?)?.toDouble();
         if (lat == null || lng == null) return;
-        setState(() => _driverPos = LatLng(lat, lng));
-        // Vista 3D inmediata: el sondeo tarda 3 s mas; el rumbo del push es
-        // mas fresco, pero SIEL chofer va lento o parado NO llega bearing
-        // (el chofrice no lo manda): se conserva el ULTIMO CONOCIDO.
-        final rumbo = (datos['bearing'] as num?)?.toDouble();
-        if (rumbo != null) {
-          _ultimoRumboVehiculo = rumbo;
-          unawaited(
-              _mapController.animar3D(LatLng(lat, lng), rumbo));
-        } else {
-          _aplicarVista3D();
-        }
+        // Push inmediato: filtra el GPS, calcula el bearing sobre la ruta y
+        // mueve la camara 3D en el acto (el sondeo tarda 3 s mas).
+        _actualizarPosicionChofer(
+          lat,
+          lng,
+          speed: (datos['speed'] as num?)?.toDouble(),
+          esPush: true,
+        );
         return;
       }
       switch (evento) {
@@ -96,9 +113,10 @@ class _TripScreenState extends State<TripScreen> {
         'trip_expired' ||
         'trip_completed':
           unawaited(_refresh());
-        case 'trip_route':
+        case 'trip_route' || 'trip_route_updated':
           // El chofer es el DUEÑO de la ruta: replica SU geometria (mismas
-          // calles, mismo asistente) en vez de pedir la propia.
+          // calles, mismo asistente) en vez de pedir la propia. El evento
+          // llega tanto en la ruta inicial como en cada recalculo por desvio.
           final geo = (datos['geometry'] ?? const {}) as Map;
           final coords = geo['coordinates'] as List<dynamic>? ?? const [];
           final pts = <LatLng>[
@@ -107,7 +125,13 @@ class _TripScreenState extends State<TripScreen> {
                 LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
           ];
           if (pts.length >= 2 && mounted) {
-            setState(() => _route = pts);
+            setState(() {
+              _route = pts;
+              _rutaDelChofer = true;
+              _rutaChoferAt = DateTime.now();
+            });
+            _seguidorRuta.reiniciar();
+            _aplicarVista3D();
           }
       }
     };
@@ -131,10 +155,16 @@ class _TripScreenState extends State<TripScreen> {
     try {
       final t = await widget.api.getTrip(widget.tripId);
       if (!mounted || _popped) return;
+      final estadoAnterior = _trip?.status;
       setState(() {
         _trip = t;
         _error = null;
       });
+      if (estadoAnterior != t.status) {
+        // Nueva fase: la ruta del chofer de la fase anterior ya no sirve.
+        _rutaDelChofer = false;
+        _seguidorRuta.reiniciar();
+      }
       if (t.status == 'completed' || t.status == 'cancelled' || t.status == 'expired') {
         _poll?.cancel();
       }
@@ -153,6 +183,17 @@ class _TripScreenState extends State<TripScreen> {
         Navigator.of(context).pop('cancelled');
         return;
       }
+      // Respaldo del push: el backend cachea posicion/rumbo/velocidad del
+      // chofer y el sondeo los entrega. Si el WebSocket cae, la camara 3D
+      // sigue moviendose en vez de quedarse congelada.
+      if (t.driverLat != null && t.driverLng != null) {
+        _actualizarPosicionChofer(
+          t.driverLat!,
+          t.driverLng!,
+          speed: t.driverSpeed,
+          esPush: false,
+        );
+      }
       // La ruta se dibuja en TODOS los estados del viaje, incluyendo
       // `requested` (en espera): el pasajero debe ver el recorrido aunque
       // nadie haya aceptado todavia.
@@ -163,13 +204,6 @@ class _TripScreenState extends State<TripScreen> {
       if (mounted && !_popped) setState(() => _error = '$e');
     }
   }
-
-  /// `true` en los estados activos de la ventana del viaje.
-  bool _inActive(String status) =>
-      status == 'requested' ||
-      status == 'accepted' ||
-      status == 'driver_arrived' ||
-      status == 'in_progress';
 
   /// Llenado de la ruta segun el estado del viaje:
   ///
@@ -186,6 +220,16 @@ class _TripScreenState extends State<TripScreen> {
   Future<void> _loadRoute(String tripId) async {
     final t = _trip;
     if (t == null) return;
+    // La ruta del chofer manda mientras siga fresca (20 s). Sin este guard el
+    // sondeo de 3 s sustituiria la geometria del chofer por la planificada
+    // propia justo despues de recibirla por WebSocket.
+    if (_rutaDelChofer &&
+        _rutaChoferAt != null &&
+        DateTime.now().difference(_rutaChoferAt!).inSeconds < 20) {
+      _seguirVehiculo(_driverPos);
+      return;
+    }
+    _rutaDelChofer = false;
     final antes = _driverPos;
     try {
       if (t.driverId != null || t.status == 'requested') {
@@ -201,32 +245,82 @@ class _TripScreenState extends State<TripScreen> {
     } catch (_) {}
   }
 
-  /// Asegura que la camara este EN VISTA 3D siguiendo al vehiculo, solo cuando
-  /// toca:
-  ///
-  ///  * El viaje esta activo (`accepted` yendo a buscar, o `in_progress`).
-  ///  * El pasajero no ha movido el mapa (`_siguiendo`).
-  ///  * Hay rumbo: el traumatizado del WS/poll, o el ULTIMO conocido
-  ///    ([_ultimoRumboVehiculo]) para chofers lentos o parados.
-  ///
-  /// Es la emulacion en el cliente de la vista 3D del chofer: la camara se
-  /// anima (1000 ms) al punto del vehiculo con `bearing` de su rumbo, `tilt`
-  /// 50 y zoom 16, para que avance mirando hacia adelante por la calle.
-  ///
-  /// El `await` es fire-and-forget a proposito: el siguiente tick (3 s) lanza
-  /// otro y MapLibre cancela el anterior.
+  /// Anima la camara 3D (pitch 50 + bearing de la ruta + zoom por velocidad).
   void _aplicarVista3D() {
-    if (!_siguiendo) return;
+    if (!_siguiendo || !mounted) return;
     final t = _trip;
     final vehiculo = _driverPos;
-    final rumbo = t?.driverBearing ?? _ultimoRumboVehiculo;
     if (t == null ||
         vehiculo == null ||
-        rumbo == null ||
         (t.status != 'accepted' && t.status != 'in_progress')) {
       return;
     }
-    unawaited(_mapController.animar3D(vehiculo, rumbo));
+    final rumbo = _rumboParaCamara();
+    if (rumbo == null) return;
+    unawaited(_mapController.animar3D(
+      vehiculo,
+      rumbo,
+      zoom: ApiConfig.zoomNavegacion(velocidadKmh: _velocidadKmh),
+    ));
+  }
+
+  /// Rumbo de la camara, SIEMPRE calculado sobre la ruta dibujada.
+  ///
+  /// No se usa la brujula ni el bearing crudo del GPS del chofer: se hace
+  /// route snapping con la posicion suavizada y se toma el angulo hacia el
+  /// siguiente punto de la polilinea. Si el coche se para (o el GPS deja de
+  /// dar fixes) se conserva el ULTIMO rumbo de ruta, que sigue siendo valido
+  /// porque la ruta no cambia de direccion en un semaforo.
+  ///
+  /// En `accepted` solo se usa cuando la ruta dibujada es la del chofer
+  /// (`_rutaDelChofer`), porque la ruta planificada del cliente va de la
+  /// recogida al destino y no de donde esta el coche a la recogida.
+  double? _rumboParaCamara() {
+    final t = _trip;
+    final pos = _driverPos;
+    if (t != null && pos != null) {
+      final usarRuta = t.status == 'in_progress' || _rutaDelChofer;
+      if (usarRuta) {
+        final deRuta = _seguidorRuta.rumbo(pos, _route);
+        if (deRuta != null) {
+          _ultimoRumboVehiculo = deRuta;
+          return deRuta;
+        }
+      }
+    }
+    return _ultimoRumboVehiculo;
+  }
+
+  /// Punto unico de entrada de las posiciones del chofer (push y sondeo).
+  ///
+  /// Filtra el GPS para eliminar saltos, calcula la velocidad implicita si el
+  /// backend no la manda y conserva el ultimo rumbo valido. [esPush] decide si
+  /// mueve la camara en el acto; en el sondeo lo hace el encuadre posterior,
+  /// para no lanzar dos animaciones seguidas sobre el mismo frame.
+  void _actualizarPosicionChofer(
+    double lat,
+    double lng, {
+    double? speed,
+    required bool esPush,
+  }) {
+    final ahora = DateTime.now();
+    if (!esPush &&
+        _ultimoPushPos != null &&
+        ahora.difference(_ultimoPushPos!).inSeconds < 5) {
+      // Un push reciente es mas fresco que este sondeo.
+      return;
+    }
+    if (esPush) _ultimoPushPos = ahora;
+
+    final suave = _filtroGps.filtrar(LatLng(lat, lng), ahora: ahora);
+    final velocidad = speed ?? _filtroGps.velocidadKmh;
+
+    setState(() {
+      _driverPos = suave;
+      _velocidadKmh = velocidad;
+    });
+
+    if (esPush) _aplicarVista3D();
   }
 
   /// Encuadre automatico del cliente.
@@ -252,13 +346,14 @@ class _TripScreenState extends State<TripScreen> {
     // `contains` es asincrono porque consulta la region visible al motor; se
     // resuelve sin bloquear el timer, y mientras tanto `_siguiendo` ya se ha
     // comprobado arriba.
-    if (antes == null) {
+    if (antes == null || _encuadreInicialPendiente) {
+      _encuadreInicialPendiente = false;
       _encuadrarTrayecto();
     } else {
       unawaited(_reencuadrarSiElVehiculoSalio(vehiculo));
     }
 
-    final rumbo = t.driverBearing ?? _ultimoRumboVehiculo;
+    final rumbo = _rumboParaCamara();
     final activo = t.status == 'accepted' || t.status == 'in_progress';
 
     // Mientras el chofer rueda: vista 3D, que es la emulacion pedida. La

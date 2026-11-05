@@ -211,12 +211,13 @@ class ApiService {
 
   Future<void> setDriverLocation(
       String driverId, double lat, double lng,
-      {double? bearing}) async {
+      {double? bearing, double? speed}) async {
     await _map('POST', '/drivers/$driverId/location',
         body: {
           'lat': lat,
           'lng': lng,
           'bearing': ?bearing,
+          'speed': ?speed,
         });
   }
 

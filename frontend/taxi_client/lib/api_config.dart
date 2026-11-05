@@ -86,6 +86,24 @@ class ApiConfig {
   /// Zoom de la vista del cliente cuando el vehiculo va cerca.
   static const double zoomVehiculoCerca = 17;
 
+  /// Velocidad (km/h) a partir de la cual la camara 3D se aleja un nivel.
+  ///
+  /// Misma logica que el modo navegacion del chofer (30 km/h): al acelerar el
+  /// pasajero necesita horizonte, no detalle de calle.
+  static const double velocidadParaZoomRapido = 30.0;
+
+  /// Zoom de navegacion segun la velocidad del vehiculo.
+  ///
+  /// 17 de base (calle) y 16 por encima de [velocidadParaZoomRapido]. La
+  /// transicion la anima `animar3D` en 1000 ms.
+  static double zoomNavegacion({double? velocidadKmh}) {
+    var zoom = zoomVehiculoCerca;
+    if (velocidadKmh != null && velocidadKmh >= velocidadParaZoomRapido) {
+      zoom -= 1;
+    }
+    return zoom.clamp(14.0, 17.0);
+  }
+
   /// Zoom segun la distancia al objetivo.
   ///
   /// El cliente NO rota el mapa ni lo inclina, asi que su unica referencia para

@@ -21,6 +21,7 @@ import '../services/route_recalculation_service.dart';
 import '../services/trip_notification_service.dart';
 import '../services/ofertas_background_service.dart';
 import '../services/asistente_ruta.dart';
+import '../services/filtro_gps.dart';
 import '../services/ws_chofer.dart';
 import '../services/whatsapp_service.dart';
 import '../widgets/navigation_map_view.dart';
@@ -201,6 +202,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// El asistente de ruta paso a paso. Con viaje activo pide `steps` del OSRM
   /// via backend y avanza pasos por radio de 30 m con cada fix del GPS.
   final AsistenteRutaService _asistente = AsistenteRutaService();
+
+  /// Filtro de posicion: media movil + rechazo de puntos fantasma. Se aplica
+  /// antes de dibujar, de avisar al asistente y de publicar la posicion.
+  final FiltroGps _filtroGps = FiltroGps();
 
   /// WebSocket (`/ws/chofer/{id}`): envia la posicion con rumbo para el
   /// cliente y recibe la oferta empujada. El sondeo queda de respaldo.
@@ -534,6 +539,12 @@ double? _rumboParaFlecha() {
     });
     // El servicio ya tiene la ruta nueva, asi que no vuelve a pedirla.
     _publicarRuta();
+    // El asistente tenia la cola de maniobras del trazado viejo: se vacia y se
+    // pide la ruta paso a paso desde la posicion actual. Al llegar, el nuevo
+    // trazado viaja por WS al cliente (trip_route_updated).
+    if (_activeTrip != null) {
+      unawaited(_asistente.recalcularDesde(_driverPos));
+    }
   }
 
   void _alCambiarTilt(double objetivo) {
@@ -1002,22 +1013,28 @@ double? _rumboParaFlecha() {
   }
 
   void _setDriverPos(LatLng p, {double? rumbo, double? velocidadKmh}) {
-    setState(() => _driverPos = p);
+    // Suaviza el GPS antes de dibujar, avisar al asistente y publicar: quita
+    // los saltos sin retrasar la camara (media movil ponderada de 4 fixes).
+    final suave = _filtroGps.filtrar(p);
+    final velocidad = velocidadKmh ?? _filtroGps.velocidadKmh;
+
+    setState(() => _driverPos = suave);
     _publicarRuta();
     // Ultima posicion que conoce el servicio en primer plano: si tiene que
     // relevar el sondeo (app cerrada), usa este punto.
-    unawaited(OfertasBackgroundService.guardarUltimaPosicion(p.latitude, p.longitude));
+    unawaited(OfertasBackgroundService.guardarUltimaPosicion(suave.latitude, suave.longitude));
     // El asistente aprende la posicion y avanza pasos por radio de 30 m.
-    _asistente.conPosicion(p, velocidadKmh: velocidadKmh);
+    _asistente.conPosicion(suave, velocidadKmh: velocidad);
     // Y via WebSocket (push) al pasajero del viaje activo.
-    _ws.posicion(p.latitude, p.longitude, rumbo);
+    _ws.posicion(suave.latitude, suave.longitude, rumbo, speed: velocidad);
     if (_online) {
       // El rumbo viaja con la posicion: el cliente lo usa para orientar la
       // camara 3D hacia adelante, como la vista del chofer. Solo con rumbo
-      // DE VERDAD (sensor o GPS con bandera),nunca un 0 inventado.
+      // DE VERDAD (sensor o GPS con bandera),nunca un 0 inventado. La
+      // velocidad decide el zoom dinamico del cliente.
       widget.api
-          .setDriverLocation(widget.driverId, p.latitude, p.longitude,
-              bearing: rumbo)
+          .setDriverLocation(widget.driverId, suave.latitude, suave.longitude,
+              bearing: rumbo, speed: velocidad)
           .catchError((_) {});
     }
 
@@ -1069,6 +1086,7 @@ double? _rumboParaFlecha() {
 
     // Posicion guardada por el sistema: aparece al instante y luego se
     // sustituye por la del GPS cuando este responde.
+    _filtroGps.reiniciar();
     final last = await LocationService.lastKnown();
     if (last != null && mounted) {
       setState(() => _gpsState = LocationPermissionState.granted);
@@ -1152,6 +1170,7 @@ double? _rumboParaFlecha() {
     });
     if (state == LocationPermissionState.granted) {
       _manualPos = false;
+      _filtroGps.reiniciar();
       final p = await LocationService.current();
       if (p != null && mounted) {
         setState(() => _driverPos = p);
@@ -1909,7 +1928,7 @@ final updated = await widget.api.getTrip(trip.tripId);
       _loading = false;
       // La ruta se vacia para que el mapa no siga pintando el trayecto de un
       // viaje que ya no existe.
-_route = [];
+      _route = [];
       // La ruta recalculada era de este viaje: la siguiente vuelve a venir de OSRM.
       _rutaEsRecalculada = false;
       _rutaRecogidaEsRecalculada = false;
@@ -1918,7 +1937,17 @@ _route = [];
       _tripMin = null;
       _toPickupKm = null;
       _toPickupMin = null;
+      // Nada del viaje anterior puede sobrevivir en la UI: ni la oferta
+      // seleccionada, ni la tarjeta de oferta perdida, ni los encuadres.
+      _selectedOffer = null;
+      _lostOffer = null;
+      _faseEncuadre = null;
+      _trayectoEncuadre = null;
+      _avisandoRecalculo = false;
     });
+    _lostTimer?.cancel();
+    _lostTimer = null;
+    _filtroGps.reiniciar();
     // Sin viaje en curso ya no hace falta el marcador de antigüedad.
     await _limpiarMarcadorViaje();
 
@@ -1963,6 +1992,10 @@ _route = [];
       // cancelacion. Que sea uno solo evita que a uno se le olvide una pieza y el
       // chofer se quede con el layout de viaje en curso sin poder trabajar.
       await _alPerderElViaje('', mostrarAviso: false);
+      // El viaje recien cerrado no puede volver a aparecer como oferta si el
+      // backend tarda un tick en reflejar el 'completed'.
+      _declinedTripIds.add(trip.tripId);
+      _ofertaCache.remove(trip.tripId);
       if (!mounted) return;
       await _showCompleted(done);
       await _tick();
