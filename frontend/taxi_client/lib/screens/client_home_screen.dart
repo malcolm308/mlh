@@ -664,8 +664,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           initialEstimate: (res['precio_estimado'] ?? 0).toDouble(),
         ),
       ));
-      // Si el viaje fue cancelado, limpiar todo el estado
-      if (result == 'cancelled' && mounted) {
+      // Si el pasajero cerro el recibo (o el viaje fue cancelado), volver al
+      // paso 1. En `completed` el reset ocurre SOLO aqui: la pantalla del
+      // recibo se queda abierta hasta que el usuario pulse "Finalizar".
+      if ((result == 'cancelled' || result == 'completed') && mounted) {
         _resetTripState();
       }
     } catch (e) {

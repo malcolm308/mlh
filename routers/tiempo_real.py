@@ -95,6 +95,20 @@ async def _ruta_viaje_chofer(driver_id: str, datos: dict) -> None:
     except Exception:
         logger.exception("No se pudo validar el owner de la ruta %s", trip_id)
         return
+    # Persistir el ULTIMO trazado compartido. El evento Pub/Sub solo llega a
+    # quien estaba suscrito en ese instante: si el cliente tenia el WS caido o
+    # abre la app despues, la recalculacion se perdía para siempre y seguia
+    # viendo la ruta planificada vieja. Con este TTL el cliente puede
+    # recuperarla por HTTP (GET /trips/{id}/driver-route).
+    try:
+        await garnet.set(
+            f"trip:ruta:{trip_id}",
+            json.dumps({"geometry": {"type": "LineString", "coordinates": coords[:1500]}},
+                       ensure_ascii=False),
+            ex=7200,
+        )
+    except Exception:
+        logger.exception("No se pudo guardar la ruta activa de %s", trip_id)
     await publish_trip_event(trip_id, "trip_route_updated", {
         "trip_id": trip_id,
         "geometry": {

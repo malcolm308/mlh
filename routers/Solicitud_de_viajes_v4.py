@@ -3743,6 +3743,39 @@ async def api_set_driver_location(driver_id: str, body: DriverLocation):
     return {"message": "Ubicacion actualizada", "driver_id": driver_id}
 
 
+@router.get("/trips/{trip_id}/driver-route")
+async def api_trip_driver_route(trip_id: str):
+    """Ultimo trazado compartido por el chofer para este viaje.
+
+    El evento WS `trip_route_updated` solo llega a quien estaba suscrito en
+    ese instante. Si al pasajero se le cayo el socket (o manda la app a medio
+    recalculo), aqui puede recuperar el trazado vigente sin pedir a OSRM la
+    ruta PLANIFICADA vieja. Devuelve `found: false` si el chofer no compartio
+    nada todavia (la app del cliente sigue con su plan propia).
+    """
+    raw = None
+    try:
+        raw = await garnet.get(f"trip:ruta:{trip_id}")
+    except Exception:
+        logger.exception("No se pudo leer la ruta del chofer %s", trip_id)
+    if not raw:
+        return {"trip_id": trip_id, "found": False, "points": []}
+    try:
+        datos = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+        coords = (((datos or {}).get("geometry") or {}).get("coordinates")) or []
+    except (TypeError, ValueError):
+        return {"trip_id": trip_id, "found": False, "points": []}
+    return {
+        "trip_id": trip_id,
+        "found": bool(coords) and len(coords) >= 2,
+        "points": [
+            {"lat": c[1], "lng": c[0]}
+            for c in coords
+            if isinstance(c, (list, tuple)) and len(c) >= 2
+        ],
+    }
+
+
 @router.get("/trips/{trip_id}/route")
 async def api_trip_route(trip_id: str):
     """Devuelve la ruta recorrida (posiciones registradas en Traccar)

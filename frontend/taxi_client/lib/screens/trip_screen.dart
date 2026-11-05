@@ -166,6 +166,10 @@ class _TripScreenState extends State<TripScreen> {
       if (t.status == 'completed' || t.status == 'cancelled' || t.status == 'expired') {
         _poll?.cancel();
       }
+      // IMPORTANTE: al completarse NO se limpia `_trip` ni se hace pop aqui.
+      // La pantalla sigue viva y cambia al recibo (`_buildCompletedScreen`).
+      // El estado solo se abandona cuando el pasajero pulsa "Finalizar".
+      //
       // Si el viaje fue cancelado por el chofer o expiró, notificar al home
       if ((t.status == 'cancelled' || t.status == 'expired') && mounted && !_popped) {
         _popped = true;
@@ -226,6 +230,21 @@ class _TripScreenState extends State<TripScreen> {
       _seguirVehiculo(_driverPos);
       return;
     }
+    // RESPALDO del `trip_route_updated`: el evento WS solo llega a quien
+    // estaba suscrito en ese instante. Si se perdio el paquete (o el socket
+    // cerro), aqui se recupera el trazado VIGENTE del chofer en vez de caerle
+    // encima con la ruta planificada vieja. Como maximo 1 intento cada 10 s.
+    final delChofer = await _intentarRutaDelChofer(tripId);
+    if (delChofer != null && mounted) {
+      setState(() {
+        _route = delChofer;
+        _rutaDelChofer = true;
+      });
+      _seguidorRuta.reiniciar();
+      _seguirVehiculo(_driverPos);
+      _aplicarVista3D();
+      return;
+    }
     final antes = _driverPos;
     try {
       if (t.driverId != null || t.status == 'requested') {
@@ -239,6 +258,31 @@ class _TripScreenState extends State<TripScreen> {
       }
       _seguirVehiculo(antes);
     } catch (_) {}
+  }
+
+  /// Ultima vez que se pregunto la ruta del chofer por HTTP.
+  ///
+  /// El sondeo corre cada 3 s; preguntar la ruta entera a ese ritmo gastaria
+  /// data a lo tonto. Con el tope de 10 s basta: es solo el respaldo del WS.
+  DateTime? _ultimoIntentoRutaChofer;
+
+  /// Pregunta el trazado compartido por el chofer. Devuelve `null` si no toca
+  /// preguntar todavia (throttle) o si el chofer no ha compartido ruta.
+  Future<List<LatLng>?> _intentarRutaDelChofer(String tripId) async {
+    final ahora = DateTime.now();
+    final ultimo = _ultimoIntentoRutaChofer;
+    if (ultimo != null && ahora.difference(ultimo).inSeconds < 10) {
+      return null;
+    }
+    _ultimoIntentoRutaChofer = ahora;
+    try {
+      final pts = await widget.api.getDriverRoute(tripId);
+      return pts.length >= 2 ? pts : null;
+    } catch (_) {
+      // Sin red o sin ruta publicada: no es error para el usuario. La ruta
+      // planificada propia sigue siendo el respaldo.
+      return null;
+    }
   }
 
   /// Anima la camara 3D (pitch 50 + bearing de la ruta + zoom por velocidad).
@@ -528,6 +572,12 @@ class _TripScreenState extends State<TripScreen> {
   @override
   Widget build(BuildContext context) {
     final t = _trip;
+    // El viaje terminado tiene pantalla propia: NO se vuelve al inicio solo.
+    // El recibo se queda en pantalla hasta que el pasajero pulse "Finalizar",
+    // que es el unico boton que limpia el estado y hace el pop.
+    if (t != null && t.status == 'completed') {
+      return _buildCompletedScreen(t);
+    }
     return Scaffold(
       appBar: AppBar(
         title: Text('Viaje ${t?.tripId.split('-').first ?? ''}'),
@@ -803,6 +853,126 @@ class _TripScreenState extends State<TripScreen> {
         ),
       ),
     );
+  }
+
+  /// Pantalla de recibo al completarse el viaje.
+  ///
+  /// Se construye con el `ClientTrip` que ya esta en memoria (el backend lo
+  /// refresca por WS/sondeo). No se borra nada ni se navega: el viaje sigue
+  /// "abierto" en esta pantalla hasta que el pasajero pulse "Finalizar".
+  Widget _buildCompletedScreen(ClientTrip t) {
+    final scheme = Theme.of(context).colorScheme;
+    final moneda = t.currency.isNotEmpty ? t.currency : 'CUP';
+    final total = t.totalFare ?? t.precioEstimado;
+    String dinero(double? v) => v == null ? '—' : '${v.toStringAsFixed(2)} $moneda';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Viaje completado'),
+        // Sin flecha atras: salir sin ver el recibo seria repetir el bug.
+        automaticallyImplyLeading: false,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          children: [
+            Icon(Icons.check_circle, color: Colors.green.shade600, size: 76),
+            const SizedBox(height: 10),
+            const Text(
+              '¡Viaje completado!',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Gracias por viajar con TaxiRapid',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 22),
+            Card(
+              elevation: 0,
+              color: scheme.primaryContainer,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18)),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
+                child: Column(
+                  children: [
+                    Text('Total pagado',
+                        style: TextStyle(color: scheme.onPrimaryContainer)),
+                    const SizedBox(height: 6),
+                    Text(
+                      total == null ? '—' : total.toStringAsFixed(2),
+                      style: TextStyle(
+                        fontSize: 38,
+                        fontWeight: FontWeight.bold,
+                        color: scheme.onPrimaryContainer,
+                      ),
+                    ),
+                    Text(moneda,
+                        style: TextStyle(
+                            fontSize: 15, color: scheme.onPrimaryContainer)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 22),
+            Text('Recibo',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const Divider(height: 18),
+            _row('Distancia recorrida',
+                t.distanciaKm == null ? '—' : '${t.distanciaKm!.toStringAsFixed(2)} km'),
+            _row('Tarifa base', dinero(t.baseFare)),
+            _row('Por distancia', dinero(t.distanceFare)),
+            _row('Por tiempo', dinero(t.timeFare)),
+            const Divider(height: 18),
+            _row('TOTAL', dinero(total), bold: true),
+            const SizedBox(height: 22),
+            Text('Conductor y vehículo',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const Divider(height: 18),
+            _row('Chofer', t.driverId ?? 'No asignado'),
+            _row('Vehículo', t.vehicleType.isEmpty ? '—' : t.vehicleType),
+            _row('Solicitado', t.requestedAt ?? '—'),
+            if ((t.requestAddress ?? '').isNotEmpty)
+              _row('Recogida', t.requestAddress!),
+            if ((t.dropoffAddress ?? '').isNotEmpty)
+              _row('Destino', t.dropoffAddress!),
+            const SizedBox(height: 28),
+            FilledButton.icon(
+              // Unico punto que cierra el viaje y devuelve al inicio.
+              onPressed: _finalizarViaje,
+              icon: const Icon(Icons.check),
+              label: const Text('Finalizar'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+                textStyle:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Cierra la pantalla del recibo y limpia el estado del viaje.
+  ///
+  /// Devuelve `'completed'` al home para que este vuelva al paso 1. Antes de
+  /// esto no se toca nada: el recibo queda visible todo el tiempo que haga
+  /// falta, aunque el WebSocket se caiga o lleguen eventos repetidos.
+  void _finalizarViaje() {
+    if (_popped) return;
+    _popped = true;
+    _poll?.cancel();
+    Navigator.of(context).pop('completed');
   }
 
   Widget _buildSummary(ClientTrip t) {

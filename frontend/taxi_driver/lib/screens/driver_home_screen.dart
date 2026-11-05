@@ -549,11 +549,20 @@ double? _rumboParaFlecha() {
         _toPickupMin = ruta.durationMinutes;
       }
     });
+    // La ruta recalculada YA esta lista: se manda al cliente AHORA, con esta
+    // geometria. Antes se esperaba a que el asistente re-pidiera a OSRM, y si
+    // ese pedido fallaba (red) el pasajero se quedaba con la ruta vieja para
+    // siempre: solo quedaba el siguiente refresco de 60 s.
+    final trip = _activeTrip;
+    if (trip != null) {
+      _ws.rutaViaje(trip.tripId, ruta.points);
+    }
     // El servicio ya tiene la ruta nueva, asi que no vuelve a pedirla.
     _publicarRuta();
     // El asistente tenia la cola de maniobras del trazado viejo: se vacia y se
     // pide la ruta paso a paso desde la posicion actual. Al llegar, el nuevo
-    // trazado viaja por WS al cliente (trip_route_updated).
+    // trazado viaja por WS al cliente (trip_route_updated), refinando el que
+    // ya se publico arriba.
     if (_activeTrip != null) {
       unawaited(_asistente.recalcularDesde(_driverPos));
     }

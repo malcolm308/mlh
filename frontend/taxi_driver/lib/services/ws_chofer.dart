@@ -67,11 +67,21 @@ class WsChofer {
     });
   }
 
-  /// Ruta completa del viaje activo (the DUEÑO de la ruta la comparte): the
+  /// Ruta completa del viaje activo (el DUEÑO de la ruta la comparte): la
   /// geometry es el mismo LineString que consume el asistente, para que el
   /// cliente replique la ruta exacta del chofer.
+  ///
+  /// Si el socket esta medio muerto se pide reconexion y de todos modos se
+  /// intenta: el siguiente fix (o el refresco de 60 s del asistente) repite.
   void rutaViaje(String tripId, List<LatLng> puntos) {
     if (puntos.length < 2) return;
+    final c = _canal;
+    if (c == null || c.closeCode != null) {
+      // Canal caido: sin esto la recalculacion llega solo a los suscritos en
+      // ese instante, y el pasajero puede quedarse con la ruta vieja horas.
+      // Si ya hay una reconexion pendiente, no se duplica.
+      if (_reconexion == null) _conectar();
+    }
     _enviar({
       'ruta_viaje': {
         'trip_id': tripId,

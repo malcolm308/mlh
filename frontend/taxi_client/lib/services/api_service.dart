@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:latlong2/latlong.dart';
+
 import '../api_config.dart';
 import '../models/models.dart';
 import '../models/tariff.dart';
@@ -182,6 +184,24 @@ class ApiService {
     return list
         .whereType<Map<String, dynamic>>()
         .map(RoutePoint.fromJson)
+        .toList();
+  }
+
+  /// Ultimo trazado compartido por el chofer para este viaje.
+  ///
+  /// Respaldo HTTP del evento WS `trip_route_updated`: si al pasajero se le
+  /// cayo el socket en el momento del recalculo, aqui recupera la ruta
+  /// vigente. Lista vacia si el chofer no ha compartido nada.
+  Future<List<LatLng>> getDriverRoute(String tripId) async {
+    final j = await _map('GET', '/trips/$tripId/driver-route');
+    if (j['found'] != true) return const [];
+    final list = (j['points'] as List<dynamic>?) ?? const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map((p) => LatLng(
+              (p['lat'] as num?)?.toDouble() ?? 0,
+              (p['lng'] as num?)?.toDouble() ?? 0,
+            ))
         .toList();
   }
 
