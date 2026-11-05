@@ -458,6 +458,52 @@ async def viajes_diarios(dias: int = 7, hasta: Optional[str] = None,
     }
 
 
+@router.delete("/trips/{trip_id}")
+async def eliminar_viaje(trip_id: str, admin: dict = Depends(require_admin)):
+    """Elimina un viaje (pensado para viajes de PRUEBA).
+
+    Un viaje de prueba completado contamina las ganancias del chofer y los
+    totales del panel, y no hay forma de deshacerlo desde las apps. Solo se
+    permite borrar viajes ya cerrados: si estuviera activo, el chofer quedaria
+    atascado en `on_trip`.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT trip_id, driver_id, client_id, status, total_fare
+              FROM trips WHERE trip_id = %s FOR UPDATE
+            """,
+            (trip_id,),
+        )
+        fila = cur.fetchone()
+        if not fila:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Viaje no encontrado")
+        if fila["status"] not in ("completed", "cancelled", "expired"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Solo se pueden borrar viajes cerrados",
+            )
+        # `transactions.trip_id` tiene FK sin ON DELETE: se limpia primero.
+        cur.execute("DELETE FROM transactions WHERE trip_id = %s", (trip_id,))
+        cur.execute("DELETE FROM trips WHERE trip_id = %s", (trip_id,))
+        conn.commit()
+        cur.close()
+
+    logger.info(
+        "Viaje %s eliminado por %s (estado=%s, chofer=%s)",
+        trip_id, admin.get("email"), fila["status"], fila["driver_id"],
+    )
+    return {
+        "deleted": trip_id,
+        "status": fila["status"],
+        "driver_id": fila["driver_id"],
+        "total_fare": float(fila["total_fare"] or 0),
+    }
+
+
 @router.get("/trips/dia")
 async def viajes_del_dia(fecha: Optional[str] = None, admin: dict = Depends(require_admin)):
     """Detalle de los viajes solicitados en un dia."""
