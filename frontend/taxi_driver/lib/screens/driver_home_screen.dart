@@ -1947,6 +1947,8 @@ final updated = await widget.api.getTrip(trip.tripId);
     });
     _lostTimer?.cancel();
     _lostTimer = null;
+    _offerTimer?.cancel();
+    _offerTimer = null;
     _filtroGps.reiniciar();
     // Sin viaje en curso ya no hace falta el marcador de antigüedad.
     await _limpiarMarcadorViaje();

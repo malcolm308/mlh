@@ -65,7 +65,6 @@ class _TripScreenState extends State<TripScreen> {
   /// `true` mientras la ruta dibujada es la que comparte el chofer (dueño de
   /// la ruta). Evita que el sondeo la pise con la ruta planificada propia.
   bool _rutaDelChofer = false;
-  DateTime? _rutaChoferAt;
 
   /// WebSocket del cliente: push del viaje activo (posiciones del chofer y
   /// cambios de estado) por encima del sondeo de 3 s, que queda de respaldo.
@@ -128,7 +127,6 @@ class _TripScreenState extends State<TripScreen> {
             setState(() {
               _route = pts;
               _rutaDelChofer = true;
-              _rutaChoferAt = DateTime.now();
             });
             _seguidorRuta.reiniciar();
             _aplicarVista3D();
@@ -220,16 +218,14 @@ class _TripScreenState extends State<TripScreen> {
   Future<void> _loadRoute(String tripId) async {
     final t = _trip;
     if (t == null) return;
-    // La ruta del chofer manda mientras siga fresca (20 s). Sin este guard el
-    // sondeo de 3 s sustituiria la geometria del chofer por la planificada
-    // propia justo despues de recibirla por WebSocket.
-    if (_rutaDelChofer &&
-        _rutaChoferAt != null &&
-        DateTime.now().difference(_rutaChoferAt!).inSeconds < 20) {
+    // La ruta del chofer manda durante toda la fase. Sin este guard el sondeo
+    // de 3 s sustituiria la geometria del chofer (la que dibuja su asistente)
+    // por la planificada propia. Se invalida al cambiar de estado y cuando el
+    // chofer publica un recalculo nuevo.
+    if (_rutaDelChofer) {
       _seguirVehiculo(_driverPos);
       return;
     }
-    _rutaDelChofer = false;
     final antes = _driverPos;
     try {
       if (t.driverId != null || t.status == 'requested') {
