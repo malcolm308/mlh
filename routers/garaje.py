@@ -24,13 +24,15 @@ Los vehiculos embebidos existentes se importan automaticamente como
 trabajar tras el despliegue.
 """
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Optional, Tuple, Dict
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import (APIRouter, Body, File, Header, HTTPException, UploadFile)
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from db.Administración.auth import verify_token as verify_admin_token
@@ -105,6 +107,12 @@ def _vehiculo_out(doc: dict) -> dict:
         "revisado_at": (doc.get("revisado_at").isoformat()
                         if isinstance(doc.get("revisado_at"), datetime) else None),
         "motivo": doc.get("motivo"),
+        "fotos": _fotos_salida(doc),
+        "fotos_faltantes": (
+            [c for c in FOTOS_OBLIGATORIAS
+             if not (doc.get("fotos") or {}).get(c, {}).get("archivo")]
+            if isinstance(doc.get("fotos"), dict) else FOTOS_OBLIGATORIAS
+        ),
     }
 
 
@@ -140,6 +148,136 @@ class VehiculoCreate(BaseModel):
 class VehiculoAprobacion(BaseModel):
     decision: str          # 'aprobado' o 'rechazado'
     motivo: str = ""
+
+
+class FotoRevision(BaseModel):
+    decision: str          # 'aprobado' o 'rechazado'
+    motivo: str = ""
+
+
+# ============================ FOTOS DEL VEHICULO ============================
+#
+# Mismo contrato que los documentos del registro: se guardan en disco bajo
+# `uploads/garaje/` y en Mongo solo la referencia. El administrador las ve
+# desde el panel y aprueba o rechaza CADA una; el vehiculo no se aprobará sin
+# las obligatorias.
+#
+#   * vehiculo_exterior_frente / vehiculo_exterior_atras : por fuera
+#   * vehiculo_interior_frente / vehiculo_interior_atras : por dentro
+#   * circulacion : registro de circulacion del vehiculo
+
+FOTOS_VEHICULO = [
+    ("vehiculo_exterior_frente", "Vehiculo por fuera (por delante)"),
+    ("vehiculo_exterior_atras", "Vehiculo por fuera (por atras)"),
+    ("vehiculo_interior_frente", "Vehiculo por dentro (por delante)"),
+    ("vehiculo_interior_atras", "Vehiculo por dentro (por atras)"),
+    ("circulacion", "Registro de circulacion"),
+]
+
+FOTOS_OBLIGATORIAS = [c[0] for c in FOTOS_VEHICULO]
+
+FOTO_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "uploads", "garaje")
+
+MAX_FOTO_MB = 8
+
+_EXTENSIONES = {
+    b"\xff\xd8\xff": ".jpg",          # JPEG
+    b"\x89PNG\r\n\x1a\n": ".png",     # PNG
+    b"RIFF": ".webp",                 # WebP (RIFF....WEBP)
+}
+
+
+def _extension_foto(data: bytes, content_type: Optional[str],
+                    nombre: Optional[str]) -> str:
+    """Extension REAL (por bytes), no la que declara el cliente."""
+    for firma, ext in _EXTENSIONES.items():
+        if data.startswith(firma):
+            if ext == ".webp" and data[8:12] != b"WEBP":
+                continue
+            return ext
+    # HEIC iPhones
+    if len(data) > 12 and data[4:8] == b"ftyp" and data[8:12].startswith(b"hei"):
+        return ".heic"
+    _ = content_type, nombre
+    return ""
+
+
+def _guardar_foto_vehiculo(vehiculo_id: str, campo: str,
+                           upload: UploadFile) -> dict:
+    """Escribe la imagen en disco y devuelve la referencia para Mongo."""
+    os.makedirs(FOTO_DIR, exist_ok=True)
+    data = upload.file.read()
+    if len(data) > MAX_FOTO_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="La imagen %s supera los %d MB" % (campo, MAX_FOTO_MB))
+    ext = _extension_foto(data, upload.content_type, upload.filename)
+    if not ext:
+        raise HTTPException(
+            status_code=400,
+            detail="%s: no es una imagen valida (JPEG, PNG, WebP o HEIC)" % campo)
+    # El nombre lleva el id del vehiculo: al servirlo se puede comprobar el
+    # dueno sin abrir Mongo con el nombre pelado.
+    nombre_archivo = "%s_%s%s" % (vehiculo_id, campo, ext)
+    ruta = os.path.join(FOTO_DIR, nombre_archivo)
+    with open(ruta, "wb") as destino:
+        destino.write(data)
+    return {
+        "archivo": nombre_archivo,
+        "subido_at": datetime.utcnow().isoformat(),
+        "estado": ESTADO_PENDIENTE,
+        "motivo": None,
+    }
+
+
+def _fotos_salida(doc: dict) -> Optional[dict]:
+    fotos = doc.get("fotos")
+    if not isinstance(fotos, dict):
+        return None
+    return fotos
+
+
+def _fotos_salida(doc: dict) -> Optional[dict]:
+    fotos = doc.get("fotos")
+    if not isinstance(fotos, dict):
+        return None
+    return fotos
+
+
+def _verificar_archivo(os_path: str, archivo: str) -> str:
+    """Ruta segura dentro de FOTO_DIR (bloquea `..`, `\\`, `//`)."""
+    if "/" in archivo or "\\" in archivo or ".." in archivo:
+        raise HTTPException(status_code=400, detail="Nombre de archivo invalido")
+    ruta = os.path.abspath(os.path.join(FOTO_DIR, archivo))
+    if not ruta.startswith(os.path.abspath(FOTO_DIR)):
+        raise HTTPException(status_code=400, detail="Nombre de archivo invalido")
+    if not os.path.isfile(ruta):
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    return ruta
+
+
+def _dueno_o_admin(archivo: str, authorization: Optional[str]) -> None:
+    """Sirve una foto: admin SIEMPRE; un chofer solo las de SU vehiculo."""
+    email_admin = None
+    if authorization and authorization.lower().startswith("bearer "):
+        payload = verify_admin_token(authorization.split(" ", 1)[1].strip())
+        email_admin = (payload or {}).get("sub")
+    if email_admin:
+        _ = admin_coleccion.find_one({"email": email_admin})
+        return
+    # no admin: tiene que ser el token del chofer dueno del vehiculo
+    chofer = _chofer_actual(authorization)
+    # El archivo es `<vehiculo_id>_<campo>.<ext>`: el prefijo identifica el
+    # vehiculo sin escanear la coleccion.
+    prefijo = archivo.split("_", 1)[0]
+    if not ObjectId.is_valid(prefijo):
+        raise HTTPException(status_code=403, detail="No puedes ver esta foto")
+    vehiculo = coleccion.find_one(
+        {"_id": ObjectId(prefijo), "driver_id": chofer["id"]})
+    if not vehiculo:
+        raise HTTPException(status_code=403, detail="No puedes ver esta foto")
 
 
 def async_backfill_vehiculos() -> None:
@@ -233,6 +371,92 @@ async def listar_vehiculos(authorization: Optional[str] = Header(None)):
     docs = list(coleccion.find(
         {"driver_id": chofer["id"]}).sort("created_at", -1))
     return [_vehiculo_out(d) for d in docs]
+
+
+# ============================ FOTOS DEL VEHICULO (CHOFER) ============================
+
+@router.post("/driver/vehicles/{vehiculo_id}/fotos", status_code=201)
+async def subir_fotos_vehiculo(vehiculo_id: str,
+                               authorization: Optional[str] = Header(None),
+                               vehiculo_exterior_frente: File(None) = None,
+                               vehiculo_exterior_atras: File(None) = None,
+                               vehiculo_interior_frente: File(None) = None,
+                               vehiculo_interior_atras: File(None) = None,
+                               circulacion: File(None) = None):
+    """Sube (o reemplaza) las fotos del vehiculo.
+
+    Acepta UNA o VARIAS fotos por llamada, con el nombre del campo como clave
+    del multipart. Cada foto queda `pendiente` de revision; si el vehiculo ya
+    estaba aprobado VUELVE a `pendiente` y se desactiva: el administrador debe
+    volver a verlo antes de que el chofer pueda ponerlo en linea.
+    """
+    chofer = _chofer_actual(authorization)
+    if not ObjectId.is_valid(vehiculo_id):
+        raise HTTPException(status_code=400, detail="Id invalido")
+    doc = coleccion.find_one({
+        "_id": ObjectId(vehiculo_id),
+        "driver_id": chofer["id"],
+    })
+    if not doc:
+        raise HTTPException(status_code=404, detail="Vehiculo no encontrado")
+
+    recibidos = {
+        "vehiculo_exterior_frente": vehiculo_exterior_frente,
+        "vehiculo_exterior_atras": vehiculo_exterior_atras,
+        "vehiculo_interior_frente": vehiculo_interior_frente,
+        "vehiculo_interior_atras": vehiculo_interior_atras,
+        "circulacion": circulacion,
+    }
+    recibidos = {k: v for k, v in recibidos.items() if v is not None and v.filename}
+    if not recibidos:
+        raise HTTPException(status_code=400, detail="No se recibio ninguna imagen")
+
+    guardados: Dict[str, dict] = {}
+    for campo, upload in recibidos.items():
+        if campo not in FOTOS_OBLIGATORIAS:
+            raise HTTPException(status_code=400, detail="Campo invalido: %s" % campo)
+        guardados[campo] = _guardar_foto_vehiculo(str(doc["_id"]), campo, upload)
+
+    fotos_previas = doc.get("fotos") or {}
+    if not isinstance(fotos_previas, dict):
+        fotos_previas = {}
+    fotos_previas.update(guardados)
+
+    cambios = {"fotos": fotos_previas}
+    mensaje = "Fotos guardadas"
+    # Reemplazar fotos de un vehiculo aprobado reabre la revision: el admin
+    # vuelve a revisarlo y mientras tanto el chofer no puede trabajar con el
+    # (misma consecuencia que un rechazo del vehiculo).
+    estaba_aprobado = doc.get("estado") == ESTADO_APROBADO
+    if estaba_aprobado:
+        cambios["estado"] = ESTADO_PENDIENTE
+        cambios["es_activo"] = False
+        mensaje = ("Fotos guardadas: el vehiculo vuelve a revision y se "
+                   "desactiva hasta que el administrador lo apruebe")
+    coleccion.update_one({"_id": doc["_id"]}, {"$set": cambios})
+    _invalidar_cache(chofer["id"])
+    return {
+        "ok": True,
+        "message": mensaje,
+        "fotos": fotos_previas,
+        "fotos_faltantes": [
+            c for c in FOTOS_OBLIGATORIAS
+            if not fotos_previas.get(c, {}).get("archivo")
+        ],
+    }
+
+
+@router.get("/garaje/imagen/{archivo}")
+async def ver_foto_vehiculo(archivo: str,
+                            authorization: Optional[str] = Header(None)):
+    """Sirve una foto del garaje (admin o el chofer dueno del vehiculo)."""
+    if "/" in archivo or "\\" in archivo or ".." in archivo:
+        raise HTTPException(status_code=400, detail="Nombre de archivo invalido")
+    _dueno_o_admin(archivo, authorization)
+    ruta = os.path.abspath(os.path.join(FOTO_DIR, archivo))
+    if not os.path.isfile(ruta):
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    return FileResponse(ruta)
 
 
 @router.put("/driver/vehicles/{vehiculo_id}/select")
@@ -377,6 +601,70 @@ async def aprobar_vehiculo(vehiculo_id: str, body: VehiculoAprobacion = Body(...
     decision_txt = "aprobado" if decision == ESTADO_APROBADO else "rechazado"
     salida = _vehiculo_out(coleccion.find_one({"_id": doc["_id"]}) or doc)
     return {"ok": True, "message": "Vehiculo %s" % decision_txt, **salida}
+
+
+@router.put("/admin/vehicles/{vehiculo_id}/fotos/{campo}/revisar")
+async def revisar_foto_vehiculo(vehiculo_id: str, campo: str,
+                                body: FotoRevision = Body(...),
+                                authorization: Optional[str] = Header(None)):
+    """Aprueba o rechaza UNA foto del vehiculo (solo administrador).
+
+    El chofer ve la decision y el motivo en su app. Cuando TODAS las
+    obligatorias quedan aprobadas, el vehiculo pasa a `aprobado`
+    automaticamente (con esas fotos ya revisadas no queda nada por ver).
+    Un rechazo deja el vehiculo en `pendiente` para que el chofer vuelva a
+    subirla.
+    """
+    email_admin = _admin_actual(authorization)
+    if not ObjectId.is_valid(vehiculo_id):
+        raise HTTPException(status_code=400, detail="Id invalido")
+    if campo not in FOTOS_OBLIGATORIAS:
+        raise HTTPException(status_code=400, detail="Campo invalido: %s" % campo)
+    decision = (body.decision or "").strip().lower()
+    if decision not in (ESTADO_APROBADO, ESTADO_RECHAZADO):
+        raise HTTPException(
+            status_code=400,
+            detail="La decision debe ser 'aprobado' o 'rechazado'")
+
+    doc = coleccion.find_one({"_id": ObjectId(vehiculo_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Vehiculo no encontrado")
+    fotos = doc.get("fotos") or {}
+    if campo not in fotos or not fotos[campo].get("archivo"):
+        raise HTTPException(
+            status_code=400, detail="El vehiculo no tiene la foto %s" % campo)
+
+    fotos[campo]["estado"] = decision
+    fotos[campo]["motivo"] = (body.motivo or "").strip() or None
+    fotos[campo]["revisado_por"] = email_admin
+    fotos[campo]["revisado_at"] = datetime.utcnow().isoformat()
+
+    cambios = {"fotos": fotos}
+    completas = all(
+        (fotos.get(c) or {}).get("archivo")
+        and (fotos.get(c) or {}).get("estado") == ESTADO_APROBADO
+        for c in FOTOS_OBLIGATORIAS
+    )
+    # Todas las fotos aprobadas => el vehiculo esta a la vista: se aprueba
+    # solo. Con alguna rechazada sigue `pendiente` (el chofer corregira).
+    auto_aprobado = False
+    if completas and doc.get("estado") != ESTADO_APROBADO:
+        cambios["estado"] = ESTADO_APROBADO
+        cambios["revisado_por"] = email_admin
+        cambios["revisado_at"] = datetime.utcnow()
+        cambios["motivo"] = None
+        auto_aprobado = True
+    coleccion.update_one({"_id": doc["_id"]}, {"$set": cambios})
+    _invalidar_cache(doc.get("driver_id"))
+
+    salida = _vehiculo_out(coleccion.find_one({"_id": doc["_id"]}) or doc)
+    return {
+        "ok": True,
+        "message": ("Foto %s" % decision
+                    + (" (vehiculo aprobado con todas sus fotos)"
+                       if auto_aprobado else "")),
+        **salida,
+    }
 
 
 # ============================ CONSULTA PARA EL SONDEO ============================

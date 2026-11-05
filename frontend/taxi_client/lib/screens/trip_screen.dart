@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api_config.dart';
 import '../models/models.dart';
@@ -795,7 +796,12 @@ class _TripScreenState extends State<TripScreen> {
                   dense: true,
                   leading: const Icon(Icons.person_pin_circle),
                   title: const Text('Chofer asignado'),
-                  subtitle: Text(t.driverId!),
+                  subtitle: Text(_nombreChofer(t)),
+                ),
+              if (t.driverPhone != null && t.driverPhone!.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 8),
+                  child: _botonesContacto(t.driverPhone!),
                 ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -938,13 +944,19 @@ class _TripScreenState extends State<TripScreen> {
                     .titleMedium
                     ?.copyWith(fontWeight: FontWeight.bold)),
             const Divider(height: 18),
-            _row('Chofer', t.driverId ?? 'No asignado'),
+            _row('Chofer', _nombreChofer(t)),
             _row('Vehículo', t.vehicleType.isEmpty ? '—' : t.vehicleType),
-            _row('Solicitado', t.requestedAt ?? '—'),
+            _row('Solicitado', t.requestedAtLocal ?? t.requestedAt ?? '—'),
             if ((t.requestAddress ?? '').isNotEmpty)
               _row('Recogida', t.requestAddress!),
             if ((t.dropoffAddress ?? '').isNotEmpty)
               _row('Destino', t.dropoffAddress!),
+            // Contacto directo mientras el viaje esta en curso: llamar o
+            // WhatsApp con el CHOFER (sin recopilar ningun dato del cliente).
+            if (t.driverPhone != null && t.driverPhone!.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _botonesContacto(t.driverPhone!),
+            ],
             const SizedBox(height: 28),
             FilledButton.icon(
               // Unico punto que cierra el viaje y devuelve al inicio.
@@ -1000,16 +1012,98 @@ class _TripScreenState extends State<TripScreen> {
     );
   }
 
+  /// Fila etiqueta-valor del recibo.
+  ///
+  /// El valor va en un `Expanded` con wrap: antes las direcciones largas se
+  /// salian del ancho (clipping "RecogidaPaseo de Martí...") y no se podian
+  /// leer completas.
   Widget _row(String label, String value, {bool bold = false}) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
+        padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
-            Text(value,
+            Text(label,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w500, height: 1.25)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                value,
+                textAlign: TextAlign.end,
+                softWrap: true,
                 style: TextStyle(
-                    fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
+                    height: 1.25,
+                    fontWeight: bold ? FontWeight.bold : FontWeight.normal),
+              ),
+            ),
           ],
         ),
+      );
+
+  /// "Chofer: id de Mongo" del panel viejo ya no: el nombre legible si el
+  /// backend lo manda, y el id SOLO como respaldo.
+  String _nombreChofer(ClientTrip t) {
+    final nombre = t.driverName?.trim();
+    if (nombre != null && nombre.isNotEmpty && nombre != t.driverId) return nombre;
+    return t.driverId ?? 'No asignado';
+  }
+
+  /// Telefono en formato internacional para wa.me: Cuba = prefijo 53.
+  ///
+  /// Los numeros locales se guardan con 8 digitos (movil empieza en 5, fijo
+  /// en 2). Si ya viene con prefijo ('+53...'), no se toca.
+  String _telefonoWa(String telefono) {
+    final solo = telefono.replaceAll(RegExp(r'\D'), '');
+    if (solo.length == 8 && (solo.startsWith('5') || solo.startsWith('2'))) {
+      return '53$solo';
+    }
+    return solo;
+  }
+
+  /// Abre el dialer del telefono o el chat de WhatsApp con el chofer.
+  void _comunicar(String telefono, {required bool whatsapp}) async {
+    if (whatsapp) {
+      final uri = Uri.parse('https://wa.me/${_telefonoWa(telefono)}');
+      try {
+        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+        if (!ok) throw Exception('WhatsApp no disponible');
+      } catch (e) {
+        _aviso_('WhatsApp no se pudo abrir. Revisa que esté instalado.');
+      }
+      return;
+    }
+    final uri = Uri.parse('tel:$telefono');
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) throw 'El dialer no abrió';
+    } catch (e) {
+      _aviso_('Llamada no se pudo iniciar.');
+    }
+  }
+
+  void _aviso_(String mensaje) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(mensaje), behavior: SnackBarBehavior.floating));
+  }
+
+  /// Botones Llamar / WhatsApp compartidos por el panel y el recibo.
+  Widget _botonesContacto(String telefono) => Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => _comunicar(telefono, whatsapp: false),
+              icon: const Icon(Icons.call),
+              label: const Text('Llamar'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: () => _comunicar(telefono, whatsapp: true),
+              icon: const Icon(Icons.chat),
+              label: const Text('WhatsApp'),
+            ),
+          ),
+        ],
       );
 }

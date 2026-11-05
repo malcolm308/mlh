@@ -47,6 +47,8 @@ class TabVehiculos(ttk.Frame):
               fg="#1b2a3a").pack(side="left", padx=(16, 4))
         boton(top, "Rechazar", self.rechazar, color="#e74c3c",
               fg="#ffffff").pack(side="left", padx=4)
+        boton(top, "Ver fotos", self.ver_fotos, color="#8e44ad",
+              fg="#ffffff").pack(side="left", padx=4)
         boton(top, "Actualizar", self.cargar, color="#2f80ed",
               fg="#ffffff").pack(side="left", padx=4)
 
@@ -132,6 +134,25 @@ class TabVehiculos(ttk.Frame):
             "chofer": valores[0],
             "estado": valores[7],
         }
+
+    def ver_fotos(self):
+        """Abre el visor de las 5 fotos del registro del vehiculo elegido."""
+        v = self._seleccionado()
+        if not v:
+            return
+        try:
+            lista = self.api.vehiculos(estado=None).get("vehiculos", [])
+        except ApiError as e:
+            messagebox.showerror("Fotos", str(e.mensaje))
+            return
+        vehiculo = next((x for x in lista if x.get("id") == v["id"]), None)
+        if not vehiculo:
+            messagebox.showerror("Fotos", "No se encontro el vehiculo.")
+            return
+        # Import perezoso: Pillow/pillow_heif pueden faltar y solo se necesitan
+        # al abrir esta ventana.
+        from panel_fotos_vehiculo import VentanaFotosVehiculo
+        VentanaFotosVehiculo(self.winfo_toplevel(), self.api, vehiculo)
 
     def aprobar(self):
         v = self._seleccionado()

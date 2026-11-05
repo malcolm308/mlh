@@ -329,6 +329,28 @@ def _client_phone(client_doc: Optional[dict]) -> Optional[str]:
     )
 
 
+def _chofer_display_name(chofer_doc: Optional[dict]) -> Optional[str]:
+    """Nombre legible del chofer desde su documento en MongoDB."""
+    if not chofer_doc:
+        return None
+    full = " ".join(filter(None, [
+        chofer_doc.get("Nombre"),
+        chofer_doc.get("Apellidos") or chofer_doc.get("apellidos"),
+    ])).strip()
+    return full or chofer_doc.get("email") or None
+
+
+def _chofer_phone(chofer_doc: Optional[dict]) -> Optional[str]:
+    """Telefono del chofer (para llamar o WhatsApp desde el cliente)."""
+    if not chofer_doc:
+        return None
+    return (
+        chofer_doc.get("numero_de_telefono")
+        or chofer_doc.get("phone")
+        or chofer_doc.get("telefono")
+    )
+
+
 def validate_client_exists(client_id: str) -> bool:
     try:
         result = cliente_coleccion.find_one({"_id": to_mongo_id(client_id)})
@@ -698,6 +720,18 @@ def get_applicable_time_rule(vehicle_type: str, current_time: datetime) -> Optio
         cur.close()
         return dict(row) if row else None
 
+def _hora_cuba() -> datetime:
+    """Ahora en hora de Cuba, NAIVE.
+
+    Las ventanas de `time_pricing_rules` (p.ej. 20:00-06:00 nocturno) estan
+    escritas en hora LOCAL del pais. Antes se pasaba `datetime.now(timezone.utc)`
+    y el cruce quedaba corrido 4 horas: el nocturno aplicaba de 16:00 a 02:00 y
+    el diurno hacia lo contrario. Con `tiempo_cuba` (desfase fijo CUBA_UTC_OFFSET)
+    la regla coincide con el reloj del chofer.
+    """
+    return ahora_cuba().replace(tzinfo=None)
+
+
 def _price_breakdown(distance_km: float, vehicle_type: str, pickup_lat=None, pickup_lng=None, dropoff_lat=None, dropoff_lng=None) -> dict:
     """Calcula los componentes de tarifa usando la tarifa vigente y la regla horaria.
 
@@ -715,7 +749,7 @@ def _price_breakdown(distance_km: float, vehicle_type: str, pickup_lat=None, pic
     base_fare = float(tariff["base_fare"])
     price_per_km = float(tariff["price_per_km"])
     price_per_minute = float(tariff["price_per_minute"])
-    time_rule = get_applicable_time_rule(vehicle_type, datetime.now(timezone.utc))
+    time_rule = get_applicable_time_rule(vehicle_type, _hora_cuba())
     if time_rule:
         base_fare *= float(time_rule["base_fare_multiplier"])
         price_per_km *= float(time_rule["price_per_km_multiplier"])
@@ -1119,8 +1153,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             if not tariff:
                 raise ValueError(f"No hay tarifa configurada para: {vehicle_type}")
 
-            # 4. Obtener regla horaria activa segun la hora actual
-            now = datetime.now(timezone.utc)
+            # 4. Obtener regla horaria activa segun la hora de CUBA. Las
+            #    ventanas (20:00-06:00 nocturno, 06:00-20:00 diurno) son horas
+            #    locales del pais: evaluarlas contra el reloj UTC corria el
+            #    nocturno cuatro horas antes.
+            now = _hora_cuba()
             time_rule = get_applicable_time_rule(vehicle_type, now)
 
             # 5. Calcular tarifas base con multiplicadores horarios
@@ -2913,6 +2950,28 @@ async def api_get_trip(trip_id: str):
         client_doc = cliente_coleccion.find_one({"_id": to_mongo_id(trip["client_id"])})
         trip["client_name"] = _client_display_name(client_doc)
         trip["client_phone"] = _client_phone(client_doc)
+
+    # Datos del CHOFER para la app del pasajero: el recibo muestra el nombre
+    # (no el id) y con el telefono puede llamar o abrir WhatsApp.
+    trip["driver_name"] = None
+    trip["driver_phone"] = None
+    if trip.get("driver_id"):
+        chofer_doc = chofer_coleccion.find_one({"_id": to_mongo_id(trip["driver_id"])})
+        trip["driver_name"] = _chofer_display_name(chofer_doc)
+        trip["driver_phone"] = _chofer_phone(chofer_doc)
+
+    # Hora legible en hora de Cuba: completado_at/requested_at estan en UTC.
+    for campo in ("requested_at", "started_at", "completed_at"):
+        valor = trip.get(campo)
+        if valor:
+            try:
+                trip[f"{campo}_local"] = (
+                    valor.replace(tzinfo=timezone.utc)
+                    .astimezone(CUBA_TZ)
+                    .strftime("%d/%m/%Y %H:%M")
+                )
+            except (TypeError, ValueError):
+                trip[f"{campo}_local"] = None
 
     # Los minutos de cortesía viajan con el viaje para que el chofer pueda
     # pintar el contador sin tener que recordar un número que el administrador

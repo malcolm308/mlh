@@ -52,6 +52,16 @@ class ClientTrip {
   final double? commission;
   final String? driverId;
 
+  /// Nombre legible del chofer (Mongo), para el recibo y el panel.
+  final String? driverName;
+
+  /// Telefono del chofer: botones Llamar / WhatsApp del pasajero.
+  final String? driverPhone;
+
+  /// `requested_at` ya formateado en hora de Cuba por el backend, listo para
+  /// pintar (el reloj del telefono no interviene).
+  final String? requestedAtLocal;
+
   /// Rumbo del vehiculo (0 = norte, sentido horario) tal como lo reporto el
   /// chofer con su GPS. `null` = sin dato (chofer parado o sin viaje).
   final double? driverBearing;
@@ -84,6 +94,9 @@ class ClientTrip {
     this.totalFare,
     this.commission,
     this.driverId,
+    this.driverName,
+    this.driverPhone,
+    this.requestedAtLocal,
     this.driverBearing,
     this.driverLat,
     this.driverLng,
@@ -109,6 +122,9 @@ class ClientTrip {
         totalFare: (j['total_fare'] as num?)?.toDouble(),
         commission: (j['commission'] as num?)?.toDouble(),
         driverId: j['driver_id']?.toString(),
+        driverName: j['driver_name']?.toString(),
+        driverPhone: j['driver_phone']?.toString(),
+        requestedAtLocal: j['requested_at_local']?.toString(),
         driverBearing: (j['driver_bearing'] as num?)?.toDouble(),
         driverLat: (j['driver_lat'] as num?)?.toDouble(),
         driverLng: (j['driver_lng'] as num?)?.toDouble(),

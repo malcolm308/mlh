@@ -267,6 +267,19 @@ class ApiService {
     await _map('PUT', '/driver/vehicles/$vehicleId/select');
   }
 
+  /// Sube fotos del vehiculo: ruta local → campo.
+  ///
+  /// Igual que el registro, va multipart. El backend guarda en disco y marca
+  /// cada foto `pendiente` para el administrador.
+  Future<Map<String, dynamic>> addVehicleFotos(
+    String vehicleId,
+    Map<String, String> archivos,
+  ) async {
+    final url = '${ApiConfig.baseUrl}/driver/vehicles/$vehicleId/fotos';
+    final j = await ApiClient.multipart(url, const {}, files: archivos);
+    return (j as Map).cast<String, dynamic>();
+  }
+
   // ------------------- OFERTAS / VIAJES -------------------
   Future<List<TripOffer>> getNearbyRequestedTrips(
     double lat,

@@ -1,8 +1,21 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/vehicle_types_service.dart';
+
+/// Las 5 fotos que exige el registro del vehiculo y que revisa el
+/// administrador (mismos campos que el backend espera en el multipart).
+const List<(String, String)> fotosVehiculoRequeridas = [
+  ('vehiculo_exterior_frente', 'Exterior (delante)'),
+  ('vehiculo_exterior_atras', 'Exterior (atrás)'),
+  ('vehiculo_interior_frente', 'Interior (delante)'),
+  ('vehiculo_interior_atras', 'Interior (atrás)'),
+  ('circulacion', 'Circulación'),
+];
 
 /// Mi Garaje: lista de vehiculos del chofer, alta de uno nuevo y eleccion del
 /// vehiculo activo.
@@ -36,7 +49,6 @@ class _GarageScreenState extends State<GarageScreen> {
 
   List<DriverVehicle> _vehiculos = [];
   bool _loading = true;
-  bool _agregando = false;
   String? _error;
 
   /// Id del vehiculo cuya activacion esta en vuelo, para que el boton no se
@@ -88,110 +100,58 @@ class _GarageScreenState extends State<GarageScreen> {
   }
 
   void _mostrarFormulario() {
-    var tipo = (widget.tipoActivo ?? '').isNotEmpty
-        ? widget.tipoActivo!
-        : 'basico';
-    final marca = TextEditingController();
-    final modelo = TextEditingController();
-    final matricula = TextEditingController();
-
-    showDialog(
+    showDialog<AltaVehiculo>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Añadir vehículo'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<String>(
-              initialValue: _tipos.esValido(tipo) ? tipo : null,
-              decoration: const InputDecoration(
-                  labelText: 'Tipo de vehículo'),
-              items: [
-                for (final t in _tipos.tipos)
-                  DropdownMenuItem(
-                      value: t.tipo,
-                      child: Text(t.etiqueta)),
-              ],
-              onChanged: (v) => tipo = v ?? tipo,
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: marca,
-              decoration: const InputDecoration(labelText: 'Marca (ej: Lada)'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: modelo,
-              decoration:
-                  const InputDecoration(labelText: 'Modelo (ej: 2107)'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: matricula,
-              decoration: const InputDecoration(
-                  labelText: 'Matrícula (ej: B 123456)'),
-              textCapitalization: TextCapitalization.characters,
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'El vehículo entra pendiente hasta que el administrador lo '
-              'revise.',
-              style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: _agregando
-                ? null
-                : () async {
-                    final tipoFinal = _tipos.esValido(tipo)
-                        ? tipo
-                        : (_tipos.tipos.isNotEmpty
-                            ? _tipos.tipos.first.tipo
-                            : 'basico');
-                    final marcaTxt = marca.text.trim();
-                    final modeloTxt = modelo.text.trim();
-                    final matriculaTxt = matricula.text.trim().toUpperCase();
-                    String? problema;
-                    if (marcaTxt.isEmpty) {
-                      problema = 'Escribe la marca';
-                    } else if (modeloTxt.isEmpty) {
-                      problema = 'Escribe el modelo';
-                    } else if (matriculaTxt.isEmpty) {
-                      problema = 'Escribe la matrícula';
-                    }
-                    if (problema != null) {
-                      _aviso(problema);
-                      return;
-                    }
-                    setState(() => _agregando = true);
-                    try {
-                      await widget.api.addVehicle(
-                        tipoVehiculo: tipoFinal,
-                        marca: marcaTxt,
-                        modelo: modeloTxt,
-                        matricula: matriculaTxt,
-                      );
-                      if (!mounted) return;
-                      Navigator.pop(ctx);
-                      _aviso('Vehículo enviado a revisión');
-                      await _cargar();
-                    } catch (e) {
-                      if (!mounted) return;
-                      setState(() => _agregando = false);
-                      _aviso('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
-                    }
-                  },
-            child: Text(_agregando ? 'Enviando...' : 'Guardar'),
-          ),
-        ],
+      builder: (ctx) => FormularioVehiculoDialog(
+        tipos: _tipos,
+        tipoInicial: (widget.tipoActivo ?? '').isNotEmpty
+            ? widget.tipoActivo
+            : 'basico',
+      ),
+    ).then((alta) async {
+      if (alta == null) return;
+      try {
+        final v = await widget.api.addVehicle(
+          tipoVehiculo: alta.tipo,
+          marca: alta.marca,
+          modelo: alta.modelo,
+          matricula: alta.matricula,
+        );
+        // El vehiculo solo sirve al administrador si trae las fotos del
+        // registro y de la circulacion: se suben justo después de crearlo.
+        await widget.api.addVehicleFotos(v.id, alta.fotos);
+        if (!mounted) return;
+        _aviso('Vehículo enviado a revisión con sus fotos');
+        await _cargar();
+      } catch (e) {
+        if (!mounted) return;
+        _aviso('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
+      }
+    });
+  }
+
+  /// Sube (o reemplaza) fotos de un vehiculo que ya existe en el garaje.
+  Future<void> _anadirFotos(DriverVehicle v) async {
+    _aviso(
+        'Si el vehículo estaba aprobado volverá a revisión y quedará en '
+        'reposo hasta la nueva aprobación');
+    final alta = await showDialog<AltaVehiculo>(
+      context: context,
+      builder: (ctx) => FormularioVehiculoDialog(
+        tipos: _tipos,
+        tipoInicial: v.tipoVehiculo,
+        soloFotos: true,
       ),
     );
+    if (alta == null || alta.fotos.isEmpty) return;
+    try {
+      final resultado = await widget.api.addVehicleFotos(v.id, alta.fotos);
+      final mensaje = (resultado['message'] ?? 'Fotos guardadas').toString();
+      _aviso(mensaje);
+      await _cargar();
+    } catch (e) {
+      _aviso('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
+    }
   }
 
   /// Marca el vehiculo como el activo. Pide confirmacion: cambiar de coche
@@ -282,6 +242,84 @@ class _GarageScreenState extends State<GarageScreen> {
     );
   }
 
+  /// Estado de las 5 fotos del registro: chip verde (aprobada), ámbar
+  /// (pendiente), rojo (rechazada) y gris (sin subir). Con faltantes o
+  /// rechazadas, botón "Añadir fotos" que reabre el selector.
+  Widget _seccionFotos(DriverVehicle v) {
+    final hayRechazadas = v.fotos.values
+        .any((f) => f.estado == 'rechazado');
+    final hayFaltantes = v.fotosFaltantes.isNotEmpty;
+    final accionNecesaria = hayFaltantes || hayRechazadas;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        const Text('Fotos del registro (las revisa el administrador):',
+            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final (campo, etiqueta) in fotosVehiculoRequeridas)
+              _chipFoto(campo, etiqueta, v),
+          ],
+        ),
+        if (accionNecesaria) ...[
+          const SizedBox(height: 6),
+          TextButton.icon(
+            onPressed: () => _anadirFotos(v),
+            icon: const Icon(Icons.add_a_photo, size: 18),
+            label: Text(hayFaltantes ? 'Añadir fotos faltantes' : 'Repetir foto rechazada'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _chipFoto(String campo, String etiqueta, DriverVehicle v) {
+    final f = v.fotos[campo];
+    final Color color;
+    final IconData icono;
+    final String texto;
+    if (f == null) {
+      color = const Color(0xFF6B7280);
+      icono = Icons.image_not_supported_outlined;
+      texto = '$etiqueta: falta';
+    } else {
+      switch (f.estado) {
+        case 'aprobado':
+          color = const Color(0xFF2E7D32);
+          icono = Icons.check_circle_outline;
+          texto = '$etiqueta: aprobada';
+        case 'rechazado':
+          color = const Color(0xFFC62828);
+          icono = Icons.cancel_outlined;
+          texto = '$etiqueta: rechazada';
+        default:
+          color = const Color(0xFFB26A00);
+          icono = Icons.hourglass_top;
+          texto = '$etiqueta: en revisión';
+      }
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color, width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icono, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(texto, style: TextStyle(fontSize: 11, color: color)),
+        ],
+      ),
+    );
+  }
+
   Widget _tarjeta(DriverVehicle v, bool hayAprobado) {
     final colorDeEstado = switch (v.estado) {
       'aprobado' => const Color(0xFF2E7D32),
@@ -326,6 +364,7 @@ class _GarageScreenState extends State<GarageScreen> {
               'Matrícula: ${v.matricula ?? '—'}',
               style: const TextStyle(color: Color(0xFF6B7280)),
             ),
+            _seccionFotos(v),
             if (v.motivo != null && v.motivo!.trim().isNotEmpty) ...[
               const SizedBox(height: 4),
               Text('Motivo: ${v.motivo}',
@@ -370,6 +409,277 @@ class _GarageScreenState extends State<GarageScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Resultado del formulario del garaje.
+class AltaVehiculo {
+  final String tipo;
+  final String marca;
+  final String modelo;
+  final String matricula;
+
+  /// campo -> ruta local de la foto.
+  final Map<String, String> fotos;
+
+  const AltaVehiculo({
+    required this.tipo,
+    required this.marca,
+    required this.modelo,
+    required this.matricula,
+    required this.fotos,
+  });
+}
+
+/// Formulario de alta (y solo-fotos) de un vehiculo del garaje.
+///
+/// Las 5 fotos del registro son OBLIGATORIAS para dar de alta un vehiculo:
+/// sin ellas el administrador no puede revisar nada. En modo `soloFotos`
+/// (vehiculo ya creado) se sube la que haga falta y con eso se reabre la
+/// revision del administrador.
+class FormularioVehiculoDialog extends StatefulWidget {
+  final VehicleTypesService tipos;
+  final String? tipoInicial;
+
+  /// `true` al abrir desde un vehiculo existente: solo pide fotos.
+  final bool soloFotos;
+
+  const FormularioVehiculoDialog({
+    super.key,
+    required this.tipos,
+    this.tipoInicial,
+    this.soloFotos = false,
+  });
+
+  @override
+  State<FormularioVehiculoDialog> createState() =>
+      _FormularioVehiculoDialogState();
+}
+
+class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
+  final ImagePicker _picker = ImagePicker();
+  final Map<String, String> _fotos = {};
+  late String _tipo;
+  late final TextEditingController _marca;
+  late final TextEditingController _modelo;
+  late final TextEditingController _matricula;
+
+  @override
+  void initState() {
+    super.initState();
+    _tipo = widget.tipoInicial ?? 'basico';
+    _marca = TextEditingController();
+    _modelo = TextEditingController();
+    _matricula = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _marca.dispose();
+    _modelo.dispose();
+    _matricula.dispose();
+    super.dispose();
+  }
+
+  Future<void> _tomarFoto(String campo, ImageSource origen) async {
+    try {
+      final img = await _picker.pickImage(
+        source: origen,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 80,
+      );
+      if (img == null) return;
+      setState(() => _fotos[campo] = img.path);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('No se pudo abrir la camara: $e'),
+            behavior: SnackBarBehavior.floating));
+      }
+    }
+  }
+
+  void _pedirFoto(String campo) {
+    showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera),
+              title: const Text('Camara'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Galeria'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    ).then((origen) {
+      if (origen != null) _tomarFoto(campo, origen);
+    });
+  }
+
+  Widget _tileFoto(String campo, String etiqueta) {
+    final ruta = _fotos[campo];
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 56,
+            height: 42,
+            child: ruta != null
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Image.file(File(ruta),
+                        fit: BoxFit.cover, width: 56, height: 42),
+                  )
+                : Container(
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFEDEFF3),
+                        borderRadius: BorderRadius.circular(6)),
+                    child: const Icon(Icons.image_outlined,
+                        size: 20, color: Color(0xFF9AA3AF)),
+                  ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(etiqueta)),
+          TextButton(
+            onPressed: () => _pedirFoto(campo),
+            child: Text(ruta == null ? 'Tomar foto' : 'Repetir'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _validarYDevolver() {
+    if (!widget.soloFotos) {
+      final marca = _marca.text.trim();
+      final modelo = _modelo.text.trim();
+      final matricula = _matricula.text.trim().toUpperCase();
+      if (marca.isEmpty || modelo.isEmpty || matricula.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Escribe la marca, el modelo y la matricula.'),
+            behavior: SnackBarBehavior.floating));
+        return;
+      }
+      final faltan = fotosVehiculoRequeridas
+          .where((f) => !_fotos.containsKey(f.$1))
+          .toList();
+      if (faltan.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Te faltan ${faltan.length} foto(s):\n${faltan.map((f) => f.$2).join(", ")}'),
+            behavior: SnackBarBehavior.floating));
+        return;
+      }
+      Navigator.of(context).pop(AltaVehiculo(
+        tipo: widget.tipos.esValido(_tipo)
+            ? _tipo
+            : (widget.tipos.tipos.isNotEmpty
+                ? widget.tipos.tipos.first.tipo
+                : 'basico'),
+        marca: marca,
+        modelo: modelo,
+        matricula: matricula,
+        fotos: Map.of(_fotos),
+      ));
+      return;
+    }
+    if (_fotos.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Toma al menos una foto.'),
+          behavior: SnackBarBehavior.floating));
+      return;
+    }
+    Navigator.of(context).pop(AltaVehiculo(
+      tipo: widget.tipoInicial ?? 'basico',
+      marca: '',
+      modelo: '',
+      matricula: '',
+      fotos: Map.of(_fotos),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final nuevos = !widget.soloFotos;
+    return AlertDialog(
+      title: Text(nuevos ? 'Anadir vehiculo' : 'Fotos del vehiculo'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (nuevos) ...[
+                DropdownButtonFormField<String>(
+                  initialValue: widget.tipos.esValido(_tipo) ? _tipo : null,
+                  decoration:
+                      const InputDecoration(labelText: 'Tipo de vehiculo'),
+                  items: [
+                    for (final t in widget.tipos.tipos)
+                      DropdownMenuItem(value: t.tipo, child: Text(t.etiqueta)),
+                  ],
+                  onChanged: (v) => setState(() => _tipo = v ?? _tipo),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _marca,
+                  decoration:
+                      const InputDecoration(labelText: 'Marca (ej: Lada)'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _modelo,
+                  decoration:
+                      const InputDecoration(labelText: 'Modelo (ej: 2107)'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _matricula,
+                  decoration: const InputDecoration(
+                      labelText: 'Matricula (ej: B 123456)'),
+                  textCapitalization: TextCapitalization.characters,
+                ),
+                const SizedBox(height: 14),
+              ],
+              const Text('Fotos obligatorias:',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              for (final (campo, etiqueta) in fotosVehiculoRequeridas)
+                _tileFoto(campo, etiqueta),
+              const SizedBox(height: 8),
+              Text(
+                nuevos
+                    ? 'El vehiculo entra pendiente. El administrador revisara '
+                        'los datos y las fotos.'
+                    : 'Si el vehiculo estaba aprobado, se desactiva y vuelve a '
+                        'revision con las fotos nuevas.',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _validarYDevolver,
+          child: Text(nuevos ? 'Guardar' : 'Subir fotos'),
+        ),
+      ],
     );
   }
 }

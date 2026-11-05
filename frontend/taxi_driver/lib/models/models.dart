@@ -101,7 +101,7 @@ factory DriverProfile.fromJson(Map<String, dynamic> j) {
   String get fullName => '$nombre $apellidos'.trim();
 }
 
-/// Un vehiculo de "Mi Garaje", tal como lo devuelve `/driver/vehicles`.
+/// Una vehiculo de "Mi Garaje", tal como lo devuelve `/driver/vehicles`.
 class DriverVehicle {
   final String id;
   final String driverId;
@@ -114,6 +114,13 @@ class DriverVehicle {
   final String? creado;
   final String? motivo;
 
+  /// Fotos del vehiculo: campo → estado/archivo. Los 5 campos que exige el
+  /// registro son: exterior frente/atras, interior frente/atras y circulacion.
+  final Map<String, FotoVehiculo> fotos;
+
+  /// Campos que TODAVIA no tienen foto subida.
+  final List<String> fotosFaltantes;
+
   const DriverVehicle({
     required this.id,
     required this.driverId,
@@ -125,6 +132,8 @@ class DriverVehicle {
     this.matricula,
     this.creado,
     this.motivo,
+    this.fotos = const {},
+    this.fotosFaltantes = const [],
   });
 
   /// Etiqueta de estado legible para la interfaz.
@@ -148,6 +157,32 @@ class DriverVehicle {
         modelo: _str(j, ['modelo', 'model']),
         matricula: _str(j, ['matricula', 'chapa']),
         creado: j['creado']?.toString(),
+        motivo: j['motivo']?.toString(),
+        fotos: ((j['fotos'] ?? const {}) as Map).map(
+          (k, v) => MapEntry(k.toString(),
+              FotoVehiculo.fromJson((v as Map).cast<String, dynamic>())),
+        ),
+        fotosFaltantes: ((j['fotos_faltantes'] ?? const []) as List)
+            .map((c) => c.toString())
+            .toList(),
+      );
+}
+
+/// Estado de UNA foto del vehiculo (subida/aprobada/rechazada).
+class FotoVehiculo {
+  final String archivo;
+  final String estado; // pendiente | aprobado | rechazado
+  final String? motivo;
+
+  const FotoVehiculo({
+    required this.archivo,
+    required this.estado,
+    this.motivo,
+  });
+
+  factory FotoVehiculo.fromJson(Map<String, dynamic> j) => FotoVehiculo(
+        archivo: (j['archivo'] ?? '').toString(),
+        estado: (j['estado'] ?? 'pendiente').toString(),
         motivo: j['motivo']?.toString(),
       );
 }

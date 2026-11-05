@@ -163,6 +163,32 @@ class ApiClient:
         return self.put("/admin/vehicles/%s/approve" % vehiculo_id,
                         {"decision": decision, "motivo": motivo})
 
+    def revisar_foto_vehiculo(self, vehiculo_id, campo, decision, motivo=None):
+        return self.put("/admin/vehicles/%s/fotos/%s/revisar"
+                        % (vehiculo_id, campo),
+                        {"decision": decision, "motivo": motivo})
+
+    def descargar_foto_vehiculo(self, archivo):
+        """Descarga los bytes de una foto del garaje (mismo patron que
+        `descargar_documento`)."""
+        if not archivo:
+            raise ApiError("La foto no indica archivo.")
+        req = urllib.request.Request(
+            "%s/garaje/imagen/%s" % (self.base_url, archivo), method="GET")
+        req.add_header("Accept", "image/*")
+        if self.token:
+            req.add_header("Authorization", "Bearer " + self.token)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise ApiError("La sesion expiro. Vuelve a entrar al panel.", status=e.code)
+            raise ApiError("No se pudo descargar la imagen (HTTP %s)." % e.code,
+                           status=e.code)
+        except urllib.error.URLError as e:
+            raise ApiError("No se pudo conectar con el servidor (%s)." % e.reason)
+
     def url_documento(self, archivo):
         return "%s/documentos/imagen/%s" % (self.base_url, archivo)
 
