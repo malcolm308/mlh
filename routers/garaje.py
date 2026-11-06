@@ -474,11 +474,16 @@ async def eliminar_vehiculo(vehiculo_id: str,
 @router.post("/driver/vehicles/{vehiculo_id}/fotos", status_code=201)
 async def subir_fotos_vehiculo(vehiculo_id: str,
                                authorization: Optional[str] = Header(None),
-                               vehiculo_exterior_frente: File(None) = None,
-                               vehiculo_exterior_atras: File(None) = None,
-                               vehiculo_interior_frente: File(None) = None,
-                               vehiculo_interior_atras: File(None) = None,
-                               circulacion: File(None) = None):
+                               vehiculo_exterior_frente:
+                               Optional[UploadFile] = File(None),
+                               vehiculo_exterior_atras:
+                               Optional[UploadFile] = File(None),
+                               vehiculo_interior_frente:
+                               Optional[UploadFile] = File(None),
+                               vehiculo_interior_atras:
+                               Optional[UploadFile] = File(None),
+                               circulacion:
+                               Optional[UploadFile] = File(None)):
     """Sube (o reemplaza) las fotos del vehiculo.
 
     Acepta UNA o VARIAS fotos por llamada, con el nombre del campo como clave
