@@ -790,19 +790,7 @@ class _TripScreenState extends State<TripScreen> {
                 ),
               ),
               const Divider(),
-              if (t.driverId != null)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  leading: const Icon(Icons.person_pin_circle),
-                  title: const Text('Chofer asignado'),
-                  subtitle: Text(_nombreChofer(t)),
-                ),
-              if (t.driverPhone != null && t.driverPhone!.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4, bottom: 8),
-                  child: _botonesContacto(t.driverPhone!),
-                ),
+              if (t.driverId != null) _tarjetaChofer(t, scheme),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -1040,6 +1028,80 @@ class _TripScreenState extends State<TripScreen> {
         ),
       );
 
+  /// URL absoluta de la foto de perfil del chofer (el backend la manda como
+  /// ruta relativa `/trips/{id}/driver-photo`).
+  String? _fotoChofer(ClientTrip t) {
+    final raw = t.driverProfilePictureUrl?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    return raw.startsWith('http') ? raw : '${ApiConfig.baseUrl}$raw';
+  }
+
+  /// Tarjeta del chofer asignado: foto, nombre, vehiculo y botones de
+  /// contacto. La vista del recibo (`_buildSummary`) reutiliza los botones.
+  Widget _tarjetaChofer(ClientTrip t, ColorScheme scheme) {
+    final foto = _fotoChofer(t);
+    final modelo = t.driverVehicleModel?.trim();
+    final placa = t.driverVehiclePlate?.trim();
+    final detalle = [
+      if (modelo != null && modelo.isNotEmpty) modelo,
+      if (placa != null && placa.isNotEmpty) 'Matrícula $placa',
+    ].join(' · ');
+
+    return Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 26,
+                backgroundColor: scheme.primaryContainer,
+                foregroundImage: foto == null ? null : NetworkImage(foto),
+                onForegroundImageError: foto == null ? null : (_, _) {},
+                child: Icon(Icons.person, size: 30, color: scheme.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _nombreChofer(t),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    if (detalle.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        detalle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF6B7280)),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (t.driverPhone != null && t.driverPhone!.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _botonesContacto(t.driverPhone!),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// "Chofer: id de Mongo" del panel viejo ya no: el nombre legible si el
   /// backend lo manda, y el id SOLO como respaldo.
   String _nombreChofer(ClientTrip t) {
@@ -1063,7 +1125,11 @@ class _TripScreenState extends State<TripScreen> {
   /// Abre el dialer del telefono o el chat de WhatsApp con el chofer.
   void _comunicar(String telefono, {required bool whatsapp}) async {
     if (whatsapp) {
-      final uri = Uri.parse('https://wa.me/${_telefonoWa(telefono)}');
+      final uri = Uri.https(
+        'wa.me',
+        '/${_telefonoWa(telefono)}',
+        {'text': 'Hola, soy el cliente del viaje'},
+      );
       try {
         final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
         if (!ok) throw Exception('WhatsApp no disponible');

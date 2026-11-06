@@ -105,6 +105,18 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   /// saltaba a lo loco).
   final FocusNode _searchFocus = FocusNode();
 
+  /// Ancla del desplegable de sugerencias: el campo es el "leader" y la
+  /// ventana flotante lo sigue aunque el panel o el teclado se muevan.
+  final LayerLink _searchLink = LayerLink();
+
+  /// Ventana flotante de sugerencias. Vive en el Overlay (por encima de todo)
+  /// para NO empujar el campo ni el resto del panel: se superpone.
+  OverlayEntry? _suggestionsOverlay;
+
+  /// Ancho real del campo, medido en el build, para que el desplegable tenga
+  /// exactamente el mismo ancho.
+  double _searchFieldWidth = 320;
+
   // Datos del panel de vehículos (solo existen cuando _currentState == selectingVehicle)
   List<VehicleOption> _vehicles = [];
   VehicleOption? _selectedVehicle;
@@ -167,6 +179,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   void initState() {
     super.initState();
     _pickup = _myLoc;
+    _searchFocus.addListener(() {
+      if (!_searchFocus.hasFocus) _cerrarOverlaySugerencias();
+    });
     _resolveDefaultAddress();
     _initGps();
     _loadTarifas();
@@ -176,6 +191,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   void dispose() {
     _gpsSub?.cancel();
     _searchDebounce?.cancel();
+    _cerrarOverlaySugerencias();
     _searchController.dispose();
     _searchFocus.dispose();
     _mapController.dispose();
@@ -399,6 +415,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
             _suggestions = const [];
           }
         });
+        if (escribir && !escribiendo) _cerrarOverlaySugerencias();
       }
     } else if (_dropoff != null && _samePoint(p, _dropoff!)) {
       final escribir =
@@ -411,8 +428,79 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
             _suggestions = const [];
           }
         });
+        if (escribir && !escribiendo) _cerrarOverlaySugerencias();
       }
     }
+  }
+
+  /// Muestra/actualiza la ventana flotante de sugerencias debajo del campo.
+  ///
+  /// No forma parte del `Column` del panel: es una entrada del Overlay, asi
+  /// que aparece ENCIMA del contenido y no empuja ni tapa el TextField.
+  void _actualizarOverlaySugerencias() {
+    if (!mounted) return;
+    if (_suggestions.isEmpty || !_searchFocus.hasFocus) {
+      _cerrarOverlaySugerencias();
+      return;
+    }
+    if (_suggestionsOverlay == null) {
+      final overlay = Overlay.of(context, rootOverlay: true);
+      _suggestionsOverlay = OverlayEntry(builder: _buildOverlaySugerencias);
+      overlay.insert(_suggestionsOverlay!);
+    } else {
+      _suggestionsOverlay!.markNeedsBuild();
+    }
+  }
+
+  void _cerrarOverlaySugerencias() {
+    _suggestionsOverlay?.remove();
+    _suggestionsOverlay = null;
+  }
+
+  /// Contenido de la ventana flotante: fondo blanco, borde redondeado, sombra,
+  /// maximo 300 px de alto y scroll interno.
+  Widget _buildOverlaySugerencias(BuildContext context) {
+    return CompositedTransformFollower(
+      link: _searchLink,
+      showWhenUnlinked: false,
+      targetAnchor: Alignment.bottomLeft,
+      followerAnchor: Alignment.topLeft,
+      offset: const Offset(0, 6),
+      child: SizedBox(
+        width: _searchFieldWidth,
+        child: Material(
+          color: Colors.white,
+          elevation: 8,
+          shadowColor: Colors.black26,
+          borderRadius: BorderRadius.circular(12),
+          clipBehavior: Clip.antiAlias,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 300),
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: _suggestions.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (ctx, i) {
+                final s = _suggestions[i];
+                return ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.place_outlined,
+                      size: 18, color: Color(0xFF007AFF)),
+                  title: Text(
+                    s.shortLabel ?? s.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  onTap: () => _onSuggestionSelected(s),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _onSearchChanged(String text) {
@@ -429,6 +517,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       _searchError = null;
       _searchHelp = null;
     });
+    _cerrarOverlaySugerencias();
 
     if (trimmed.length < 3) return;
 
@@ -453,6 +542,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
             _searchError = 'Dirección no encontrada';
           }
         });
+        _actualizarOverlaySugerencias();
       } catch (_) {
         // 3) Fallo de red: mensaje rojo, el buscador no se queda congelado.
         if (!mounted || _searchController.text.trim() != trimmed) return;
@@ -461,6 +551,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           _searching = false;
           _searchError = 'Error de conexión. Intenta de nuevo';
         });
+        _cerrarOverlaySugerencias();
       }
     });
   }
@@ -482,6 +573,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
 
   void _onSuggestionSelected(GeoPlace place) {
     _searchDebounce?.cancel();
+    _cerrarOverlaySugerencias();
     _searchController.clear();
     FocusScope.of(context).unfocus();
     setState(() {
@@ -1203,75 +1295,59 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  controller: _searchController,
-                  focusNode: _searchFocus,
-                  onChanged: _onSearchChanged,
-                  textInputAction: TextInputAction.search,
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    hintText: _pinMode == _PinMode.pickup
-                        ? 'Buscar la calle de recogida...'
-                        : 'Buscar la calle del destino...',
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    suffixIcon: _searching
-                        ? const Padding(
-                            padding: EdgeInsets.all(12),
-                            child: SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          )
-                        : (_searchController.text.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear, size: 18),
-                                onPressed: () {
-                                  _searchDebounce?.cancel();
-                                  _searchController.clear();
-                                  setState(() {
-                                    _suggestions = const [];
-                                    _searching = false;
-                                    _searchError = null;
-                                    _searchHelp = null;
-                                  });
-                                },
-                              )
-                            : null),
-                  ),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    _searchFieldWidth = constraints.maxWidth;
+                    return CompositedTransformTarget(
+                      link: _searchLink,
+                      child: TextField(
+                        controller: _searchController,
+                        focusNode: _searchFocus,
+                        onChanged: _onSearchChanged,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          prefixIcon: const Icon(Icons.search, size: 20),
+                          hintText: _pinMode == _PinMode.pickup
+                              ? 'Buscar la calle de recogida...'
+                              : 'Buscar la calle del destino...',
+                          border: const OutlineInputBorder(),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          suffixIcon: _searching
+                              ? const Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  ),
+                                )
+                              : (_searchController.text.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear, size: 18),
+                                      onPressed: () {
+                                        _searchDebounce?.cancel();
+                                        _cerrarOverlaySugerencias();
+                                        _searchController.clear();
+                                        setState(() {
+                                          _suggestions = const [];
+                                          _searching = false;
+                                          _searchError = null;
+                                          _searchHelp = null;
+                                        });
+                                      },
+                                    )
+                                  : null),
+                        ),
+                      ),
+                    );
+                  },
                 ),
-                if (_suggestions.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Material(
-                    elevation: 2,
-                    borderRadius: BorderRadius.circular(12),
-                    clipBehavior: Clip.antiAlias,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (var i = 0; i < _suggestions.length; i++) ...[
-                          if (i > 0) const Divider(height: 1),
-                          ListTile(
-                            dense: true,
-                            leading: const Icon(Icons.place_outlined,
-                                size: 18, color: Color(0xFF007AFF)),
-                            title: Text(
-                              _suggestions[i].shortLabel ??
-                                  _suggestions[i].displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 13),
-                            ),
-                            onTap: () => _onSuggestionSelected(_suggestions[i]),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
+                // Las sugerencias NO van en este Column: se pintan en una
+                // ventana flotante del Overlay (ver `_buildOverlaySugerencias`)
+                // para que no empujen el campo ni el resto del panel.
                 if (_searchHelp != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 6, left: 4, right: 4),

@@ -6,6 +6,7 @@ import logging
 from contextlib import contextmanager
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 import psycopg2
@@ -27,7 +28,7 @@ except Exception:
     Point = None
     Polygon = None
 from routers.promociones import calcular_descuento_cliente, coeficiente_por_distancia, excedente_espera, leer_promocion  # noqa
-from routers.garaje import tipo_vehiculo_activo_de
+from routers.garaje import tipo_vehiculo_activo_de, vehiculo_activo_de
 from decimal import Decimal, ROUND_HALF_UP
 from bson import ObjectId
 from pymongo import MongoClient
@@ -349,6 +350,25 @@ def _chofer_phone(chofer_doc: Optional[dict]) -> Optional[str]:
         or chofer_doc.get("phone")
         or chofer_doc.get("telefono")
     )
+
+
+# Carpeta donde `routers/documentos.py` guarda las 10 fotos del registro.
+_FOTOS_CHOFER_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "uploads", "documentos")
+
+
+def _chofer_foto_perfil(chofer_doc: Optional[dict]) -> Optional[str]:
+    """Nombre del archivo de la foto de rostro del chofer, si la subio."""
+    if not chofer_doc:
+        return None
+    for ref in chofer_doc.get("documentos") or []:
+        if not isinstance(ref, dict) or ref.get("campo") != "rostro":
+            continue
+        archivo = ref.get("archivo")
+        if archivo:
+            return os.path.basename(str(archivo))
+    return None
 
 
 def validate_client_exists(client_id: str) -> bool:
@@ -2955,10 +2975,37 @@ async def api_get_trip(trip_id: str):
     # (no el id) y con el telefono puede llamar o abrir WhatsApp.
     trip["driver_name"] = None
     trip["driver_phone"] = None
+    trip["driver_profile_picture_url"] = None
+    trip["driver_vehicle_model"] = None
+    trip["driver_vehicle_plate"] = None
     if trip.get("driver_id"):
         chofer_doc = chofer_coleccion.find_one({"_id": to_mongo_id(trip["driver_id"])})
         trip["driver_name"] = _chofer_display_name(chofer_doc)
         trip["driver_phone"] = _chofer_phone(chofer_doc)
+
+        # Foto de perfil: el registro guarda una foto `rostro`; se sirve por
+        # `/trips/{id}/driver-photo`. Solo se anuncia la URL si el archivo
+        # existe de verdad, para que la app no pinte un icono roto.
+        archivo_foto = _chofer_foto_perfil(chofer_doc)
+        if archivo_foto and os.path.isfile(
+                os.path.join(_FOTOS_CHOFER_DIR, archivo_foto)):
+            trip["driver_profile_picture_url"] = (
+                "/trips/%s/driver-photo" % trip_id)
+
+        # Marca/modelo del vehiculo del chofer para la tarjeta del pasajero.
+        vehiculo = (chofer_doc or {}).get("vehicle") or {}
+        marca = str(vehiculo.get("Marca") or "").strip()
+        modelo = str(vehiculo.get("model") or "").strip()
+        chapa = str(vehiculo.get("chapa") or "").strip()
+        if not modelo:
+            # Respaldo: el vehiculo aprobado y activo de Mi Garaje.
+            activo = vehiculo_activo_de(trip["driver_id"]) or {}
+            marca = marca or str(activo.get("marca") or "").strip()
+            modelo = modelo or str(activo.get("modelo") or "").strip()
+            chapa = chapa or str(activo.get("matricula") or "").strip()
+        trip["driver_vehicle_model"] = (
+            " ".join(filter(None, [marca, modelo])) or None)
+        trip["driver_vehicle_plate"] = chapa or None
 
     # Hora legible en hora de Cuba: completado_at/requested_at estan en UTC.
     for campo in ("requested_at", "started_at", "completed_at"):
@@ -3006,6 +3053,32 @@ async def api_get_trip(trip_id: str):
         except Exception:
             logger.exception("No se pudo leer la telemetria de %s", driver_id)
     return trip
+
+
+@router.get("/trips/{trip_id}/driver-photo")
+async def api_get_driver_photo(trip_id: str):
+    """Sirve la foto de perfil del chofer asignado a un viaje.
+
+    Va ligada al viaje (igual que `GET /trips/{trip_id}`) para no dejar las
+    fotos de identidad accesibles por id de chofer sin contexto. Si el chofer
+    no subio foto de rostro o el archivo ya no esta, devuelve 404.
+    """
+    trip = get_trip(trip_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Viaje no encontrado")
+    driver_id = trip.get("driver_id")
+    if not driver_id:
+        raise HTTPException(
+            status_code=404, detail="El viaje no tiene chofer asignado")
+    chofer_doc = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)})
+    archivo = _chofer_foto_perfil(chofer_doc)
+    if not archivo:
+        raise HTTPException(
+            status_code=404, detail="El chofer no tiene foto de perfil")
+    ruta = os.path.abspath(os.path.join(_FOTOS_CHOFER_DIR, archivo))
+    if not os.path.isfile(ruta):
+        raise HTTPException(status_code=404, detail="Foto no encontrada")
+    return FileResponse(ruta)
 
 
 @router.patch("/trips/{trip_id}/status")

@@ -35,6 +35,8 @@ class ApiService {
         return ApiClient.put(url, body: body);
       case 'PATCH':
         return ApiClient.patch(url, body: body);
+      case 'DELETE':
+        return ApiClient.delete(url);
       default:
         throw ApiException('Método no soportado: $method');
     }
@@ -265,6 +267,11 @@ class ApiService {
 
   Future<void> selectVehicle(String vehicleId) async {
     await _map('PUT', '/driver/vehicles/$vehicleId/select');
+  }
+
+  /// Elimina del garaje un vehiculo del chofer autenticado.
+  Future<void> deleteVehicle(String vehicleId) async {
+    await _send('DELETE', '/driver/vehicles/$vehicleId');
   }
 
   /// Sube fotos del vehiculo: ruta local → campo.

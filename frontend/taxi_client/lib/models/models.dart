@@ -58,6 +58,16 @@ class ClientTrip {
   /// Telefono del chofer: botones Llamar / WhatsApp del pasajero.
   final String? driverPhone;
 
+  /// URL (relativa) de la foto de perfil del chofer. El backend solo la manda
+  /// cuando la foto de rostro del registro existe de verdad.
+  final String? driverProfilePictureUrl;
+
+  /// Marca + modelo del vehiculo del chofer, para la tarjeta del pasajero.
+  final String? driverVehicleModel;
+
+  /// Matricula del vehiculo del chofer.
+  final String? driverVehiclePlate;
+
   /// `requested_at` ya formateado en hora de Cuba por el backend, listo para
   /// pintar (el reloj del telefono no interviene).
   final String? requestedAtLocal;
@@ -96,6 +106,9 @@ class ClientTrip {
     this.driverId,
     this.driverName,
     this.driverPhone,
+    this.driverProfilePictureUrl,
+    this.driverVehicleModel,
+    this.driverVehiclePlate,
     this.requestedAtLocal,
     this.driverBearing,
     this.driverLat,
@@ -124,6 +137,9 @@ class ClientTrip {
         driverId: j['driver_id']?.toString(),
         driverName: j['driver_name']?.toString(),
         driverPhone: j['driver_phone']?.toString(),
+        driverProfilePictureUrl: j['driver_profile_picture_url']?.toString(),
+        driverVehicleModel: j['driver_vehicle_model']?.toString(),
+        driverVehiclePlate: j['driver_vehicle_plate']?.toString(),
         requestedAtLocal: j['requested_at_local']?.toString(),
         driverBearing: (j['driver_bearing'] as num?)?.toDouble(),
         driverLat: (j['driver_lat'] as num?)?.toDouble(),

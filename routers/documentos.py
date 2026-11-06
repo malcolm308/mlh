@@ -486,6 +486,35 @@ async def estado_documentos(driver_id: str,
     return _estado_documentos(chofer)
 
 
+@router.get("/chofer/{driver_id}/foto/{campo}")
+async def ver_foto_chofer(driver_id: str, campo: str,
+                          authorization: Optional[str] = Header(None)):
+    """Sirve UNA foto del registro del chofer (dueno o administrador).
+
+    La usa Mi Garaje para mostrar la foto exterior del vehiculo cuando este
+    viene del registro clasico y no tiene fotos propias en el garaje.
+    """
+    require_chofer_o_admin(driver_id, authorization)
+    if not ObjectId.is_valid(driver_id):
+        raise HTTPException(status_code=400, detail="Id de chofer inválido")
+    chofer = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
+    if not chofer:
+        raise HTTPException(status_code=404, detail="Chofer no encontrado")
+
+    archivo = None
+    for ref in chofer.get("documentos") or []:
+        if (isinstance(ref, dict) and ref.get("campo") == campo
+                and ref.get("archivo")):
+            archivo = str(ref["archivo"])
+            break
+    if not archivo:
+        raise HTTPException(status_code=404, detail="Foto no encontrada")
+    ruta = os.path.join(UPLOAD_DIR, os.path.basename(archivo))
+    if not os.path.isfile(ruta):
+        raise HTTPException(status_code=404, detail="Foto no encontrada")
+    return FileResponse(ruta)
+
+
 @router.get("/imagen/{archivo}")
 async def ver_imagen(archivo: str, authorization: Optional[str] = Header(None)):
     """Sirve una imagen para que el panel pueda mostrarla.

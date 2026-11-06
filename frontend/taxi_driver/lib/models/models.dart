@@ -121,6 +121,10 @@ class DriverVehicle {
   /// Campos que TODAVIA no tienen foto subida.
   final List<String> fotosFaltantes;
 
+  /// Ruta relativa de la foto exterior (delantera o trasera) que el backend
+  /// publica en `/garaje/imagen/{archivo}`. Requiere token para descargarla.
+  final String? fotoExteriorUrl;
+
   const DriverVehicle({
     required this.id,
     required this.driverId,
@@ -134,6 +138,7 @@ class DriverVehicle {
     this.motivo,
     this.fotos = const {},
     this.fotosFaltantes = const [],
+    this.fotoExteriorUrl,
   });
 
   /// Etiqueta de estado legible para la interfaz.
@@ -165,6 +170,7 @@ class DriverVehicle {
         fotosFaltantes: ((j['fotos_faltantes'] ?? const []) as List)
             .map((c) => c.toString())
             .toList(),
+        fotoExteriorUrl: _str(j, ['foto_exterior_url']),
       );
 }
 

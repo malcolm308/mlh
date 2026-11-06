@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/vehicle_types_service.dart';
@@ -74,6 +75,9 @@ class _GarageScreenState extends State<GarageScreen> {
   /// Id del vehiculo cuya activacion esta en vuelo, para que el boton no se
   /// mande doble (mismo tratamiento que "Aceptar" en la pantalla principal).
   String? _seleccionandoId;
+
+  /// Id del vehiculo cuya eliminacion esta en vuelo.
+  String? _eliminandoId;
 
   @override
   void initState() {
@@ -195,6 +199,54 @@ class _GarageScreenState extends State<GarageScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _seleccionandoId = null);
+      _aviso('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
+    }
+  }
+
+  /// Pide confirmacion y elimina el vehiculo del garaje.
+  ///
+  /// El backend valida contra el token que el vehiculo sea del chofer; si era
+  /// el activo, se queda sin vehiculo en uso. La lista se actualiza en
+  /// caliente con `setState`, sin recargar toda la pantalla.
+  Future<void> _eliminarVehiculo(DriverVehicle v) async {
+    if (_eliminandoId != null) return;
+    final nombre = '${v.marca ?? '—'} ${v.modelo ?? ''}'.trim();
+    final confirmado = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar vehículo'),
+        content: Text(
+          '¿Seguro que quieres eliminar "$nombre" '
+          '(${v.matricula ?? 'sin matrícula'})?\n\n'
+          'Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmado != true || !mounted) return;
+
+    setState(() => _eliminandoId = v.id);
+    try {
+      await widget.api.deleteVehicle(v.id);
+      if (!mounted) return;
+      setState(() {
+        _vehiculos = _vehiculos.where((x) => x.id != v.id).toList();
+        _eliminandoId = null;
+      });
+      _aviso('Vehículo eliminado');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _eliminandoId = null);
       _aviso('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
     }
   }
@@ -360,6 +412,50 @@ class _GarageScreenState extends State<GarageScreen> {
     );
   }
 
+  /// URL absoluta de la foto exterior del vehiculo (el backend la publica
+  /// como ruta relativa `/garaje/imagen/{archivo}`).
+  String? _urlFoto(DriverVehicle v) {
+    final raw = v.fotoExteriorUrl?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    return raw.startsWith('http') ? raw : '${ApiConfig.baseUrl}$raw';
+  }
+
+  /// Miniatura de la foto exterior, con borde redondeado y respaldo si aun no
+  /// hay foto o la descarga falla (el vehiculo puede estar pendiente).
+  Widget _miniatura(DriverVehicle v) {
+    final url = _urlFoto(v);
+    final token = widget.api.token;
+    const respaldo = Icon(Icons.directions_car_outlined,
+        size: 30, color: Color(0xFF9CA3AF));
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 76,
+        height: 76,
+        color: const Color(0xFFF3F4F6),
+        child: url == null
+            ? respaldo
+            : Image.network(
+                url,
+                fit: BoxFit.cover,
+                headers: (token == null || token.isEmpty)
+                    ? null
+                    : {'Authorization': 'Bearer $token'},
+                errorBuilder: (_, _, _) => respaldo,
+                loadingBuilder: (ctx, child, progreso) => progreso == null
+                    ? child
+                    : const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+              ),
+      ),
+    );
+  }
+
   Widget _tarjeta(DriverVehicle v, bool hayAprobado) {
     final colorDeEstado = switch (v.estado) {
       'aprobado' => const Color(0xFF2E7D32),
@@ -375,34 +471,62 @@ class _GarageScreenState extends State<GarageScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _miniatura(v),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    '${v.marca ?? '—'} ${v.modelo ?? ''}'.trim(),
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${v.marca ?? '—'} ${v.modelo ?? ''}'.trim(),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: colorDeEstado.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(v.estadoEtiqueta,
+                                style: TextStyle(
+                                    color: colorDeEstado,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Tipo: ${_tipos.etiquetaDe(v.tipoVehiculo)} · '
+                        'Matrícula: ${v.matricula ?? '—'}',
+                        style: const TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                    ],
                   ),
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: colorDeEstado.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(v.estadoEtiqueta,
-                      style: TextStyle(
-                          color: colorDeEstado,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold)),
+                IconButton(
+                  tooltip: 'Eliminar vehículo',
+                  onPressed: _eliminandoId == null
+                      ? () => _eliminarVehiculo(v)
+                      : null,
+                  icon: _eliminandoId == v.id
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.delete_outline,
+                          color: Color(0xFFC62828)),
                 ),
               ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Tipo: ${_tipos.etiquetaDe(v.tipoVehiculo)} · '
-              'Matrícula: ${v.matricula ?? '—'}',
-              style: const TextStyle(color: Color(0xFF6B7280)),
             ),
             _seccionFotos(v),
             if (v.motivo != null && v.motivo!.trim().isNotEmpty) ...[

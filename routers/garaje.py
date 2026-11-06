@@ -93,6 +93,57 @@ def _admin_actual(authorization: Optional[str]) -> str:
 
 # ============================ HELPERS ============================
 
+def _foto_exterior_registro(doc: dict) -> Optional[dict]:
+    """Foto exterior del registro clasico (`/documentos/registro`).
+
+    Los choferes que se registraron con las 10 fotos tienen la del vehiculo en
+    el documento del chofer, no en la coleccion del garaje. Se usa como
+    respaldo cuando el vehiculo del garaje no tiene fotos propias y su
+    matricula coincide con la del vehiculo embebido en el chofer.
+    """
+    driver_id = doc.get("driver_id")
+    matricula = _matricula_norm(doc.get("matricula") or "")
+    if not driver_id or not matricula or not ObjectId.is_valid(str(driver_id)):
+        return None
+    chofer = chofer_coleccion.find_one({"_id": ObjectId(str(driver_id))})
+    if not chofer:
+        return None
+    embebido = chofer.get("vehicle") or {}
+    if _matricula_norm(embebido.get("chapa") or "") != matricula:
+        return None
+    for campo in ("vehiculo_exterior_frente", "vehiculo_exterior_atras"):
+        for ref in chofer.get("documentos") or []:
+            if (isinstance(ref, dict) and ref.get("campo") == campo
+                    and ref.get("archivo")):
+                return {
+                    "campo": campo,
+                    "archivo": os.path.basename(str(ref["archivo"])),
+                }
+    return None
+
+
+def _foto_exterior_url(doc: dict) -> Optional[str]:
+    """Ruta de la foto exterior del vehiculo para pintarla en la app.
+
+    Se prefiere la delantera y, si no hay, la trasera. Si el vehiculo del
+    garaje aun no tiene fotos (chofer registrado por la via clasica) se cae a
+    la foto exterior de su registro. La imagen se sirve con token: el chofer
+    dueno o un administrador, nunca anonimo.
+    """
+    fotos = doc.get("fotos") or {}
+    if isinstance(fotos, dict):
+        for campo in ("vehiculo_exterior_frente", "vehiculo_exterior_atras"):
+            ref = fotos.get(campo) or {}
+            archivo = ref.get("archivo") if isinstance(ref, dict) else None
+            if archivo:
+                return "/garaje/imagen/%s" % archivo
+    registro = _foto_exterior_registro(doc)
+    if registro:
+        return "/documentos/chofer/%s/foto/%s" % (
+            doc.get("driver_id"), registro["campo"])
+    return None
+
+
 def _vehiculo_out(doc: dict) -> dict:
     return {
         "id": str(doc["_id"]),
@@ -111,6 +162,7 @@ def _vehiculo_out(doc: dict) -> dict:
         "motivo": doc.get("motivo"),
         "fotos": _fotos_salida(doc),
         "fotos_faltantes": _faltantes_de(doc),
+        "foto_exterior_url": _foto_exterior_url(doc),
     }
 
 
@@ -369,6 +421,52 @@ async def listar_vehiculos(authorization: Optional[str] = Header(None)):
     docs = list(coleccion.find(
         {"driver_id": chofer["id"]}).sort("created_at", -1))
     return [_vehiculo_out(d) for d in docs]
+
+
+@router.delete("/driver/vehicles/{vehiculo_id}")
+async def eliminar_vehiculo(vehiculo_id: str,
+                            authorization: Optional[str] = Header(None)):
+    """Borra un vehiculo del garaje del chofer autenticado.
+
+    Solo el dueno puede borrarlo: el `driver_id` sale del token, nunca del
+    body. Se eliminan tambien sus fotos del disco. Si era el vehiculo activo,
+    el chofer queda sin vehiculo activo (el sondeo deja de darle ofertas)
+    hasta que elija otro aprobado, igual que cuando el admin lo rechaza.
+    """
+    chofer = _chofer_actual(authorization)
+    if not ObjectId.is_valid(vehiculo_id):
+        raise HTTPException(status_code=400, detail="Id invalido")
+    doc = coleccion.find_one({
+        "_id": ObjectId(vehiculo_id),
+        "driver_id": chofer["id"],
+    })
+    if not doc:
+        raise HTTPException(status_code=404, detail="Vehiculo no encontrado")
+
+    # Limpieza de las fotos en disco (solo el nombre base: nunca una ruta).
+    fotos = doc.get("fotos") or {}
+    if isinstance(fotos, dict):
+        for ref in fotos.values():
+            archivo = ref.get("archivo") if isinstance(ref, dict) else None
+            if not archivo:
+                continue
+            try:
+                os.remove(os.path.join(FOTO_DIR, os.path.basename(archivo)))
+            except OSError:
+                pass
+
+    coleccion.delete_one({"_id": doc["_id"]})
+    if doc.get("es_activo"):
+        chofer_coleccion.update_one(
+            {"_id": ObjectId(chofer["id"])},
+            {"$set": {
+                "type_vehicle": "",
+                "vehicle": {},
+                "updated_at": datetime.utcnow().isoformat(),
+            }},
+        )
+    _invalidar_cache(chofer["id"])
+    return {"ok": True, "message": "Vehiculo eliminado"}
 
 
 # ============================ FOTOS DEL VEHICULO (CHOFER) ============================
@@ -668,6 +766,15 @@ async def revisar_foto_vehiculo(vehiculo_id: str, campo: str,
 
 
 # ============================ CONSULTA PARA EL SONDEO ============================
+
+def vehiculo_activo_de(driver_id: Optional[str]) -> Optional[dict]:
+    """Documento del vehiculo activo y aprobado del chofer, o None."""
+    if not driver_id or not ObjectId.is_valid(driver_id):
+        return None
+    return coleccion.find_one(
+        {"driver_id": driver_id, "es_activo": True,
+         "estado": ESTADO_APROBADO})
+
 
 def tipo_vehiculo_activo_de(driver_id: Optional[str],
                             usar_cache: bool = True) -> Optional[str]:
