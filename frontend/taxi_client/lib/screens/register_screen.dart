@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_service.dart';
@@ -17,19 +18,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _nombre = TextEditingController();
   final _apellidos = TextEditingController();
   final _email = TextEditingController();
-  final _telefono = TextEditingController();
   final _referido = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   bool _loading = false;
   String? _error;
 
+  /// Telefono completo en formato E.164 (`+5359295207`), armado por
+  /// [IntlPhoneField] con el prefijo del pais elegido. El registro manda ESTE
+  /// valor al backend, no lo que el usuario escribio a mano.
+  String? _telefonoCompleto;
+
   @override
   void dispose() {
     _nombre.dispose();
     _apellidos.dispose();
     _email.dispose();
-    _telefono.dispose();
     _referido.dispose();
     _password.dispose();
     _confirm.dispose();
@@ -46,6 +50,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
+    final telefono = _telefonoCompleto;
+    if (telefono == null || telefono.trim().length < 8) {
+      setState(() => _error = 'Ingresa un teléfono válido con su prefijo');
+      return;
+    }
     if (_password.text != _confirm.text) {
       setState(() => _error = 'Las contraseñas no coinciden');
       return;
@@ -60,7 +69,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         nombre: _nombre.text.trim(),
         apellidos: _apellidos.text.trim(),
         email: _email.text.trim(),
-        telefono: _telefono.text.trim(),
+        telefono: telefono,
         codigoReferido: _referido.text.trim(),
         password: _password.text,
       );
@@ -151,16 +160,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: _validEmail,
                 ),
                 const SizedBox(height: 14),
-                TextFormField(
-                  controller: _telefono,
+                IntlPhoneField(
+                  initialCountryCode: 'CU',
                   keyboardType: TextInputType.phone,
+                  // Solo digitos: el prefijo lo pone el selector.
+                  inputFormatters: [],
                   decoration: const InputDecoration(
                     labelText: 'Teléfono',
+                    hintText: 'Número local',
                     prefixIcon: Icon(Icons.phone_outlined),
                   ),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Ingresa tu teléfono'
-                      : null,
+                  invalidNumberMessage:
+                      'Número inválido para el país seleccionado',
+                  disableLengthCheck: false,
+                  searchText: 'Buscar país',
+                  onCountryChanged: (_) {
+                    // Cambiar de pais invalida el numero escrito: otro prefijo
+                    // otra longitud.
+                    setState(() => _telefonoCompleto = null);
+                  },
+                  onChanged: (phone) {
+                    setState(() => _telefonoCompleto = phone.completeNumber);
+                  },
                 ),
                 const SizedBox(height: 14),
                 TextFormField(

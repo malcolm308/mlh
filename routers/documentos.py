@@ -32,6 +32,7 @@ from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
 from services.codigos_referido import generar_codigo
 from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
+from services.tipo_vehiculo import campos_exigidos_por_tipo, resolver_tipo_vehiculo
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,12 @@ def _borrar_archivos(referencias):
             pass
 
 
+def _exigidos_de(chofer: dict) -> list:
+    """Campos obligatorios para ESTE chofer segun el tipo de su vehiculo."""
+    return [c for c, _, _ in campos_exigidos_por_tipo(
+        resolver_tipo_vehiculo(chofer), CAMPOS)]
+
+
 def _estado_documentos(chofer: dict) -> dict:
     """Devuelve el estado de cada documento exigido."""
     docs = chofer.get("documentos") or []
@@ -165,14 +172,17 @@ def _estado_documentos(chofer: dict) -> dict:
     faltan = []
     for campo, etiqueta, exigido in CAMPOS:
         ref = por_campo.get(campo)
+        # El tipo del chofer decide si el interior "cuenta": moto y triciclo
+        # no lo exigen (ver `campos_exigidos_por_tipo`).
+        exigidos = _exigidos_de(chofer)
         estado[campo] = {
             "etiqueta": etiqueta,
             "subido": bool(ref),
-            "exigido": exigido,
+            "exigido": campo in exigidos,
             "archivo": ref.get("archivo") if ref else None,
             "subido_at": ref.get("subido_at") if ref else None,
         }
-        if exigido and not ref:
+        if campo in exigidos and not ref:
             faltan.append(etiqueta)
     return {
         "documentos": estado,
@@ -289,8 +299,12 @@ async def registro_con_fotos(
     }
     recibidos = {k: v for k, v in archivos.items() if v is not None and v.filename}
 
-    faltan = [etiqueta for campo, etiqueta, exigido in CAMPOS
-              if exigido and campo not in recibidos]
+    # Las fotos exigidas dependen del tipo de vehiculo: moto/triciclo no tienen
+    # interior en el registro (exterior + circulacion bastan, ver
+    # `campos_exigidos_por_tipo`). El tipo viene del formulario del registro.
+    exigidos = {c for c, _, _ in campos_exigidos_por_tipo(servicio, CAMPOS)}
+    faltan = [etiqueta for campo, etiqueta, _ in CAMPOS
+              if campo in exigidos and campo not in recibidos]
     if faltan:
         raise HTTPException(
             status_code=400,
@@ -451,8 +465,11 @@ async def subir_documentos(
         "driver_id": driver_id,
         "subidas": len(nuevos),
         "total_documentos": len(docs),
-        "faltantes": [et for c, et, ex in CAMPOS if ex and c not in
-                      {d.get("campo") for d in docs}],
+        # El tipo del chofer decide qué interiores "cuentan" (moto/triciclo
+        # quedan exentos).
+        "faltantes": [et for c, et, _ in CAMPOS
+                      if c in _exigidos_de(chofer)
+                      and c not in {d.get("campo") for d in docs}],
     }
 
 

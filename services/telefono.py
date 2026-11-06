@@ -79,9 +79,22 @@ def buscar_por_telefono(coleccion, raw: Any, excluding_id=None) -> List[Dict[str
     if len(digitos) < LARGO_NACIONAL or digitos in TELEFONOS_DE_RELLENO:
         return []
 
+    # Formas literales del input. Con el registro internacional llega el numero
+    # en E.164 ("+34612345678"): `variantes` solo cubre el caso cubano, asi que
+    # el valor TAL COMO SE GUARDO tiene que probarse primero, o el login de un
+    # usuario extranjero acabaria en el barrido lento de overflow.
+    digitos_formas = variantes(digitos)
+    raw_limpio = str(raw or "").strip()
+    formas = [raw_limpio] if raw_limpio and raw_limpio not in digitos_formas \
+        else []
+    mas_mas = "+" + digitos
+    if mas_mas not in digitos_formas:
+        digitos_formas.append(mas_mas)
+    formas.extend(digitos_formas)
+
     encontrados: Dict[str, Dict[str, Any]] = {}
 
-    for documento in coleccion.find({"numero_de_telefono": {"$in": variantes(digitos)}},
+    for documento in coleccion.find({"numero_de_telefono": {"$in": formas}},
                                     {"password": 0}):
         encontrados[str(documento["_id"])] = documento
 

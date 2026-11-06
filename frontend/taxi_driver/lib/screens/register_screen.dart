@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
 
 import '../services/vehicle_types_service.dart';
 import '../services/api_service.dart';
@@ -22,10 +23,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _nombre = TextEditingController();
   final _apellidos = TextEditingController();
   final _email = TextEditingController();
-  final _telefono = TextEditingController();
   final _referido = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
+
+  /// Telefono completo en E.164 (`+5359295207`) armado por IntlPhoneField con
+  /// el prefijo del pais elegido. El multipart del registro manda ESTE valor.
+  String? _telefonoCompleto;
 
   final _marca = TextEditingController();
   final _model = TextEditingController();
@@ -62,7 +66,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _vehiculos.removeListener(_alCambiarTipos);
     _vehiculos.dispose();
     for (final c in [
-      _nombre, _apellidos, _email, _telefono, _referido, _password, _confirm,
+      _nombre, _apellidos, _email, _referido, _password, _confirm,
       _marca, _model, _year, _chapa, _color,
       _maxPassengers,
     ]) {
@@ -75,6 +79,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
   void _alCambiarTipos() {
     if (mounted) setState(() {});
   }
+
+  /// Documentos exigidos para el TIPO elegido: si el chofer escoge moto o
+  /// triciclo, las fotos del interior desaparecen del formulario (exterior +
+  /// circulacion bastan, same criterio que el administrador ya aplicó a
+  /// Mi Garaje).
+  List<DocumentoRequerido> get _documentosPedidos =>
+      documentosPorTipo(_tipo);
 
   String? _validEmail(String? v) {
     if (v == null || v.trim().isEmpty) return 'Ingresa tu email';
@@ -119,8 +130,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
 
-    // Todas las fotos son obligatorias para poder registrarse
-    final faltantes = kDocumentosRequeridos
+    // Todas las fotos del tipo elegido son obligatorias para registrarse:
+    // moto/triciclo no piden las del interior (ver `documentosPorTipo`).
+    final documentos = documentosPorTipo(_tipo);
+    final faltantes = documentos
         .where((d) => !_fotos.containsKey(d.campo))
         .map((d) => d.etiqueta)
         .toList();
@@ -138,11 +151,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
     try {
       final api = ApiService();
+      final telefono = _telefonoCompleto;
+      if (telefono == null || telefono.trim().length < 8) {
+        setState(() => _error = 'Ingresa un teléfono válido con su prefijo');
+        return;
+      }
       await api.registerChoferConFotos(
         nombre: _nombre.text.trim(),
         apellidos: _apellidos.text.trim(),
         email: _email.text.trim(),
-        telefono: _telefono.text.trim(),
+        telefono: telefono,
         codigoReferido: _referido.text.trim(),
         password: _password.text,
         marca: _marca.text.trim(),
@@ -244,13 +262,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   validator: _validEmail,
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: _telefono,
+                IntlPhoneField(
+                  initialCountryCode: 'CU',
                   keyboardType: TextInputType.phone,
-                  decoration: _dec('Teléfono', Icons.phone_outlined),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Ingresa tu teléfono'
-                      : null,
+                  // Estilo identico al resto del formulario (tema global).
+                  decoration: const InputDecoration(
+                    labelText: 'Teléfono',
+                    hintText: 'Número local',
+                    prefixIcon: Icon(Icons.phone_outlined),
+                    helperText: 'Prefijo de país seleccionable',
+                    isDense: true,
+                  ),
+                  invalidNumberMessage:
+                      'Número inválido para el país seleccionado',
+                  disableLengthCheck: false,
+                  searchText: 'Buscar país',
+                  onCountryChanged: (_) {
+                    setState(() => _telefonoCompleto = null);
+                  },
+                  onChanged: (phone) {
+                    setState(() => _telefonoCompleto = phone.completeNumber);
+                  },
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -378,7 +410,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         decoration: _dec('Tipo de servicio',
                             Icons.support_outlined),
                         hint: Text(_vehiculos.cargando
-                            ? 'Cargando…'
+                            ? 'Cargandoâ€¦'
                             : 'Elige un tipo'),
                         items: _vehiculos.tipos
                             .map((t) => DropdownMenuItem<String>(
@@ -403,7 +435,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         fontSize: 13)),
                 const SizedBox(height: 4),
                 Text(
-                  'Sube las ${kDocumentosRequeridos.length} fotos solicitadas. '
+                  'Sube las ${_documentosPedidos.length} fotos solicitadas. '
                   'El administrador las revisará antes de habilitarte.',
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
                 ),
@@ -412,11 +444,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   children: [
                     Expanded(
                       child: LinearProgressIndicator(
-                        value: _fotos.length / kDocumentosRequeridos.length,
+                        value: _fotos.length / _documentosPedidos.length,
                         minHeight: 6,
                         backgroundColor: Colors.grey.shade300,
                         valueColor: AlwaysStoppedAnimation(
-                          _fotos.length == kDocumentosRequeridos.length
+                          _fotos.length == _documentosPedidos.length
                               ? const Color(0xFF2ECC71)
                               : const Color(0xFF007AFF),
                         ),
@@ -424,14 +456,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      '${_fotos.length}/${kDocumentosRequeridos.length}',
+                      '${_fotos.length}/${_documentosPedidos.length}',
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 12),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                for (final doc in kDocumentosRequeridos)
+                for (final doc in _documentosPedidos)
                   TarjetaDocumento(
                     documento: doc,
                     ruta: _fotos[doc.campo],

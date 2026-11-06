@@ -36,6 +36,23 @@ const kDocumentosRequeridos = <DocumentoRequerido>[
       ayuda: 'Fachada trasera completa'),
 ];
 
+/// Documentos exigidos para el registro segun el tipo de vehiculo elegido.
+///
+/// Decision administrativa: las motos y los triciclos NO tienen habitaculo de
+/// pasajeros, asi que bastan las 2 fotos del exterior y la de circulacion en
+/// su primer registro y en Mi Garaje. Autos basico/confort las 2 interiores
+/// tambien.
+List<DocumentoRequerido> documentosPorTipo(String? tipoVehiculo) {
+  const sinInterior = {'moto', 'triciclo'};
+  if (tipoVehiculo == null ||
+      !sinInterior.contains(tipoVehiculo.trim().toLowerCase())) {
+    return kDocumentosRequeridos;
+  }
+  return kDocumentosRequeridos
+      .where((d) => !d.campo.startsWith('vehiculo_interior'))
+      .toList();
+}
+
 /// Tarjeta para elegir o volver a tomar una foto de un documento.
 class TarjetaDocumento extends StatelessWidget {
   const TarjetaDocumento({

@@ -39,7 +39,9 @@ from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
 from db.Chofer.auth import verify_token as verify_chofer_token
-from services.tipo_vehiculo import normalizar_tipo_vehiculo, tipos_iguales
+from services.tipo_vehiculo import (campos_exigidos_por_tipo,
+                                    normalizar_tipo_vehiculo,
+                                    tipos_iguales)
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +110,7 @@ def _vehiculo_out(doc: dict) -> dict:
                         if isinstance(doc.get("revisado_at"), datetime) else None),
         "motivo": doc.get("motivo"),
         "fotos": _fotos_salida(doc),
-        "fotos_faltantes": (
-            [c for c in FOTOS_OBLIGATORIAS
-             if not (doc.get("fotos") or {}).get(c, {}).get("archivo")]
-            if isinstance(doc.get("fotos"), dict) else FOTOS_OBLIGATORIAS
-        ),
+        "fotos_faltantes": _faltantes_de(doc),
     }
 
 
@@ -239,23 +237,23 @@ def _fotos_salida(doc: dict) -> Optional[dict]:
     return fotos
 
 
-def _fotos_salida(doc: dict) -> Optional[dict]:
-    fotos = doc.get("fotos")
+def _obligatorias_de(tipo_vehiculo: Optional[str]) -> list:
+    """Fotos obligatorias segun el tipo de vehiculo.
+
+    Moto y triciclo: exterior delante/atras + circulacion (sin interior).
+    Basico/confort: las 5. Mismo criterio que el registro inicial.
+    """
+    triples = [(c, e, True) for c, e in FOTOS_VEHICULO]
+    return [c for c, _, _ in campos_exigidos_por_tipo(tipo_vehiculo, triples)]
+
+
+def _faltantes_de(doc: dict) -> list:
+    obligatorias = _obligatorias_de(doc.get("tipo_vehiculo"))
+    fotos = doc.get("fotos") or {}
     if not isinstance(fotos, dict):
-        return None
-    return fotos
-
-
-def _verificar_archivo(os_path: str, archivo: str) -> str:
-    """Ruta segura dentro de FOTO_DIR (bloquea `..`, `\\`, `//`)."""
-    if "/" in archivo or "\\" in archivo or ".." in archivo:
-        raise HTTPException(status_code=400, detail="Nombre de archivo invalido")
-    ruta = os.path.abspath(os.path.join(FOTO_DIR, archivo))
-    if not ruta.startswith(os.path.abspath(FOTO_DIR)):
-        raise HTTPException(status_code=400, detail="Nombre de archivo invalido")
-    if not os.path.isfile(ruta):
-        raise HTTPException(status_code=404, detail="Imagen no encontrada")
-    return ruta
+        return obligatorias
+    return [c for c in obligatorias
+            if not (fotos.get(c) or {}).get("archivo")]
 
 
 def _dueno_o_admin(archivo: str, authorization: Optional[str]) -> None:
@@ -413,7 +411,7 @@ async def subir_fotos_vehiculo(vehiculo_id: str,
 
     guardados: Dict[str, dict] = {}
     for campo, upload in recibidos.items():
-        if campo not in FOTOS_OBLIGATORIAS:
+        if campo not in [c for c, _ in FOTOS_VEHICULO]:
             raise HTTPException(status_code=400, detail="Campo invalido: %s" % campo)
         guardados[campo] = _guardar_foto_vehiculo(str(doc["_id"]), campo, upload)
 
@@ -435,14 +433,14 @@ async def subir_fotos_vehiculo(vehiculo_id: str,
                    "desactiva hasta que el administrador lo apruebe")
     coleccion.update_one({"_id": doc["_id"]}, {"$set": cambios})
     _invalidar_cache(chofer["id"])
+    respuesta = dict(doc)
+    respuesta.update({"id": str(doc["_id"]), **cambios})
+    salida = _vehiculo_out(respuesta)
     return {
         "ok": True,
         "message": mensaje,
         "fotos": fotos_previas,
-        "fotos_faltantes": [
-            c for c in FOTOS_OBLIGATORIAS
-            if not fotos_previas.get(c, {}).get("archivo")
-        ],
+        "fotos_faltantes": salida.get("fotos_faltantes") or [],
     }
 
 
@@ -640,10 +638,12 @@ async def revisar_foto_vehiculo(vehiculo_id: str, campo: str,
     fotos[campo]["revisado_at"] = datetime.utcnow().isoformat()
 
     cambios = {"fotos": fotos}
+    # Las obligatorias dependen del tipo: moto/triciclo sin interiores.
+    obligatorias = _obligatorias_de(doc.get("tipo_vehiculo"))
     completas = all(
         (fotos.get(c) or {}).get("archivo")
         and (fotos.get(c) or {}).get("estado") == ESTADO_APROBADO
-        for c in FOTOS_OBLIGATORIAS
+        for c in obligatorias
     )
     # Todas las fotos aprobadas => el vehiculo esta a la vista: se aprueba
     # solo. Con alguna rechazada sigue `pendiente` (el chofer corregira).

@@ -7,8 +7,9 @@ import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/vehicle_types_service.dart';
 
-/// Las 5 fotos que exige el registro del vehiculo y que revisa el
-/// administrador (mismos campos que el backend espera en el multipart).
+/// Las fotos del registro del vehiculo, con su etiqueta. Solo las dos
+/// exteriores y la circulacion "cuentan" para moto y triciclo (la decision
+/// administrativa); los autos (basico/confort) exigen ademas las 2 interiores.
 const List<(String, String)> fotosVehiculoRequeridas = [
   ('vehiculo_exterior_frente', 'Exterior (delante)'),
   ('vehiculo_exterior_atras', 'Exterior (atrás)'),
@@ -16,6 +17,25 @@ const List<(String, String)> fotosVehiculoRequeridas = [
   ('vehiculo_interior_atras', 'Interior (atrás)'),
   ('circulacion', 'Circulación'),
 ];
+
+/// ¿El tipo de vehiculo usa fotos de interior? Mascara de los tipos sin
+/// habitáculo de pasajeros.
+bool tipoUsaInterior(String? tipo) {
+  if (tipo == null) return true;
+  final limpio = tipo
+      .trim()
+      .toLowerCase();
+  const sinInterior = {'moto', 'triciclo'};
+  return !sinInterior.contains(limpio);
+}
+
+/// Fotos que el registro exige para este tipo (moto/triciclo: 3).
+List<(String, String)> fotosRequeridasDe(String? tipoVehiculo) =>
+    tipoUsaInterior(tipoVehiculo)
+        ? fotosVehiculoRequeridas
+        : fotosVehiculoRequeridas
+            .where((f) => !f.$1.startsWith('vehiculo_interior'))
+            .toList();
 
 /// Mi Garaje: lista de vehiculos del chofer, alta de uno nuevo y eleccion del
 /// vehiculo activo.
@@ -261,8 +281,10 @@ class _GarageScreenState extends State<GarageScreen> {
           spacing: 6,
           runSpacing: 6,
           children: [
-            for (final (campo, etiqueta) in fotosVehiculoRequeridas)
-              _chipFoto(campo, etiqueta, v),
+            // Chips de las fotos que este tipo exige, y ademas las ya subidas
+            // que quedan fuera de esa lista (p.ej. interiores subidas a un
+            // auto cuyo tipo cambio despues).
+            for (final chip in _chipsDe(v)) _chipFoto(chip.$1, chip.$2, v),
           ],
         ),
         if (accionNecesaria) ...[
@@ -275,6 +297,24 @@ class _GarageScreenState extends State<GarageScreen> {
         ],
       ],
     );
+  }
+
+  /// (campo, etiqueta) de las fotos que se pintan en la tarjeta: las exigidas
+  /// por el tipo del vehiculo, y las que ya estan subidas aunque el tipo no
+  /// las pida.
+  List<(String, String)> _chipsDe(DriverVehicle v) {
+    final exigidas = fotosRequeridasDe(v.tipoVehiculo);
+    final chips = List<(String, String)>.of(exigidas);
+    for (final campo in v.fotos.keys) {
+      if (exigidas.any((e) => e.$1 == campo)) continue;
+      chips.add((
+        campo,
+        fotosVehiculoRequeridas
+                .firstWhere((f) => f.$1 == campo, orElse: () => (campo, campo))
+                .$2
+      ));
+    }
+    return chips;
   }
 
   Widget _chipFoto(String campo, String etiqueta, DriverVehicle v) {
@@ -571,7 +611,7 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
             behavior: SnackBarBehavior.floating));
         return;
       }
-      final faltan = fotosVehiculoRequeridas
+      final faltan = fotosRequeridasDe(_tipo)
           .where((f) => !_fotos.containsKey(f.$1))
           .toList();
       if (faltan.isNotEmpty) {
@@ -655,8 +695,14 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
               ],
               const Text('Fotos obligatorias:',
                   style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-              for (final (campo, etiqueta) in fotosVehiculoRequeridas)
+              for (final (campo, etiqueta) in fotosRequeridasDe(_tipo))
                 _tileFoto(campo, etiqueta),
+              if (!tipoUsaInterior(_tipo))
+                const Text(
+                  'Moto y triciclo no necesitan fotos del interior: exterior y '
+                  'circulación bastan.',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                ),
               const SizedBox(height: 8),
               Text(
                 nuevos

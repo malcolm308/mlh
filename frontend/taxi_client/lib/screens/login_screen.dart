@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_config.dart';
@@ -17,10 +18,14 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _email = TextEditingController();
   final _password = TextEditingController();
   bool _loading = false;
   String? _error;
+
+  /// Telefono en E.164 (`+5359295207`): el login del pasajero es por NUMERO DE
+  /// TELEFONO + contrasena, igual que el del chofer. El prefijo lo selecciona
+  /// el usuario (Cuba por defecto).
+  String? _telefonoCompleto;
 
   @override
   void initState() {
@@ -50,13 +55,20 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
+    final telefono = _telefonoCompleto;
+    if (telefono == null || telefono.trim().length < 8) {
+      setState(() => _error = 'Ingresa tu teléfono con su prefijo');
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final api = ApiService();
-      final token = await api.login(_email.text.trim(), _password.text);
+      // El backend distingue telefono/email por su forma: la app del chófer
+      // manda el teléfono en la misma clave `email` y aquí va igual.
+      final token = await api.login(telefono.trim(), _password.text);
       final id = api.jwtId(token);
       if (id == null) throw ApiException('No se pudo obtener el id del token');
       final profile = await api.getCliente(id);
@@ -67,7 +79,9 @@ class _LoginScreenState extends State<LoginScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('client_token', token);
       await prefs.setString('client_id', id);
-      await prefs.setString('client_email', _email.text.trim());
+      // El email real sale del perfil del backend (el login fue por teléfono,
+      // el campo `profile.email` es el fiable para los flujos que lo usan).
+      await prefs.setString('client_email', profile.email);
 
       if (!mounted) return;
       _goHome(api, profile, id);
@@ -153,20 +167,29 @@ class _LoginScreenState extends State<LoginScreen> {
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                TextFormField(
-                                  controller: _email,
-                                  keyboardType: TextInputType.emailAddress,
-                                  autocorrect: false,
+                                IntlPhoneField(
+                                  initialCountryCode: 'CU',
+                                  keyboardType: TextInputType.phone,
                                   decoration: const InputDecoration(
-                                    labelText: 'Email',
-                                    prefixIcon: Icon(Icons.email_outlined),
+                                    labelText: 'Teléfono',
+                                    hintText: 'Número con prefijo',
+                                    prefixIcon: Icon(Icons.phone_outlined),
                                     filled: true,
                                     fillColor: Colors.white,
                                     border: OutlineInputBorder(),
                                   ),
-                                  validator: (v) => (v == null || v.trim().isEmpty)
-                                      ? 'Ingresa tu email'
-                                      : null,
+                                  invalidNumberMessage:
+                                      'Número inválido para el país seleccionado',
+                                  disableLengthCheck: false,
+                                  searchText: 'Buscar país',
+                                  onCountryChanged: (_) {
+                                    setState(() => _telefonoCompleto = null);
+                                  },
+                                  onChanged: (phone) {
+                                    setState(() {
+                                      _telefonoCompleto = phone.completeNumber;
+                                    });
+                                  },
                                 ),
                                 const SizedBox(height: 14),
                                 TextFormField(
@@ -278,7 +301,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _email.dispose();
     _password.dispose();
     super.dispose();
   }

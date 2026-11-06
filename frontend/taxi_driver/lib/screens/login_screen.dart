@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/models.dart';
@@ -16,10 +17,16 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _telefono = TextEditingController();
   final _password = TextEditingController();
   bool _loading = false;
   String? _error;
+
+  /// Numero en E.164 (`+5359295207`) con el prefijo del pais elegido.
+  ///
+  /// Antes se enviaba lo tecleado a mano: con un movil que incluya el `+53`
+  /// el login funcionaba, pero sin prefijo dependia de las variantes del
+  /// backend. Con el selector, siempre sale completo y canonico.
+  String? _telefonoCompleto;
 
   @override
   void initState() {
@@ -49,13 +56,18 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
+    final telefono = _telefonoCompleto;
+    if (telefono == null || telefono.trim().length < 8) {
+      setState(() => _error = 'Ingresa tu teléfono con su prefijo');
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final api = ApiService();
-      final token = await api.login(_telefono.text.trim(), _password.text);
+      final token = await api.login(telefono.trim(), _password.text);
       final id = api.jwtId(token);
       if (id == null) throw ApiException('No se pudo obtener el id del token');
       final profile = await api.getChofer(id);
@@ -66,7 +78,8 @@ class _LoginScreenState extends State<LoginScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('driver_token', token);
       await prefs.setString('driver_id', id);
-      await prefs.setString('driver_telefono', _telefono.text.trim());
+      // Se guarda el E.164 completo: es el mismo formato en que se registró.
+      await prefs.setString('driver_telefono', telefono.trim());
 
       if (!mounted) return;
       _goHome(api, profile, id);
@@ -152,20 +165,29 @@ class _LoginScreenState extends State<LoginScreen> {
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                TextFormField(
-                                  controller: _telefono,
+                                IntlPhoneField(
+                                  initialCountryCode: 'CU',
                                   keyboardType: TextInputType.phone,
-                                  autocorrect: false,
                                   decoration: const InputDecoration(
                                     labelText: 'Número de teléfono',
+                                    hintText: 'Número con prefijo',
                                     prefixIcon: Icon(Icons.phone_iphone),
                                     filled: true,
                                     fillColor: Colors.white,
                                     border: OutlineInputBorder(),
                                   ),
-                                  validator: (v) => (v == null || v.trim().isEmpty)
-                                      ? 'Ingresa tu número de teléfono'
-                                      : null,
+                                  invalidNumberMessage:
+                                      'Número inválido para el país seleccionado',
+                                  disableLengthCheck: false,
+                                  searchText: 'Buscar país',
+                                  onCountryChanged: (_) {
+                                    setState(() => _telefonoCompleto = null);
+                                  },
+                                  onChanged: (phone) {
+                                    setState(() {
+                                      _telefonoCompleto = phone.completeNumber;
+                                    });
+                                  },
                                 ),
                                 const SizedBox(height: 14),
                                 TextFormField(
@@ -277,7 +299,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _telefono.dispose();
     _password.dispose();
     super.dispose();
   }
