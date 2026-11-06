@@ -10,6 +10,7 @@ import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/cancellation_service.dart';
+import '../widgets/foto_perfil_chofer.dart';
 import '../services/address_service.dart';
 import '../services/nav_camera.dart';
 import '../services/vehicle_types_service.dart';
@@ -3456,11 +3457,11 @@ if (pickup != null)
               ),
               child: Row(
                 children: [
-                  const CircleAvatar(
+                  FotoPerfilChofer(
+                    api: widget.api,
+                    driverId: widget.driverId,
                     radius: 28,
-                    backgroundColor: Colors.white,
-                    child: Icon(Icons.directions_car,
-                        color: Color(0xFF007AFF), size: 30),
+                    iniciales: widget.profile.fullName,
                   ),
                   const SizedBox(width: 14),
                   Expanded(

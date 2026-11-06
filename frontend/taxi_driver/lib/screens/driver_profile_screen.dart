@@ -4,6 +4,20 @@ import 'package:image_picker/image_picker.dart';
 import '../models/models.dart';
 import '../services/vehicle_types_service.dart';
 import '../services/api_service.dart';
+import '../widgets/foto_perfil_chofer.dart';
+
+/// Campos que se editan desde el perfil: SOLO documentos personales.
+/// El vehiculo (interiores, exteriores, circulacion) se gestiona en Mi Garaje
+/// para no tener el mismo cambio en dos sitios.
+const Set<String> camposPersonales = {
+  'rostro',
+  'carnet_frente',
+  'carnet_atras',
+  'licencia_frente',
+  'licencia_atras',
+};
+
+bool campoEsPersonal(String campo) => camposPersonales.contains(campo);
 
 /// Etiquetas de los documentos del registro, por campo. Deben coincidir con
 /// las que el backend devuelve en `/documentos/chofer/{id}/estado`.
@@ -56,6 +70,9 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
 
   /// Campo cuya foto se esta subiendo (para deshabilitar el boton).
   String? _subiendoCampo;
+
+  /// Cambia al resubir una foto: fuerza el avatar a re-descargar la de rostro.
+  int _fotoVersion = 0;
 
   @override
   void initState() {
@@ -134,17 +151,12 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
           padding: const EdgeInsets.all(16),
           children: [
           Center(
-            child: CircleAvatar(
+            child: FotoPerfilChofer(
+              api: widget.api,
+              driverId: widget.driverId,
               radius: 42,
-              backgroundColor: const Color(0xFF007AFF),
-              child: Text(
-                p.fullName.isNotEmpty ? p.fullName[0].toUpperCase() : 'C',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              iniciales: p.fullName,
+              version: _fotoVersion,
             ),
           ),
           const SizedBox(height: 12),
@@ -185,6 +197,12 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
             if (p.apellidos.isNotEmpty)
               _info(Icons.badge_outlined, 'Apellidos', p.apellidos),
             _info(Icons.email_outlined, 'Email', p.email.isEmpty ? '—' : p.email),
+            // La licencia ya no se pide en el registro: se valida con el
+            // documento. Aqui solo se muestra si el chofer ya la tenia puesta.
+            if ((p.licenseNumber ?? '').isNotEmpty)
+              _info(Icons.badge_outlined, 'Licencia', p.licenseNumber!),
+            _info(Icons.group_outlined, 'Pasajeros permitidos',
+                '${p.maxPassengers}'),
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: SizedBox(
@@ -200,36 +218,29 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
           if (_docs.isNotEmpty)
             _section('Mis fotos y documentos', [
               const Text(
-                'Toca "Cambiar" para volver a subir la foto que necesites. '
-                'El administrador la vuelve a revisar de inmediato.',
+                'Solo tus documentos personales: toca "Cambiar" para volver a '
+                'subir la foto que necesites. El administrador la vuelve a '
+                'revisar de inmediato.',
                 style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
               ),
               const SizedBox(height: 8),
-              for (final campo in _docs.keys)
+              // En el perfil solo se gestionan los documentos PERSONALES
+              // (rostro, carnet y licencia). Las fotos del vehiculo y la
+              // circulacion se gestionan en Mi Garaje, para no duplicar.
+              for (final campo in _docs.keys.where(campoEsPersonal))
                 _filaDocumento(
                   campo,
                   _docEtiqueta(_docs[campo], campo.toString()),
                   _docSubido(_docs[campo]),
                   _subiendoCampo != null,
                 ),
+              const SizedBox(height: 6),
+              Text(
+                'Las fotos del vehículo (interiores, exteriores y '
+                'circulación) se cambian en Mi Garaje.',
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+              ),
             ]),
-          _section('Vehículo', [
-            _info(Icons.directions_car, 'Modelo',
-                p.vehicleModel.isNotEmpty ? p.vehicleModel : 'No registrado'),
-            _info(Icons.category_outlined, 'Tipo',
-                _type(p.vehicleType)),
-            // La licencia ya no se pide en el registro: se valida con el
-            // documento. Aqui solo se muestra si el chofer ya la tenia puesta.
-            if ((p.licenseNumber ?? '').isNotEmpty)
-              _info(Icons.badge_outlined, 'Licencia', p.licenseNumber!),
-            _info(Icons.group_outlined, 'Pasajeros',
-                '${p.maxPassengers}'),
-          ]),
-          _section('Datos de contacto', [
-            _info(Icons.phone_outlined, 'Teléfono',
-                p.telefono.isNotEmpty ? p.telefono : 'No registrado'),
-            _info(Icons.email_outlined, 'Email', p.email.isEmpty ? '—' : p.email),
-          ]),
           _section('Estadísticas', [
             _info(Icons.account_balance_wallet_outlined, 'Fondo',
                 '${p.fondo.toStringAsFixed(2)} CUP'),
@@ -355,7 +366,10 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
       try {
         await widget.api.updateDocumentos(widget.driverId, {campo: img.path});
         if (!mounted) return;
-        setState(() => _subiendoCampo = null);
+        setState(() {
+          _subiendoCampo = null;
+          if (campo == 'rostro') _fotoVersion++;
+        });
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
@@ -449,12 +463,6 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
           behavior: SnackBarBehavior.floating));
     }
   }
-
-  /// Etiqueta del tipo de vehiculo, desde la configuracion del backend.
-  ///
-  /// Antes era un `switch` con los tipos escritos a mano; si el
-  /// administrador anadia uno nuevo en `tariffs`, aqui no saldria.
-  String _type(String? type) => _tiposVehiculo.etiquetaDe(type);
 
   Widget _section(String title, List<Widget> rows) {
     return Card(

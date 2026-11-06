@@ -196,6 +196,23 @@ class ApiClient {
           {Map<String, String>? headers, Duration? timeout}) =>
       _request('GET', url, headers: headers, timeout: timeout);
 
+  /// Descarga los BYTES de una imagen (ej. la foto de rostro del chofer).
+  ///
+  /// Va con el token del chofer: `/documentos/chofer/{id}/foto/{campo}` solo
+  /// sirve al dueno o al administrador. Devuelve null si no hay foto o si el
+  /// servidor no esta accesible: el avatar pinta su respaldo.
+  static Future<List<int>?> descargarImagen(String url) async {
+    try {
+      final r = await _ejecutar(
+        () => _cliente.get(Uri.parse(url), headers: _headers(null)),
+      );
+      if (r.statusCode >= 200 && r.statusCode < 300) return r.bodyBytes;
+    } catch (_) {
+      // Sin foto: el avatar muestra el icono de respaldo.
+    }
+    return null;
+  }
+
   static Future<dynamic> post(
     String url, {
     Map<String, dynamic>? body,
