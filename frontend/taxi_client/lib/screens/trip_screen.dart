@@ -1102,12 +1102,13 @@ class _TripScreenState extends State<TripScreen> {
     );
   }
 
-  /// "Chofer: id de Mongo" del panel viejo ya no: el nombre legible si el
-  /// backend lo manda, y el id SOLO como respaldo.
+  /// Nombre legible del chofer. El id de Mongo NUNCA se pinta en la interfaz
+  /// (igual que el del cliente): si el backend aun no manda el nombre se usa
+  /// un texto generico.
   String _nombreChofer(ClientTrip t) {
     final nombre = t.driverName?.trim();
     if (nombre != null && nombre.isNotEmpty && nombre != t.driverId) return nombre;
-    return t.driverId ?? 'No asignado';
+    return 'Chofer asignado';
   }
 
   /// Telefono en formato internacional para wa.me: Cuba = prefijo 53.

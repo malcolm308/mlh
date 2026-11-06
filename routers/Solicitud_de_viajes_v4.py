@@ -331,13 +331,28 @@ def _client_phone(client_doc: Optional[dict]) -> Optional[str]:
 
 
 def _chofer_display_name(chofer_doc: Optional[dict]) -> Optional[str]:
-    """Nombre legible del chofer desde su documento en MongoDB."""
+    """Nombre legible del chofer desde su documento en MongoDB.
+
+    Tolera los distintos esquemas que han pasado por la base: el registro
+    clasico guarda `Nombre`/`Apellidos`, otros documentos traen `name` o
+    `profile.name`. Nunca se usa el `_id` como nombre visible.
+    """
     if not chofer_doc:
         return None
-    full = " ".join(filter(None, [
-        chofer_doc.get("Nombre"),
-        chofer_doc.get("Apellidos") or chofer_doc.get("apellidos"),
-    ])).strip()
+    profile = chofer_doc.get("profile") or {}
+    nombre = (
+        chofer_doc.get("Nombre")
+        or chofer_doc.get("nombre")
+        or chofer_doc.get("name")
+        or profile.get("name")
+    )
+    apellidos = (
+        chofer_doc.get("Apellidos")
+        or chofer_doc.get("apellidos")
+        or chofer_doc.get("last_name")
+        or profile.get("last_name")
+    )
+    full = " ".join(filter(None, [nombre, apellidos])).strip()
     return full or chofer_doc.get("email") or None
 
 
@@ -345,10 +360,13 @@ def _chofer_phone(chofer_doc: Optional[dict]) -> Optional[str]:
     """Telefono del chofer (para llamar o WhatsApp desde el cliente)."""
     if not chofer_doc:
         return None
+    profile = chofer_doc.get("profile") or {}
     return (
         chofer_doc.get("numero_de_telefono")
         or chofer_doc.get("phone")
         or chofer_doc.get("telefono")
+        or profile.get("phone")
+        or profile.get("telefono")
     )
 
 

@@ -141,7 +141,8 @@ class _DriverFondoScreenState extends State<DriverFondoScreen> {
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            '${widget.fullName} · ${_email ?? widget.driverId}',
+                            '${widget.fullName}'
+                            '${(_email ?? '').trim().isEmpty ? '' : ' · $_email'}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(

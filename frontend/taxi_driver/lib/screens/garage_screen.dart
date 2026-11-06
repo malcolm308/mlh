@@ -416,8 +416,22 @@ class _GarageScreenState extends State<GarageScreen> {
   /// como ruta relativa `/garaje/imagen/{archivo}`).
   String? _urlFoto(DriverVehicle v) {
     final raw = v.fotoExteriorUrl?.trim();
-    if (raw == null || raw.isEmpty) return null;
-    return raw.startsWith('http') ? raw : '${ApiConfig.baseUrl}$raw';
+    if (raw != null && raw.isNotEmpty) {
+      return raw.startsWith('http') ? raw : '${ApiConfig.baseUrl}$raw';
+    }
+    // Respaldo mientras el backend no manda `foto_exterior_url`: el nombre del
+    // archivo ya viene en `fotos`, asi que la miniatura no depende de un
+    // despliegue nuevo. Se prefiere la foto delantera y luego la trasera.
+    for (final campo in const [
+      'vehiculo_exterior_frente',
+      'vehiculo_exterior_atras',
+    ]) {
+      final archivo = v.fotos[campo]?.archivo.trim();
+      if (archivo != null && archivo.isNotEmpty) {
+        return '${ApiConfig.baseUrl}/garaje/imagen/$archivo';
+      }
+    }
+    return null;
   }
 
   /// Miniatura de la foto exterior, con borde redondeado y respaldo si aun no
