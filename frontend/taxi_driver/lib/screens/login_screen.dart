@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -179,7 +180,12 @@ class _LoginScreenState extends State<LoginScreen> {
                                   invalidNumberMessage:
                                       'Número inválido para el país seleccionado',
                                   disableLengthCheck: false,
-                                  searchText: 'Buscar país',
+                                  pickerDialogStyle: PickerDialogStyle(
+                                    searchFieldInputDecoration:
+                                        const InputDecoration(
+                                      hintText: 'Buscar país',
+                                    ),
+                                  ),
                                   onCountryChanged: (_) {
                                     setState(() => _telefonoCompleto = null);
                                   },

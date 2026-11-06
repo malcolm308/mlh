@@ -181,7 +181,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   invalidNumberMessage:
                                       'Número inválido para el país seleccionado',
                                   disableLengthCheck: false,
-                                  searchText: 'Buscar país',
+                                  searchText: 'Buscar país', // ignore: deprecated_member_use
                                   onCountryChanged: (_) {
                                     setState(() => _telefonoCompleto = null);
                                   },

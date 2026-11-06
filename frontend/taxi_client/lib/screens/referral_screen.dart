@@ -80,11 +80,6 @@ class _ReferralScreenState extends State<ReferralScreen> {
     
     // Android share sheet
     try {
-      final shareUrl = Uri(
-        scheme: 'sms',
-        path: '',
-        queryParameters: {'body': message},
-      );
       // Fallback: copiar al portapapeles
       await Clipboard.setData(ClipboardData(text: message));
       if (!mounted) return;
@@ -95,8 +90,8 @@ class _ReferralScreenState extends State<ReferralScreen> {
         ),
       );
     } catch (_) {
-      if (!mounted) return;
       await Clipboard.setData(ClipboardData(text: message));
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Código copiado al portapapeles')),
       );

@@ -98,9 +98,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   bool _searching = false;
   Timer? _searchDebounce;
 
-  /// Tarifas del backend (GET /api/tariffs)
-  List<Tariff> _tarifas = const [];
-
   // Datos del panel de vehículos (solo existen cuando _currentState == selectingVehicle)
   List<VehicleOption> _vehicles = [];
   VehicleOption? _selectedVehicle;
@@ -714,6 +711,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         if (!mounted) return;
         final prefs = await SharedPreferences.getInstance();
         await prefs.clear();
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Cuenta eliminada')),
         );
@@ -859,6 +857,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   ///
   /// Si no hay red, usa la última lista cacheada para que el dropdown nunca se
   /// quede vacío (y nunca ofrezca un tipo de vehículo inexistente).
+  //
+  // el campo `_tarifas` se elimino: se asignaba y nunca se leia; las tarifas
+  // fluyen por el parametro de `_vehicleTypeMarcado`. Si algun dia se necesita
+  // en pantalla, se re-deriva del cache `_tarifasCacheKey`.
   Future<void> _loadTarifas() async {
     try {
       final tarifas = await widget.api.getTariffs();
@@ -869,7 +871,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         jsonEncode(tarifas.map((t) => t.toJson()).toList()),
       );
       setState(() {
-        _tarifas = tarifas;
         _vehicleType = _vehicleTypeMarcado(tarifas);
       });
       _loadEstimate();
@@ -890,9 +891,11 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       }
       if (!mounted) return;
       if (tarifas != null) {
+        // variables locales para que el analyzer promocione el null dentro
+        // del closure de `setState` (una variable mutable no se promueve).
+        final lista = tarifas;
         setState(() {
-          _tarifas = tarifas!;
-          _vehicleType = _vehicleTypeMarcado(tarifas);
+          _vehicleType = _vehicleTypeMarcado(lista);
         });
       }
     }

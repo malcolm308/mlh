@@ -157,7 +157,9 @@ class _FavoriteLocationsScreenState extends State<FavoriteLocationsScreen> {
                   lng: lng,
                   userId: widget.clientId,
                 );
-                if (!mounted) return;
+                // `mounted` del State no garantiza que el dialog (y su ctx)
+                // siga vivo: se valida el propio ctx antes de hacer el pop.
+                if (!ctx.mounted) return;
                 Navigator.pop(ctx);
                 await _loadFavorites();
                 if (!mounted) return;

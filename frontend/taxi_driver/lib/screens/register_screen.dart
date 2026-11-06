@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
 
 import '../services/vehicle_types_service.dart';
@@ -276,7 +277,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   invalidNumberMessage:
                       'Número inválido para el país seleccionado',
                   disableLengthCheck: false,
-                  searchText: 'Buscar país',
+                  pickerDialogStyle: PickerDialogStyle(
+                    searchFieldInputDecoration: const InputDecoration(
+                      hintText: 'Buscar país',
+                    ),
+                  ),
                   onCountryChanged: (_) {
                     setState(() => _telefonoCompleto = null);
                   },

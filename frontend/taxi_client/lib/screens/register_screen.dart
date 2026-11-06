@@ -173,7 +173,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   invalidNumberMessage:
                       'Número inválido para el país seleccionado',
                   disableLengthCheck: false,
-                  searchText: 'Buscar país',
+                  searchText: 'Buscar país', // ignore: deprecated_member_use
                   onCountryChanged: (_) {
                     // Cambiar de pais invalida el numero escrito: otro prefijo
                     // otra longitud.
