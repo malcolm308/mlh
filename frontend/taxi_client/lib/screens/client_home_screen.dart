@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
@@ -98,6 +99,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   bool _searching = false;
   Timer? _searchDebounce;
 
+  /// Foco del buscador. Sirve para saber si el pasajero esta ESCRIBIENDO:
+  /// mientras el campo tiene foco y texto, la geocodificacion inversa del pin
+  /// no debe sobrescribir lo tecleado (era la otra via por la que el cursor
+  /// saltaba a lo loco).
+  final FocusNode _searchFocus = FocusNode();
+
   // Datos del panel de vehículos (solo existen cuando _currentState == selectingVehicle)
   List<VehicleOption> _vehicles = [];
   VehicleOption? _selectedVehicle;
@@ -170,6 +177,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     _gpsSub?.cancel();
     _searchDebounce?.cancel();
     _searchController.dispose();
+    _searchFocus.dispose();
     _mapController.dispose();
     super.dispose();
   }
@@ -362,16 +370,32 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   void _applyReverseAddress(LatLng p, String? addr,
       {bool updateSearch = false}) {
     final texto = (addr ?? '').trim();
+    // El pasajero esta con el teclado abierto y contenido ya escrito:
+    // NINGUNA geocodificacion puede tocar el controller. Es la via que
+    // reescribia el texto y aplastaba el cursor al trabajar en el medio.
+    final escribiendo =
+        _searchFocus.hasFocus && _searchController.text.isNotEmpty;
+    // Escrit segura para cuando no hay teclado: se conserva el hueco del
+    // cursor (con clamp) en vez de dejarlo al final del texto nuevo.
+    void escribirSeguro(String nuevo) {
+      final sel = _searchController.selection;
+      final largo = _searchController.text.length;
+      _searchController.text = nuevo;
+      if (sel.isValid && sel.baseOffset >= 0 && sel.baseOffset < largo &&
+          largo > 0) {
+        _searchController.selection = TextSelection.collapsed(
+            offset: math.min(sel.baseOffset + nuevo.length - largo, nuevo.length));
+      }
+    }
+
     if (_pickup != null && _samePoint(p, _pickup!)) {
-      // Solo se escribe el buscador si en ese momento esta pidiendo la
-      // recogida; si el pasajero esta escribiendo el destino, no se le pisa.
       final escribir =
           updateSearch && _pinMode == _PinMode.pickup && texto.isNotEmpty;
       if (escribir || _pickupAddr != addr) {
         setState(() {
           _pickupAddr = addr;
-          if (escribir) {
-            _searchController.text = texto;
+          if (escribir && !escribiendo) {
+            escribirSeguro(texto);
             _suggestions = const [];
           }
         });
@@ -382,8 +406,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       if (escribir || _dropoffAddr != addr) {
         setState(() {
           _dropoffAddr = addr;
-          if (escribir) {
-            _searchController.text = texto;
+          if (escribir && !escribiendo) {
+            escribirSeguro(texto);
             _suggestions = const [];
           }
         });
@@ -393,7 +417,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
 
   void _onSearchChanged(String text) {
     _searchDebounce?.cancel();
-    _searchController.text = text;
+    // NO se reasigna `_searchController.text` aqui: el propio TextField ya
+    // aplica el texto y su cursor. Reasignarlo colapsa la seleccion al final,
+    // que es el bug del cursor al borrar en el medio.
     final trimmed = text.trim();
 
     // 1) Limpiar siempre: nada de sugerencias "fantasmas" de una busqueda previa.
@@ -1179,6 +1205,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
                 const SizedBox(height: 8),
                 TextField(
                   controller: _searchController,
+                  focusNode: _searchFocus,
                   onChanged: _onSearchChanged,
                   textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
