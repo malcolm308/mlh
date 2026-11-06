@@ -178,6 +178,40 @@ class _GarageScreenState extends State<GarageScreen> {
     }
   }
 
+  /// Edita los datos (marca/modelo/tipo/matricula) de un vehiculo.
+  ///
+  /// El backend vuelve el vehiculo a revision si estaba aprobado y actualiza
+  /// el vehiculo embebido del chofer si era el activo. La lista se queda
+  /// sincronizada con `setState`: no hace falta recargar la pantalla.
+  Future<void> _editarVehiculo(DriverVehicle v) async {
+    final datos = await showDialog<AltaVehiculo>(
+      context: context,
+      builder: (ctx) => FormularioVehiculoDialog(
+        tipos: _tipos,
+        tipoInicial: v.tipoVehiculo,
+        soloDatos: true,
+        marcaInicial: v.marca ?? '',
+        modeloInicial: v.modelo ?? '',
+        matriculaInicial: v.matricula ?? '',
+      ),
+    );
+    if (datos == null) return;
+    try {
+      final resultado = await widget.api.updateVehicle(
+        v.id,
+        tipoVehiculo: datos.tipo,
+        marca: datos.marca,
+        modelo: datos.modelo,
+        matricula: datos.matricula,
+      );
+      final mensaje = (resultado['message'] ?? 'Datos guardados').toString();
+      _aviso(mensaje);
+      await _cargar();
+    } catch (e) {
+      _aviso('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
+    }
+  }
+
   /// Marca el vehiculo como el activo. Pide confirmacion: cambiar de coche
   /// cambia las ofertas que van a llegar.
   Future<void> _usarVehiculo(DriverVehicle v) async {
@@ -527,6 +561,12 @@ class _GarageScreenState extends State<GarageScreen> {
                   ),
                 ),
                 IconButton(
+                  tooltip: 'Editar vehículo',
+                  onPressed: () => _editarVehiculo(v),
+                  icon: const Icon(Icons.edit_outlined,
+                      color: Color(0xFF111827)),
+                ),
+                IconButton(
                   tooltip: 'Eliminar vehículo',
                   onPressed: _eliminandoId == null
                       ? () => _eliminarVehiculo(v)
@@ -615,7 +655,8 @@ class AltaVehiculo {
 /// Las 5 fotos del registro son OBLIGATORIAS para dar de alta un vehiculo:
 /// sin ellas el administrador no puede revisar nada. En modo `soloFotos`
 /// (vehiculo ya creado) se sube la que haga falta y con eso se reabre la
-/// revision del administrador.
+/// revision del administrador. En modo `soloDatos` sirve para EDITAR los
+/// datos (marca/modelo/tipo/matricula) de un vehiculo existente.
 class FormularioVehiculoDialog extends StatefulWidget {
   final VehicleTypesService tipos;
   final String? tipoInicial;
@@ -623,11 +664,23 @@ class FormularioVehiculoDialog extends StatefulWidget {
   /// `true` al abrir desde un vehiculo existente: solo pide fotos.
   final bool soloFotos;
 
+  /// `true` al abrir para EDITAR datos: solo marca/modelo/tipo/matricula.
+  final bool soloDatos;
+
+  /// Valores de partida en modo `soloDatos`.
+  final String? marcaInicial;
+  final String? modeloInicial;
+  final String? matriculaInicial;
+
   const FormularioVehiculoDialog({
     super.key,
     required this.tipos,
     this.tipoInicial,
     this.soloFotos = false,
+    this.soloDatos = false,
+    this.marcaInicial,
+    this.modeloInicial,
+    this.matriculaInicial,
   });
 
   @override
@@ -647,9 +700,9 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
   void initState() {
     super.initState();
     _tipo = widget.tipoInicial ?? 'basico';
-    _marca = TextEditingController();
-    _modelo = TextEditingController();
-    _matricula = TextEditingController();
+    _marca = TextEditingController(text: widget.marcaInicial ?? '');
+    _modelo = TextEditingController(text: widget.modeloInicial ?? '');
+    _matricula = TextEditingController(text: widget.matriculaInicial ?? '');
   }
 
   @override
@@ -739,7 +792,9 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
   }
 
   void _validarYDevolver() {
-    if (!widget.soloFotos) {
+    final soloFotos = widget.soloFotos;
+    final soloDatos = widget.soloDatos;
+    if (!soloFotos || soloDatos) {
       final marca = _marca.text.trim();
       final modelo = _modelo.text.trim();
       final matricula = _matricula.text.trim().toUpperCase();
@@ -747,6 +802,22 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Escribe la marca, el modelo y la matricula.'),
             behavior: SnackBarBehavior.floating));
+        return;
+      }
+      if (soloDatos) {
+        // Solo se devuelven los datos: el backend reabre la revision si los
+        // datos cambiaron y el admin vuelve a ver el vehiculo.
+        Navigator.of(context).pop(AltaVehiculo(
+          tipo: widget.tipos.esValido(_tipo)
+              ? _tipo
+              : (widget.tipos.tipos.isNotEmpty
+                  ? widget.tipos.tipos.first.tipo
+                  : 'basico'),
+          marca: marca,
+          modelo: modelo,
+          matricula: matricula,
+          fotos: const {},
+        ));
         return;
       }
       final faltan = fotosRequeridasDe(_tipo)
@@ -789,9 +860,14 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final nuevos = !widget.soloFotos;
+    final nuevos = !widget.soloFotos && !widget.soloDatos;
+    final sinFotos = widget.soloDatos;
     return AlertDialog(
-      title: Text(nuevos ? 'Anadir vehiculo' : 'Fotos del vehiculo'),
+      title: Text(
+        nuevos
+            ? 'Anadir vehiculo'
+            : (sinFotos ? 'Editar vehiculo' : 'Fotos del vehiculo'),
+      ),
       content: SizedBox(
         width: 420,
         child: SingleChildScrollView(
@@ -799,7 +875,7 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (nuevos) ...[
+              if (!sinFotos) ...[
                 DropdownButtonFormField<String>(
                   initialValue: widget.tipos.esValido(_tipo) ? _tipo : null,
                   decoration:
@@ -846,8 +922,11 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
                 nuevos
                     ? 'El vehiculo entra pendiente. El administrador revisara '
                         'los datos y las fotos.'
-                    : 'Si el vehiculo estaba aprobado, se desactiva y vuelve a '
-                        'revision con las fotos nuevas.',
+                    : (sinFotos
+                        ? 'Si el vehiculo estaba aprobado, vuelve a revision '
+                            'cuando cambien los datos.'
+                        : 'Si el vehiculo estaba aprobado, se desactiva y vuelve a '
+                            'revision con las fotos nuevas.'),
                 style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
               ),
             ],
@@ -861,7 +940,9 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
         ),
         FilledButton(
           onPressed: _validarYDevolver,
-          child: Text(nuevos ? 'Guardar' : 'Subir fotos'),
+          child: Text(nuevos
+              ? 'Guardar'
+              : (sinFotos ? 'Guardar cambios' : 'Subir fotos')),
         ),
       ],
     );

@@ -12,8 +12,10 @@ El chofer debe subir antes de poder ser habilitado por el administrador:
     9. vehiculo_exterior_frente  - vehiculo por fuera, por delante
     10. vehiculo_exterior_atras  - vehiculo por fuera, por detras
 
-Las imagenes se guardan en disco bajo `uploads/documentos/` y en el documento
-del chofer se guarda solo la referencia (no los bytes), para no engordar MongoDB.
+Las imagenes viven en Cloudinary (si hay credenciales en el entorno) y en el
+documento del chofer se guarda la referencia: el nombre interno (`archivo`) y
+la `url` segura de la nube. Si no hay credenciales se cae al respaldo de disco
+`uploads/documentos/`, util en desarrollo.
 El administrador las revisa desde el panel y aprueba o rechaza el chofer.
 """
 import logging
@@ -24,13 +26,16 @@ from typing import Optional
 
 from bson import ObjectId
 from fastapi import (APIRouter, Depends, File, Form, Header, HTTPException,
-                     UploadFile)
+                     Response, UploadFile)
 from fastapi.responses import FileResponse
 
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
 from services.codigos_referido import generar_codigo
+from services.fotos_nube import borrar as borrar_nube
+from services.fotos_nube import descargar as descargar_nube
+from services.fotos_nube import subir as subir_nube
 from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
 from services.tipo_vehiculo import campos_exigidos_por_tipo, resolver_tipo_vehiculo
 
@@ -113,7 +118,14 @@ def _extension(content_type: Optional[str], nombre: Optional[str]) -> str:
 
 
 def _guardar_archivo(driver_id: str, campo: str, upload: UploadFile) -> dict:
-    """Guarda la imagen en disco y devuelve la referencia."""
+    """Guarda la imagen (Cloudinary o disco) y devuelve la referencia.
+
+    Con credenciales la foto va a la nube y guardar la `secure_url` en la
+    referencia; si la subida falla se escribe igualmente en disco para que el
+    registro no se pierda. El nombre interno (`archivo`) mantiene el patron
+    `<driver_id>_<campo>_<uuid>.<ext>` porque la autorizacion y varias busquedas
+    de Mongo lo usan.
+    """
     asegurar_dir()
 
     data = upload.file.read()
@@ -134,6 +146,23 @@ def _guardar_archivo(driver_id: str, campo: str, upload: UploadFile) -> dict:
                    % campo)
 
     nombre = "%s_%s_%s%s" % (driver_id, campo, uuid.uuid4().hex[:8], real)
+    base_publico = os.path.splitext(nombre)[0]
+    subida = subir_nube(
+        data, (upload.content_type or "application/octet-stream").lower(),
+        "rapitaxi/chofer/%s" % driver_id, base_publico)
+
+    if subida:
+        return {
+            "campo": campo,
+            "archivo": nombre,
+            "url": subida.get("url"),
+            "nube_public_id": subida.get("public_id"),
+            "bytes": len(data),
+            "content_type": (upload.content_type or "application/octet-stream").lower(),
+            "subido_at": datetime.utcnow().isoformat(),
+            "almacen": "cloudinary",
+        }
+
     ruta = os.path.join(UPLOAD_DIR, nombre)
     with open(ruta, "wb") as f:
         f.write(data)
@@ -144,18 +173,39 @@ def _guardar_archivo(driver_id: str, campo: str, upload: UploadFile) -> dict:
         "bytes": len(data),
         "content_type": (upload.content_type or "application/octet-stream").lower(),
         "subido_at": datetime.utcnow().isoformat(),
+        "almacen": "disco",
     }
 
 
 def _borrar_archivos(referencias):
     for ref in referencias or []:
-        nombre = ref.get("archivo") if isinstance(ref, dict) else None
+        if not isinstance(ref, dict):
+            continue
+        borrar_nube(ref.get("nube_public_id"))
+        nombre = ref.get("archivo")
         if not nombre:
             continue
         try:
             os.remove(os.path.join(UPLOAD_DIR, nombre))
         except OSError:
             pass
+
+
+def _referencia_por_archivo(nombre: str) -> Optional[dict]:
+    """Busca en Mongo la referencia con ese `archivo` (el panel la pidea)."""
+    doc = chofer_coleccion.find_one(
+        {"documentos.archivo": nombre},
+        {"documentos": {"$elemMatch": {"archivo": nombre}}})
+    refs = (doc or {}).get("documentos") or []
+    for ref in refs:
+        if isinstance(ref, dict):
+            return ref
+    return None
+
+
+def _responder_desde_nube(url: str) -> Response:
+    data, tipo = descargar_nube(url)
+    return Response(content=data, media_type=tipo)
 
 
 def _exigidos_de(chofer: dict) -> list:
@@ -194,10 +244,11 @@ def _estado_documentos(chofer: dict) -> dict:
 
 
 def _borrar_por_campo(documentos, campo: str):
-    """Quita la referencia anterior (y su archivo) de un documento."""
+    """Quita la referencia anterior (y su archivo en nube/disco) de un doc."""
     docs = list(documentos or [])
     for d in list(docs):
         if isinstance(d, dict) and d.get("campo") == campo:
+            borrar_nube(d.get("nube_public_id"))
             nombre = d.get("archivo")
             if nombre:
                 try:
@@ -501,14 +552,19 @@ async def ver_foto_chofer(driver_id: str, campo: str,
     if not chofer:
         raise HTTPException(status_code=404, detail="Chofer no encontrado")
 
-    archivo = None
-    for ref in chofer.get("documentos") or []:
-        if (isinstance(ref, dict) and ref.get("campo") == campo
-                and ref.get("archivo")):
-            archivo = str(ref["archivo"])
+    ref = None
+    for r in chofer.get("documentos") or []:
+        if isinstance(r, dict) and r.get("campo") == campo and (
+                r.get("archivo") or r.get("url")):
+            ref = r
             break
-    if not archivo:
+    if not ref:
         raise HTTPException(status_code=404, detail="Foto no encontrada")
+
+    url = ref.get("url")
+    if url:
+        return _responder_desde_nube(str(url))
+    archivo = str(ref.get("archivo") or "")
     ruta = os.path.join(UPLOAD_DIR, os.path.basename(archivo))
     if not os.path.isfile(ruta):
         raise HTTPException(status_code=404, detail="Foto no encontrada")
@@ -526,6 +582,11 @@ async def ver_imagen(archivo: str, authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=401,
                             detail="Necesitas iniciar sesión como administrador")
     seguro = os.path.basename(archivo)
+    # Las fotos que viven en Cloudinary no estan en el disco: se busca la
+    # referencia en Mongo y se sirven los bytes desde la nube.
+    ref = _referencia_por_archivo(seguro)
+    if ref and ref.get("url"):
+        return _responder_desde_nube(str(ref["url"]))
     ruta = os.path.join(UPLOAD_DIR, seguro)
     if not os.path.isfile(ruta):
         raise HTTPException(status_code=404, detail="Imagen no encontrada")

@@ -371,6 +371,61 @@ async def update_chofer(id: str, chofer: CHOFER, token: str = Depends(oauth2_sch
     chofer_dict.pop("password", None)
     return serialize_mongo_doc(chofer_dict)
 
+
+class PerfilChoferPatch(BaseModel):
+    """Edicion de PERFIL por la app del chofer.
+
+    No esta el `PUT /chofer/{id}` de arriba: ese reemplaza el documento entero
+    con los valores del modelo y aqui solo se tocan los campos que el chofer
+    envia (el saldo, el vehiculo y el resto quedan intactos).
+    """
+    Nombre: Optional[str] = None
+    Apellidos: Optional[str] = None
+    numero_de_telefono: Optional[str] = None
+
+
+@router.patch("/chofer/{id}/perfil")
+async def actualizar_perfil_chofer(id: str, body: PerfilChoferPatch,
+                                   token: str = Depends(oauth2_scheme)):
+    """La app del chofer edita su nombre/apellidos/telefono.
+
+    Solo el chofer con su token y solo los campos recibidos. El telefono se
+    valida y anti-duplica igual que en el registro: es el identificador del
+    login internacional.
+    """
+    if not verify_token_chofer(token):
+        raise HTTPException(status_code=401, detail="Token inválido")
+    if not ObjectId.is_valid(id):
+        raise HTTPException(status_code=400, detail="Id de chofer inválido")
+
+    cambios: dict = {}
+    if body.Nombre is not None:
+        cambios["Nombre"] = body.Nombre.strip()
+    if body.Apellidos is not None:
+        cambios["Apellidos"] = body.Apellidos.strip()
+    if body.numero_de_telefono is not None and body.numero_de_telefono.strip():
+        telefono = body.numero_de_telefono
+        if not es_telefono_valido(telefono):
+            raise HTTPException(
+                status_code=400,
+                detail="El número de teléfono no es válido. Escribe los 8 dígitos.")
+        repetidos = [d for d in buscar_por_telefono(chofer_coleccion, telefono)
+                     if str(d["_id"]) != id]
+        if repetidos:
+            raise HTTPException(
+                status_code=409,
+                detail="El número de teléfono ya está asociado a otra cuenta.")
+        cambios["numero_de_telefono"] = normalizar_telefono(telefono)
+
+    if not cambios:
+        raise HTTPException(status_code=400, detail="Nada que actualizar")
+
+    resultado = chofer_coleccion.update_one(
+        {"_id": ObjectId(id)}, {"$set": cambios})
+    if resultado.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Chofer no encontrado")
+    return {"ok": True, "actualizados": sorted(cambios)}
+
 @router.delete("/chofer/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chofer(id: str, token: str = Depends(oauth2_scheme)):
     if not verify_token_chofer(token):

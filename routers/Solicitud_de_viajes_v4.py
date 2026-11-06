@@ -5,7 +5,7 @@ import os
 import logging
 from contextlib import contextmanager
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -29,6 +29,7 @@ except Exception:
     Polygon = None
 from routers.promociones import calcular_descuento_cliente, coeficiente_por_distancia, excedente_espera, leer_promocion  # noqa
 from routers.garaje import tipo_vehiculo_activo_de, vehiculo_activo_de
+from services.fotos_nube import descargar as descargar_nube
 from decimal import Decimal, ROUND_HALF_UP
 from bson import ObjectId
 from pymongo import MongoClient
@@ -376,16 +377,24 @@ _FOTOS_CHOFER_DIR = os.path.join(
     "uploads", "documentos")
 
 
-def _chofer_foto_perfil(chofer_doc: Optional[dict]) -> Optional[str]:
-    """Nombre del archivo de la foto de rostro del chofer, si la subio."""
+def _chofer_foto_perfil(chofer_doc: Optional[dict]) -> Optional[dict]:
+    """Referencia de la foto de rostro del chofer, si la subio.
+
+    Devuelve `{"archivo": ..., "url": ...}`: con Cloudinary la foto vive en la
+    nube (`url`) y el `archivo` mantiene la clave de compatibilidad con los
+    respaldos de disco.
+    """
     if not chofer_doc:
         return None
     for ref in chofer_doc.get("documentos") or []:
         if not isinstance(ref, dict) or ref.get("campo") != "rostro":
             continue
-        archivo = ref.get("archivo")
+        archivo = ref.get("archivo") or ref.get("url")
         if archivo:
-            return os.path.basename(str(archivo))
+            return {
+                "archivo": os.path.basename(str(ref.get("archivo") or "")),
+                "url": ref.get("url"),
+            }
     return None
 
 
@@ -3001,12 +3010,13 @@ async def api_get_trip(trip_id: str):
         trip["driver_name"] = _chofer_display_name(chofer_doc)
         trip["driver_phone"] = _chofer_phone(chofer_doc)
 
-        # Foto de perfil: el registro guarda una foto `rostro`; se sirve por
-        # `/trips/{id}/driver-photo`. Solo se anuncia la URL si el archivo
-        # existe de verdad, para que la app no pinte un icono roto.
-        archivo_foto = _chofer_foto_perfil(chofer_doc)
-        if archivo_foto and os.path.isfile(
-                os.path.join(_FOTOS_CHOFER_DIR, archivo_foto)):
+        # Foto de perfil: el registro guarda una foto `rostro` (en Cloudinary
+        # o en disco); se sirve por `/trips/{id}/driver-photo`. Solo se anuncia
+        # la URL si la foto existe de verdad, para que la app no pinte un
+        # icono roto.
+        foto_ref = _chofer_foto_perfil(chofer_doc)
+        if foto_ref and (foto_ref.get("url") or os.path.isfile(
+                os.path.join(_FOTOS_CHOFER_DIR, foto_ref["archivo"]))):
             trip["driver_profile_picture_url"] = (
                 "/trips/%s/driver-photo" % trip_id)
 
@@ -3089,11 +3099,17 @@ async def api_get_driver_photo(trip_id: str):
         raise HTTPException(
             status_code=404, detail="El viaje no tiene chofer asignado")
     chofer_doc = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)})
-    archivo = _chofer_foto_perfil(chofer_doc)
-    if not archivo:
+    ref_foto = _chofer_foto_perfil(chofer_doc)
+    if not ref_foto or not (ref_foto.get("url") or ref_foto.get("archivo")):
         raise HTTPException(
             status_code=404, detail="El chofer no tiene foto de perfil")
-    ruta = os.path.abspath(os.path.join(_FOTOS_CHOFER_DIR, archivo))
+
+    # Con Cloudinary la foto vive en la nube; con el respaldo viejo, en disco.
+    url = ref_foto.get("url")
+    if url:
+        data, tipo = descargar_nube(str(url))
+        return Response(content=data, media_type=tipo)
+    ruta = os.path.abspath(os.path.join(_FOTOS_CHOFER_DIR, ref_foto["archivo"]))
     if not os.path.isfile(ruta):
         raise HTTPException(status_code=404, detail="Foto no encontrada")
     return FileResponse(ruta)

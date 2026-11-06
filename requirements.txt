@@ -2,6 +2,8 @@
 uvicorn==0.46.0
 pymongo==4.17.0
 pydantic==2.13.4
+# Almacen de fotos en la nube: reemplaza el disco efimero de Render
+cloudinary==1.47.0
 # Subida de las 10 fotos del registro del chofer (multipart/form-data)
 python-multipart==0.0.32
 # El panel de administracion decodifica JPEG/WebP/HEIC para mostrar los documentos

@@ -31,7 +31,8 @@ from typing import Optional, Tuple, Dict
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import (APIRouter, Body, File, Header, HTTPException, UploadFile)
+from fastapi import (APIRouter, Body, File, Header, HTTPException, Response,
+                     UploadFile)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -39,6 +40,9 @@ from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
 from db.Chofer.auth import verify_token as verify_chofer_token
+from services.fotos_nube import borrar as borrar_nube
+from services.fotos_nube import descargar as descargar_nube
+from services.fotos_nube import subir as subir_nube
 from services.tipo_vehiculo import (campos_exigidos_por_tipo,
                                     normalizar_tipo_vehiculo,
                                     tipos_iguales)
@@ -195,6 +199,13 @@ class VehiculoCreate(BaseModel):
     matricula: str
 
 
+class VehiculoEditar(BaseModel):
+    tipo_vehiculo: str
+    marca: str
+    modelo: str
+    matricula: str
+
+
 class VehiculoAprobacion(BaseModel):
     decision: str          # 'aprobado' o 'rechazado'
     motivo: str = ""
@@ -256,7 +267,13 @@ def _extension_foto(data: bytes, content_type: Optional[str],
 
 def _guardar_foto_vehiculo(vehiculo_id: str, campo: str,
                            upload: UploadFile) -> dict:
-    """Escribe la imagen en disco y devuelve la referencia para Mongo."""
+    """Guarda la imagen del vehiculo (Cloudinary o disco) para Mongo.
+
+    Con credenciales la foto va a la nube y la referencia guarda la
+    `secure_url`; si falla se escribe en disco. El `archivo` conserva el
+    patron `<vehiculo_id>_<campo>.<ext>`: la autorizacion al pedirla
+    comprueba el dueno con ese prefijo sin abrir Mongo por el nombre.
+    """
     os.makedirs(FOTO_DIR, exist_ok=True)
     data = upload.file.read()
     if len(data) > MAX_FOTO_MB * 1024 * 1024:
@@ -271,6 +288,22 @@ def _guardar_foto_vehiculo(vehiculo_id: str, campo: str,
     # El nombre lleva el id del vehiculo: al servirlo se puede comprobar el
     # dueno sin abrir Mongo con el nombre pelado.
     nombre_archivo = "%s_%s%s" % (vehiculo_id, campo, ext)
+    subida = subir_nube(
+        data, (upload.content_type or "application/octet-stream").lower(),
+        "rapitaxi/vehiculo/%s" % vehiculo_id,
+        "%s_%s" % (vehiculo_id, campo))
+
+    if subida:
+        return {
+            "archivo": nombre_archivo,
+            "url": subida.get("url"),
+            "nube_public_id": subida.get("public_id"),
+            "subido_at": datetime.utcnow().isoformat(),
+            "estado": ESTADO_PENDIENTE,
+            "motivo": None,
+            "almacen": "cloudinary",
+        }
+
     ruta = os.path.join(FOTO_DIR, nombre_archivo)
     with open(ruta, "wb") as destino:
         destino.write(data)
@@ -279,6 +312,7 @@ def _guardar_foto_vehiculo(vehiculo_id: str, campo: str,
         "subido_at": datetime.utcnow().isoformat(),
         "estado": ESTADO_PENDIENTE,
         "motivo": None,
+        "almacen": "disco",
     }
 
 
@@ -423,6 +457,87 @@ async def listar_vehiculos(authorization: Optional[str] = Header(None)):
     return [_vehiculo_out(d) for d in docs]
 
 
+@router.put("/driver/vehicles/{vehiculo_id}")
+async def editar_vehiculo(vehiculo_id: str,
+                          body: VehiculoEditar,
+                          authorization: Optional[str] = Header(None)):
+    """Edita marca/modelo/tipo/matricula de un vehiculo del chofer.
+
+    Cambian los datos del vehiculo => el administrador debe volver a verlo:
+    si estaba `aprobado` vuelve a `pendiente` y se desactiva (igual que al
+    reponer una foto), cortando ofertas mientras tanto. Si era el vehiculo
+    activo, el `vehicle` embebido del chofer se actualiza en la misma pasada.
+    """
+    chofer = _chofer_actual(authorization)
+    if not ObjectId.is_valid(vehiculo_id):
+        raise HTTPException(status_code=400, detail="Id invalido")
+    doc = coleccion.find_one({
+        "_id": ObjectId(vehiculo_id),
+        "driver_id": chofer["id"],
+    })
+    if not doc:
+        raise HTTPException(status_code=404, detail="Vehiculo no encontrado")
+
+    tipo = normalizar_tipo_vehiculo(body.tipo_vehiculo)
+    if not tipo:
+        raise HTTPException(status_code=400, detail="Indica el tipo de vehiculo")
+    marca = (body.marca or "").strip()
+    modelo = (body.modelo or "").strip()
+    matricula = _matricula_norm(body.matricula)
+    if not marca:
+        raise HTTPException(status_code=400, detail="Indica la marca")
+    if not modelo:
+        raise HTTPException(status_code=400, detail="Indica el modelo")
+    if not matricula:
+        raise HTTPException(status_code=400, detail="Indica la matricula")
+
+    matricula_vieja = _matricula_norm(doc.get("matricula") or "")
+    if (matricula != matricula_vieja and _matricula_repetida(
+            matricula, chofer["id"], otro_id=doc["_id"])):
+        raise HTTPException(
+            status_code=409,
+            detail="Esa matricula ya esta registrada por otro vehiculo")
+
+    cambios = {
+        "tipo_vehiculo": tipo,
+        "marca": marca,
+        "modelo": modelo,
+        "matricula": matricula,
+    }
+    mensaje = "Vehiculo actualizado"
+    info = {}
+    if doc.get("estado") == ESTADO_APROBADO:
+        cambios["estado"] = ESTADO_PENDIENTE
+        cambios["es_activo"] = False
+        mensaje = ("Datos guardados: el vehiculo vuelve a revision y se "
+                   "desactiva hasta que el administrador lo apruebe")
+    coleccion.update_one({"_id": doc["_id"]}, {"$set": cambios})
+    _invalidar_cache(chofer["id"])
+
+    era_activo = bool(doc.get("es_activo"))
+    if era_activo:
+        chofer_coleccion.update_one(
+            {"_id": ObjectId(chofer["id"])},
+            {"$set": {
+                "type_vehicle": tipo,
+                "vehicle": {
+                    "Marca": marca,
+                    "model": modelo,
+                    "year": doc.get("year") or 0,
+                    "chapa": matricula,
+                    "circulation": (chofer["doc"].get("vehicle") or {}).get("circulation", ""),
+                    "color": doc.get("color") or (chofer["doc"].get("vehicle") or {}).get("color", ""),
+                    "servicio": tipo,
+                },
+                "updated_at": datetime.utcnow().isoformat(),
+            }},
+        )
+    actualizado = coleccion.find_one({"_id": doc["_id"]})
+    if actualizado:
+        info = _vehiculo_out(actualizado)
+    return {"ok": True, "message": mensaje, "vehiculo": info}
+
+
 @router.delete("/driver/vehicles/{vehiculo_id}")
 async def eliminar_vehiculo(vehiculo_id: str,
                             authorization: Optional[str] = Header(None)):
@@ -443,11 +558,14 @@ async def eliminar_vehiculo(vehiculo_id: str,
     if not doc:
         raise HTTPException(status_code=404, detail="Vehiculo no encontrado")
 
-    # Limpieza de las fotos en disco (solo el nombre base: nunca una ruta).
+    # Limpieza de las fotos (nube y disco; solo el nombre base: nunca una ruta).
     fotos = doc.get("fotos") or {}
     if isinstance(fotos, dict):
         for ref in fotos.values():
-            archivo = ref.get("archivo") if isinstance(ref, dict) else None
+            if not isinstance(ref, dict):
+                continue
+            borrar_nube(ref.get("nube_public_id"))
+            archivo = ref.get("archivo")
             if not archivo:
                 continue
             try:
@@ -456,7 +574,15 @@ async def eliminar_vehiculo(vehiculo_id: str,
                 pass
 
     coleccion.delete_one({"_id": doc["_id"]})
-    if doc.get("es_activo"):
+
+    # Regla: sin vehiculo el chofer queda sin categoria y no recibe ofertas.
+    # Se limpia el vehiculo embebido si lo que borro era el activo O si ya no
+    # queda ningun vehiculo aprobado al que pueda cambiar.
+    quedan_aprobados = coleccion.find_one({
+        "driver_id": chofer["id"],
+        "estado": ESTADO_APROBADO,
+    })
+    if doc.get("es_activo") or not quedan_aprobados:
         chofer_coleccion.update_one(
             {"_id": ObjectId(chofer["id"])},
             {"$set": {
@@ -466,7 +592,12 @@ async def eliminar_vehiculo(vehiculo_id: str,
             }},
         )
     _invalidar_cache(chofer["id"])
-    return {"ok": True, "message": "Vehiculo eliminado"}
+    mensaje = "Vehiculo eliminado"
+    if not quedan_aprobados:
+        mensaje += (". Te quedaste sin vehiculos: no recibiras ofertas hasta "
+                    "registrar otro vehiculo con su categoria y el "
+                    "administrador lo apruebe")
+    return {"ok": True, "message": mensaje, "sin_vehiculos": not quedan_aprobados}
 
 
 # ============================ FOTOS DEL VEHICULO (CHOFER) ============================
@@ -521,6 +652,11 @@ async def subir_fotos_vehiculo(vehiculo_id: str,
     fotos_previas = doc.get("fotos") or {}
     if not isinstance(fotos_previas, dict):
         fotos_previas = {}
+    # Las fotos que se acaban de reemplazar se borran de la nube (los refs que
+    # viven en disco quedan en el FS pero dejan de referenciarse).
+    for campo, ref_vieja in fotos_previas.items():
+        if campo in guardados and isinstance(ref_vieja, dict):
+            borrar_nube(ref_vieja.get("nube_public_id"))
     fotos_previas.update(guardados)
 
     cambios = {"fotos": fotos_previas}
@@ -555,9 +691,18 @@ async def ver_foto_vehiculo(archivo: str,
         raise HTTPException(status_code=400, detail="Nombre de archivo invalido")
     _dueno_o_admin(archivo, authorization)
     ruta = os.path.abspath(os.path.join(FOTO_DIR, archivo))
-    if not os.path.isfile(ruta):
-        raise HTTPException(status_code=404, detail="Imagen no encontrada")
-    return FileResponse(ruta)
+    if os.path.isfile(ruta):
+        return FileResponse(ruta)
+
+    # La foto vive en Cloudinary: se busca su URL en el vehiculo (autorizado
+    # arriba por el prefijo del nombre) y se sirven los bytes desde la nube.
+    prefijo = archivo.split("_", 1)[0]
+    vehiculo = coleccion.find_one({"_id": ObjectId(prefijo)}, {"fotos": 1})
+    for ref in ((vehiculo or {}).get("fotos") or {}).values():
+        if isinstance(ref, dict) and ref.get("archivo") == archivo and ref.get("url"):
+            data, tipo = descargar_nube(str(ref["url"]))
+            return Response(content=data, media_type=tipo)
+    raise HTTPException(status_code=404, detail="Imagen no encontrada")
 
 
 @router.put("/driver/vehicles/{vehiculo_id}/select")

@@ -269,6 +269,26 @@ class ApiService {
     await _map('PUT', '/driver/vehicles/$vehicleId/select');
   }
 
+  /// Edita los datos de un vehiculo del chofer autenticado.
+  ///
+  /// Si estaba aprobado, el backend lo vuelve a revision y lo desactiva hasta
+  /// la nueva aprobacion del administrador.
+  Future<Map<String, dynamic>> updateVehicle(
+    String vehicleId, {
+    required String tipoVehiculo,
+    required String marca,
+    required String modelo,
+    required String matricula,
+  }) async {
+    final j = await _map('PUT', '/driver/vehicles/$vehicleId', body: {
+      'tipo_vehiculo': tipoVehiculo,
+      'marca': marca,
+      'modelo': modelo,
+      'matricula': matricula,
+    });
+    return (j as Map).cast<String, dynamic>();
+  }
+
   /// Elimina del garaje un vehiculo del chofer autenticado.
   Future<void> deleteVehicle(String vehicleId) async {
     await _send('DELETE', '/driver/vehicles/$vehicleId');
@@ -276,15 +296,46 @@ class ApiService {
 
   /// Sube fotos del vehiculo: ruta local → campo.
   ///
-  /// Igual que el registro, va multipart. El backend guarda en disco y marca
-  /// cada foto `pendiente` para el administrador.
+  /// Igual que el registro, va multipart (SIN el prefijo `doc_`: Mi Garaje
+  /// espera los nombres pelados de campo) y el backend marca cada foto
+  /// `pendiente` para que la revise el administrador.
   Future<Map<String, dynamic>> addVehicleFotos(
     String vehicleId,
     Map<String, String> archivos,
   ) async {
     final url = '${ApiConfig.baseUrl}/driver/vehicles/$vehicleId/fotos';
+    final j = await ApiClient.multipart(url, const {}, files: archivos,
+        prefijo: '');
+    return (j as Map).cast<String, dynamic>();
+  }
+
+  /// Sube o reemplaza fotos del registro (rostro, carnet, ...).
+  ///
+  /// Va a `POST /documentos/chofer/{id}` con el prefijo `doc_` que espera el
+  /// backend. Cada foto que se sube reemplaza a la anterior.
+  Future<Map<String, dynamic>> updateDocumentos(
+    String driverId,
+    Map<String, String> archivos,
+  ) async {
+    final url = '${ApiConfig.baseUrl}/documentos/chofer/$driverId';
     final j = await ApiClient.multipart(url, const {}, files: archivos);
     return (j as Map).cast<String, dynamic>();
+  }
+
+  /// Actualiza los datos personales del chofer autenticado cambio por cambio.
+  Future<void> updatePerfil(
+    String driverId, {
+    String? nombre,
+    String? apellidos,
+    String? telefono,
+  }) async {
+    final body = <String, dynamic>{
+      'Nombre': ?nombre,
+      'Apellidos': ?apellidos,
+      'numero_de_telefono': ?telefono,
+    };
+    if (body.isEmpty) return;
+    await _map('PATCH', '/chofer/$driverId/perfil', body: body);
   }
 
   // ------------------- OFERTAS / VIAJES -------------------

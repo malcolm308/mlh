@@ -251,13 +251,19 @@ class ApiClient {
     Map<String, String> fields, {
     Map<String, String>? files,
     Map<String, String>? headers,
+
+    /// Prefijo de los campos de archivo. El registro de documentos del chofer
+    /// espera `doc_rostro`, `doc_carnet_frente`, ... (prefijo por defecto) y
+    /// las fotos de Mi Garaje esperan los campos SIN prefijo
+    /// (`vehiculo_exterior_frente`, ...): ahi se manda `prefijo: ''`.
+    String prefijo = 'doc_',
   }) async {
     final req = http.MultipartRequest('POST', Uri.parse(url));
     req.fields.addAll(fields);
     files?.forEach((campo, ruta) {
       final f = File(ruta);
       req.files.add(http.MultipartFile.fromBytes(
-        'doc_$campo',
+        '$prefijo$campo',
         f.readAsBytesSync(),
         filename: f.uri.pathSegments.last,
       ));
