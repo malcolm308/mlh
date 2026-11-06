@@ -96,6 +96,9 @@ class TabVehiculos(ttk.Frame):
 
     def _pintar(self, datos):
         self.tabla.limpiar()
+        # Cache para "Ver fotos": abre el visor sin re-consultar la lista.
+        self._por_id = {v.get("id"): v for v in datos.get("vehiculos", [])
+                        if v.get("id")}
         for v in datos.get("vehiculos", []):
             self.tabla.agregar([
                 v.get("chofer") or "-", v.get("email") or "-",
@@ -136,19 +139,35 @@ class TabVehiculos(ttk.Frame):
         }
 
     def ver_fotos(self):
-        """Abre el visor de las 5 fotos del registro del vehiculo elegido."""
+        """Abre el visor de las fotos del vehiculo elegido.
+
+        Va en hilo aparte: noviembre en Render puede estar dormido y una
+        consulta sincrona aqui congelaba la ventana (y Windows la cerraba).
+        """
         v = self._seleccionado()
         if not v:
             return
-        try:
-            lista = self.api.vehiculos(estado=None).get("vehiculos", [])
-        except ApiError as e:
-            messagebox.showerror("Fotos", str(e.mensaje))
+        vehiculo = (self._por_id or {}).get(v["id"])
+        if vehiculo is None:
+            # Lista desactualizada: se re-consulta en hilo y se abre el visor
+            # cuando llegue.
+            self._consulta_en_curso = False
+            consultar_en_hilo(
+                self,
+                lambda api: api.vehiculos(estado=None),
+                lambda datos: self._abrir_fotos_de(datos, v["id"]),
+                self._fallo,
+                "Consultando vehiculos...")
             return
-        vehiculo = next((x for x in lista if x.get("id") == v["id"]), None)
-        if not vehiculo:
-            messagebox.showerror("Fotos", "No se encontro el vehiculo.")
-            return
+        self._abrir_fotos(vehiculo)
+
+    def _abrir_fotos_de(self, datos, id_vehiculo):
+        for v in datos.get("vehiculos", []):
+            if v.get("id") == id_vehiculo:
+                return self._abrir_fotos(v)
+        messagebox.showerror("Fotos", "No se encontro el vehiculo.")
+
+    def _abrir_fotos(self, vehiculo):
         # Import perezoso: Pillow/pillow_heif pueden faltar y solo se necesitan
         # al abrir esta ventana.
         from panel_fotos_vehiculo import VentanaFotosVehiculo

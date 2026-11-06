@@ -304,6 +304,12 @@ class ApiService {
     });
   }
 
+  /// Choferes que ESTE pasajero bloqueo (para el menu lateral).
+  Future<List<Map<String, dynamic>>> getBloqueos() async {
+    final list = await _list('GET', '/incidencias/bloqueos');
+    return list.whereType<Map<String, dynamic>>().toList();
+  }
+
   // ---------------- SOPORTE ----------------
 
   Future<Map<String, dynamic>> createSupportTicket({

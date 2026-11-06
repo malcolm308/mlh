@@ -16,7 +16,9 @@ import '../services/geocode_service.dart';
 import '../services/location_service.dart';
 import '../services/osrm_service.dart';
 import '../widgets/client_map_view.dart';
+import '../widgets/menu_lateral_cliente.dart';
 import '../widgets/vehicle_selector_sheet.dart';
+import 'blocked_drivers_screen.dart';
 import 'favorite_locations_screen.dart';
 import 'history_screen.dart';
 import 'support_screen.dart';
@@ -863,6 +865,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     return Scaffold(
       key: _scaffoldKey,
       drawer: _buildDrawer(),
+      // El scrim casi transparente: el vidrio del menu ya difumina el mapa y
+      // el resto de la pantalla debe seguir viendose, como en el diseno.
+      drawerScrimColor: Colors.transparent,
       body: Stack(
         children: [
           ClientMapView(
@@ -1502,112 +1507,47 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   }
 
   Widget _buildDrawer() {
-    return Drawer(
-      backgroundColor: Colors.white,
-      child: SafeArea(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            DrawerHeader(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    const Color(0xFF007AFF),
-                    const Color(0xFF4DABFF),
-                  ],
-                ),
-              ),
-              child: Row(
-                children: [
-                  const CircleAvatar(
-                    radius: 28,
-                    backgroundColor: Colors.white,
-                    child: Icon(Icons.person, color: Color(0xFF007AFF), size: 30),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(widget.profile.fullName,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                        Text(widget.profile.email,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 12),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            ListTile(
-              leading:
-                  const Icon(Icons.history, color: Color(0xFF333333)),
-              title: const Text('Historial de viajes'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => HistoryScreen(
-                    api: widget.api,
-                    clientId: widget.clientId,
-                  ),
-                ));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.star, color: Color(0xFF333333)),
-              title: const Text('Ubicaciones favoritas'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => FavoriteLocationsScreen(
-                    api: widget.api,
-                    clientId: widget.clientId,
-                  ),
-                ));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.help_outline, color: Color(0xFF333333)),
-              title: const Text('Ayuda y soporte'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => SupportScreen(api: widget.api),
-                ));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.share, color: Color(0xFF333333)),
-              title: const Text('Compartir App'),
-              onTap: _shareApp,
-            ),
-            const Divider(height: 16),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Color(0xFF333333)),
-              title: const Text('Cerrar sesión',
-                  style: TextStyle(color: Color(0xFFB3261E))),
-              onTap: _logout,
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_forever, color: Colors.red),
-              title: const Text('Borrar cuenta',
-                  style: TextStyle(color: Colors.red)),
-              onTap: _confirmDeleteAccount,
-            ),
-          ],
-        ),
-      ),
+    return MenuLateralCliente(
+      profile: widget.profile,
+      onHistorial: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => HistoryScreen(
+            api: widget.api,
+            clientId: widget.clientId,
+          ),
+        ));
+      },
+      onFavoritas: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => FavoriteLocationsScreen(
+            api: widget.api,
+            clientId: widget.clientId,
+          ),
+        ));
+      },
+      onBloqueados: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => BlockedDriversScreen(api: widget.api),
+        ));
+      },
+      onCompartir: () {
+        _shareApp();
+      },
+      onAyuda: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => SupportScreen(api: widget.api),
+        ));
+      },
+      onCerrarSesion: _logout,
+      onBorrarCuenta: () {
+        // La confirmacion vive en el propio dialogo del home.
+        Navigator.of(context).pop();
+        _confirmDeleteAccount();
+      },
     );
   }
 }

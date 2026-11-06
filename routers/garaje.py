@@ -33,7 +33,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import (APIRouter, Body, File, Header, HTTPException, Response,
                      UploadFile)
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 from db.Administración.auth import verify_token as verify_admin_token
@@ -695,13 +695,14 @@ async def ver_foto_vehiculo(archivo: str,
         return FileResponse(ruta)
 
     # La foto vive en Cloudinary: se busca su URL en el vehiculo (autorizado
-    # arriba por el prefijo del nombre) y se sirven los bytes desde la nube.
+    # arriba por el prefijo del nombre) y se manda al navegador DIRECTO a la
+    # nube. Un redirect 302 es mucho mas rapido que transcribir los bytes por
+    # la instancia gratis de Render y el panel/app la siguen igual.
     prefijo = archivo.split("_", 1)[0]
     vehiculo = coleccion.find_one({"_id": ObjectId(prefijo)}, {"fotos": 1})
     for ref in ((vehiculo or {}).get("fotos") or {}).values():
         if isinstance(ref, dict) and ref.get("archivo") == archivo and ref.get("url"):
-            data, tipo = descargar_nube(str(ref["url"]))
-            return Response(content=data, media_type=tipo)
+            return RedirectResponse(str(ref["url"]), status_code=302)
     raise HTTPException(status_code=404, detail="Imagen no encontrada")
 
 

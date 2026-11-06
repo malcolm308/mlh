@@ -1,5 +1,6 @@
 """Pestana Choferes: tabla de habilitacion (aprobar / rechazar)."""
 import tkinter as tk
+import threading
 from tkinter import ttk, messagebox, simpledialog
 
 from api_client import ApiError
@@ -94,6 +95,10 @@ class TabChoferes(ttk.Frame):
 
     def _pintar(self, datos):
         self.tabla.limpiar()
+        # Cache para abrir documentos sin re-consultar la lista entera.
+        self._por_id = {c.get("driver_id"): c
+                        for c in datos.get("choferes", [])
+                        if c.get("driver_id")}
         for c in datos.get("choferes", []):
             docs = c.get("documentos") or {}
             subidos = docs.get("subidos", 0)
@@ -128,28 +133,38 @@ class TabChoferes(ttk.Frame):
                 "estado": valores[7], "fotos": valores[6]}
 
     def ver_documentos(self):
-        """Abre el visor con las 10 fotos del chofer seleccionado."""
+        """Abre el visor con las 10 fotos del chofer seleccionado.
+
+        Usa la cache de la ultima consulta y, si hace falta reconsultar, va
+        en hilo: render dormido + llamada sincrona congelaba la ventana y
+        Windows la cerraba.
+        """
         iid = self.tabla.seleccion()
         if not iid:
             messagebox.showinfo("Selecciona un chofer",
                                 "Seleccione una fila de la tabla.")
             return
         self.api = self.app.api
-        self.app.status("Abriendo documentos...")
-        self.update_idletasks()
-        try:
-            lista = self.api.choferes(estado=None)
-            chofer = next((c for c in lista.get("choferes", [])
-                           if c["driver_id"] == iid), None)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
+        chofer = (self._por_id or {}).get(iid)
+        if chofer is not None:
+            self.app.status("Documentos de %s" % chofer.get("nombre"))
+            VentanaDocumentos(self, self.api, chofer)
             return
-        if not chofer:
-            messagebox.showinfo("Documentos", "No se encontro el chofer.")
-            return
-        self.app.status("Documentos de %s" % chofer.get("nombre"))
-        VentanaDocumentos(self, self.api, chofer)
+        self._consulta_en_curso = False
+        consultar_en_hilo(
+            self,
+            lambda api: api.choferes(estado=None),
+            lambda datos: self._abrir_documentos_de(datos, iid),
+            lambda e: self._fallo(e),
+            "Consultando choferes...")
+
+    def _abrir_documentos_de(self, datos, driver_id):
+        for c in datos.get("choferes", []):
+            if c.get("driver_id") == driver_id:
+                self.app.status("Documentos de %s" % c.get("nombre"))
+                VentanaDocumentos(self, self.api, c)
+                return
+        messagebox.showinfo("Documentos", "No se encontro el chofer.")
 
     def aprobar(self):
         ch = self._seleccionado()
@@ -183,12 +198,34 @@ class TabChoferes(ttk.Frame):
 
     def _cambiar(self, ch, estado, motivo):
         self.app.status("Actualizando %s..." % ch["nombre"])
-        self.update_idletasks()
-        try:
-            r = self.api.cambiar_estado_chofer(ch["driver_id"], estado, motivo)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
-            return
-        self.app.status(r.get("message", "Listo"))
-        self.cargar()
+        caja = {"listo": False}
+
+        def trabajo():
+            try:
+                caja["r"] = self.api.cambiar_estado_chofer(
+                    ch["driver_id"], estado, motivo)
+            except Exception as e:
+                caja["e"] = e
+            finally:
+                caja["listo"] = True
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+        def vigilar():
+            if not caja["listo"]:
+                if self.api.desperando:
+                    self.app.status("El servidor esta despertando...")
+                self.after(200, vigilar)
+                return
+            if "e" in caja:
+                e = caja["e"]
+                mensaje = str(getattr(e, "mensaje", e))
+                self.app.status("Error: %s" % mensaje, error=True)
+                messagebox.showerror("Error", mensaje)
+                return
+            r = caja.get("r") or {}
+            self.app.status(r.get("message", "Listo") if isinstance(r, dict)
+                            else "Listo")
+            self.cargar()
+
+        self.after(200, vigilar)

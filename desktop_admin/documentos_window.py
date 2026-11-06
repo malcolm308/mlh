@@ -1,6 +1,8 @@
 """Visor de los 10 documentos de un chofer para el panel de administracion."""
 import os
 import subprocess
+import tempfile
+import threading
 import tkinter as tk
 from tkinter import messagebox
 
@@ -51,6 +53,9 @@ class VentanaDocumentos(tk.Toplevel):
         self.api = api
         self.chofer = chofer
         self.error_descarga = None
+        self._labels = {}
+        self._descargas = {}
+        self._rutas = {}
         self.title("Documentos - %s" % chofer.get("nombre", ""))
         self.configure(bg="#1b2a3a")
         self.geometry("1060x720")
@@ -108,14 +113,44 @@ class VentanaDocumentos(tk.Toplevel):
 
     # ---------------- carga ----------------
     def cargar(self):
-        self.api.ping()
-        try:
-            datos = self.api.documentos(self.chofer["driver_id"])
-        except ApiError as e:
-            messagebox.showerror("Documentos", str(e.mensaje))
-            self.destroy()
-            return
+        """Carga el estado y las 10 fotos SIN congelar la ventana.
 
+        La consulta del estado y cada descarga de imagen van en hilos: antes
+        iban sincronas en el hilo de Tkinter, y con el backend dormido (plan
+        gratuito de Render) la ventana quedaba "no responde" minuto y medio
+        con 10 fotos, que es lo que parecia "un crash".
+        """
+        caja = {"listo": False}
+
+        def trabajo():
+            try:
+                caja["datos"] = self.api.documentos(self.chofer["driver_id"])
+            except ApiError as e:
+                caja["e"] = e
+            except Exception as e:
+                caja["e"] = ApiError("Error inesperado: %s" % e)
+            finally:
+                caja["listo"] = True
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+        def vigilar():
+            if not caja["listo"]:
+                if self.api.desperando:
+                    self.lbl_resumen.config(
+                        text="  El servidor esta despertando...",
+                        fg="#ffc107")
+                self.after(200, vigilar)
+                return
+            if "e" in caja:
+                messagebox.showerror("Documentos", str(caja["e"].mensaje))
+                self.destroy()
+                return
+            self._pintar(caja["datos"])
+
+        self.after(200, vigilar)
+
+    def _pintar(self, datos):
         self.datos = datos
         detalle = datos.get("documentos", {})
         subidos = datos.get("subidos", 0)
@@ -133,13 +168,64 @@ class VentanaDocumentos(tk.Toplevel):
         for w in self.marco.winfo_children():
             w.destroy()
 
+        # Estado de descargas de esta pasada; clave "clave|etiqueta".
+        self._descargas = {}
+        self._labels = {}
         # 2 columnas x 5 filas
         for i, (clave, etiqueta) in enumerate(DOCUMENTOS):
             info = detalle.get(clave, {})
             fila, col = divmod(i, 2)
-            self._tarjeta(fila, col, etiqueta, info)
+            self._tarjeta(fila, col, etiqueta, info, clave)
+        threading.Thread(target=self._descargar_todas, daemon=True).start()
+        self.after(200, self._revisar_descargas)
 
-    def _tarjeta(self, fila, col, etiqueta, info):
+    def _descargar_todas(self):
+        detalle = (self.datos or {}).get("documentos", {})
+        for clave, etiqueta in DOCUMENTOS:
+            info = detalle.get(clave) or {}
+            if not info.get("subido"):
+                continue
+            try:
+                ruta = self._descargar(info.get("archivo"))
+                self._descargas[(clave, etiqueta)] = ruta
+            except Exception:
+                self._descargas[(clave, etiqueta)] = None
+
+    def _revisar_descargas(self):
+        for llave, ruta in list(self._descargas.items()):
+            if llave not in self._labels:
+                continue
+            lbl = self._labels.pop(llave)
+            clave, etiqueta = llave
+            marco_img = lbl.master
+            self._rutas[llave] = ruta
+            if ruta:
+                img = self._miniatura(ruta)
+                if img is not None:
+                    lbl.configure(image=img, text="")
+                    lbl.image = img
+                    lbl.bind("<Double-Button-1>",
+                             lambda e, r=ruta, t=etiqueta: self._abrir(r, t))
+                    lbl.bind("<Button-3>",
+                             lambda e, r=ruta: self._abrir_carpeta(r))
+                    lbl.config(cursor="hand2")
+                    boton(marco_img, "Ver a pantalla completa",
+                          lambda r=ruta, t=etiqueta: self._abrir(r, t),
+                          color="#4a5b6c", fg="#ffffff").pack(anchor="w",
+                                                              pady=(8, 0))
+                    del self._descargas[llave]
+                    continue
+                self.error_descarga = None
+                self._no_visible(marco_img, ruta)
+                marco_img.pack_propagate(True)
+            else:
+                lbl.configure(text="(imagen no disponible)\nreintenta "
+                                   "con Actualizar", fg="#ff6b6b")
+            del self._descargas[llave]
+        if self._descargas:
+            self.after(200, self._revisar_descargas)
+
+    def _tarjeta(self, fila, col, etiqueta, info, clave=""):
         tiene = bool(info.get("subido"))
         borde = "#2ecc71" if tiene else "#e74c3c"
 
@@ -151,26 +237,12 @@ class VentanaDocumentos(tk.Toplevel):
         # imagen o placeholder
         marco_img = tk.Frame(caja, bg="#243447")
         marco_img.pack(side="left", padx=8, pady=8)
-        ruta = None
         if tiene:
-            ruta = self._descargar(info.get("archivo"))
-            if ruta:
-                img = self._miniatura(ruta)
-                if img is not None:
-                    lbl = tk.Label(marco_img, image=img, bg="#243447")
-                    lbl.image = img          # evita que el GC la destruya
-                    lbl.pack()
-                    lbl.bind("<Double-Button-1>", lambda e, r=ruta, t=etiqueta: self._abrir(r, t))
-                    lbl.bind("<Button-3>", lambda e, r=ruta: self._abrir_carpeta(r))
-                    lbl.config(cursor="hand2")
-                else:
-                    self._no_visible(marco_img, ruta)
-            else:
-                motivo = self.error_descarga or "no se pudo descargar"
-                self.error_descarga = None
-                tk.Label(marco_img, text="(imagen no\ndisponible)\n%s" % motivo,
-                         bg="#243447", fg="#ff6b6b",
-                         font=("Segoe UI", 7), justify="center").pack()
+            lbl = tk.Label(marco_img, text="Cargando...", bg="#243447",
+                           fg="#9fb3c8", width=20, height=7)
+            lbl.pack()
+            if clave:
+                self._labels[(clave, etiqueta)] = lbl
         else:
             marco_img.configure(bg="#3b2a2a", width=150, height=130)
             marco_img.pack_propagate(False)
@@ -192,7 +264,9 @@ class VentanaDocumentos(tk.Toplevel):
                      bg="#243447", fg="#6b7d8f", font=("Segoe UI", 8)
                      ).pack(anchor="w", pady=(4, 0))
         if tiene:
-            boton(der, "Ver a pantalla completa", lambda: self._abrir(ruta, etiqueta),
+            boton(der, "Ver a pantalla completa",
+                  lambda r=getattr(self, "_rutas", {}).get((clave, etiqueta)):
+                  self._abrir(r, etiqueta),
                   color="#4a5b6c", fg="#ffffff").pack(anchor="w", pady=(8, 0))
 
     def _miniatura(self, ruta):

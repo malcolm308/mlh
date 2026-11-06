@@ -8,6 +8,7 @@ obligatorias quedan aprobadas el backend aprueba el vehiculo solo.
 import os
 import subprocess
 import tempfile
+import threading
 import tkinter as tk
 from tkinter import messagebox
 
@@ -107,10 +108,44 @@ class VentanaFotosVehiculo(tk.Toplevel):
 
         for w in self.marco.winfo_children():
             w.destroy()
+        # Estado de descarga de esta pasada: campo -> ruta (o None si fallo).
+        self._descargas = {}
+        self._labels = {}
         for i, (campo, etiqueta) in enumerate(FOTOS_VEHICULO):
             fila, col = divmod(i, 2)
             self._tarjeta(fila, col, campo, etiqueta,
                           fotos.get(campo) or {})
+        # Todas las descargas van en UN hilo: desde Cloudinary tardan poco,
+        # pero en serie desde el hilo de Tk congelaban la ventana.
+        threading.Thread(target=self._descargar_todas, daemon=True).start()
+        self.after(200, self._revisar_descargas)
+
+    def _descargar_todas(self):
+        fotos = self.vehiculo.get("fotos") or {}
+        for campo, info in fotos.items():
+            if not (info or {}).get("archivo"):
+                continue
+            self._descargas[campo] = self._descargar(info.get("archivo"))
+
+    def _revisar_descargas(self):
+        """Pinta las miniaturas conforme llegan (hilo de Tkinter)."""
+        for campo, ruta in list(self._descargas.items()):
+            if campo not in self._labels:
+                continue
+            lbl = self._labels.pop(campo)
+            etiqueta = dict(FOTOS_VEHICULO).get(campo, campo)
+            img = self._miniatura(ruta) if ruta else None
+            if img is not None:
+                lbl.configure(image=img, text="")
+                lbl.image = img
+                lbl.bind("<Double-Button-1>",
+                         lambda e, r=ruta, t=etiqueta: self._abrir(r, t))
+                lbl.config(cursor="hand2")
+            else:
+                lbl.configure(text="(no disponible)", fg="#ff6b6b")
+            del self._descargas[campo]
+        if self._descargas:
+            self.after(200, self._revisar_descargas)
 
     def _tarjeta(self, fila, col, campo, etiqueta, info):
         archivo = info.get("archivo") or ""
@@ -125,21 +160,12 @@ class VentanaFotosVehiculo(tk.Toplevel):
 
         marco_img = tk.Frame(caja, bg="#243447")
         marco_img.pack(side="left", padx=8, pady=8)
-        ruta = None
         if archivo:
-            ruta = self._descargar(archivo)
-            if ruta:
-                img = self._miniatura(ruta)
-                if img is not None:
-                    lbl = tk.Label(marco_img, image=img, bg="#243447")
-                    lbl.image = img
-                    lbl.pack()
-                    lbl.bind("<Double-Button-1>",
-                             lambda e, r=ruta, t=etiqueta: self._abrir(r, t))
-                    lbl.config(cursor="hand2")
-                else:
-                    tk.Label(marco_img, text="(no disponible)",
-                             bg="#243447", fg="#ff6b6b").pack()
+            # Espacio reservado: la miniatura llega con el hilo de descargas.
+            lbl = tk.Label(marco_img, text="Cargando...", bg="#243447",
+                           fg="#9fb3c8", width=20, height=7)
+            lbl.pack()
+            self._labels[campo] = lbl
         else:
             marco_img.configure(bg="#3b2a2a", width=150, height=130)
             marco_img.pack_propagate(False)
@@ -185,17 +211,41 @@ class VentanaFotosVehiculo(tk.Toplevel):
 
     def _revisar(self, campo, decision, motivo):
         vid = self.vehiculo.get("id")
-        try:
-            r = self.api.revisar_foto_vehiculo(vid, campo, decision, motivo)
-        except ApiError as e:
-            messagebox.showerror("Revision de foto", str(e.mensaje))
-            return
-        mensaje = r.get("message") if isinstance(r, dict) else None
-        self.lbl_resumen.config(text="  " + (mensaje or "Listo"), fg="#2ecc71")
-        # El backend devuelve el vehiculo actualizado: se refresca el visor.
-        if isinstance(r, dict) and r.get("fotos") is not None:
-            self.vehiculo = r
-        self.cargar()
+        caja = {"listo": False}
+
+        def trabajo():
+            try:
+                caja["r"] = self.api.revisar_foto_vehiculo(
+                    vid, campo, decision, motivo)
+            except Exception as e:
+                caja["e"] = e
+            finally:
+                caja["listo"] = True
+
+        self.lbl_resumen.config(
+            text="  %s %s..." % (decision.capitalize(), campo),
+            fg="#ffc107")
+        threading.Thread(target=trabajo, daemon=True).start()
+
+        def vigilar():
+            if not caja["listo"]:
+                self.after(200, vigilar)
+                return
+            if "e" in caja:
+                e = caja["e"]
+                messagebox.showerror("Revision de foto",
+                                     str(getattr(e, "mensaje", e)))
+                return
+            r = caja.get("r") or {}
+            mensaje = r.get("message") if isinstance(r, dict) else None
+            self.lbl_resumen.config(
+                text="  " + (mensaje or "Listo"), fg="#2ecc71")
+            # El backend devuelve el vehiculo actualizado: refresca el visor.
+            if isinstance(r, dict) and r.get("fotos") is not None:
+                self.vehiculo = r
+            self.cargar()
+
+        self.after(200, vigilar)
 
     def _descargar(self, archivo):
         try:

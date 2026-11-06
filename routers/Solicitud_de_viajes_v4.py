@@ -5,8 +5,8 @@ import os
 import logging
 from contextlib import contextmanager
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Response
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
 import psycopg2
@@ -29,7 +29,6 @@ except Exception:
     Polygon = None
 from routers.promociones import calcular_descuento_cliente, coeficiente_por_distancia, excedente_espera, leer_promocion  # noqa
 from routers.garaje import tipo_vehiculo_activo_de, vehiculo_activo_de
-from services.fotos_nube import descargar as descargar_nube
 from decimal import Decimal, ROUND_HALF_UP
 from bson import ObjectId
 from pymongo import MongoClient
@@ -3107,8 +3106,7 @@ async def api_get_driver_photo(trip_id: str):
     # Con Cloudinary la foto vive en la nube; con el respaldo viejo, en disco.
     url = ref_foto.get("url")
     if url:
-        data, tipo = descargar_nube(str(url))
-        return Response(content=data, media_type=tipo)
+        return RedirectResponse(str(url), status_code=302)
     ruta = os.path.abspath(os.path.join(_FOTOS_CHOFER_DIR, ref_foto["archivo"]))
     if not os.path.isfile(ruta):
         raise HTTPException(status_code=404, detail="Foto no encontrada")

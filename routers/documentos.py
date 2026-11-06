@@ -27,14 +27,13 @@ from typing import Optional
 from bson import ObjectId
 from fastapi import (APIRouter, Depends, File, Form, Header, HTTPException,
                      Response, UploadFile)
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
 from services.codigos_referido import generar_codigo
 from services.fotos_nube import borrar as borrar_nube
-from services.fotos_nube import descargar as descargar_nube
 from services.fotos_nube import subir as subir_nube
 from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
 from services.tipo_vehiculo import campos_exigidos_por_tipo, resolver_tipo_vehiculo
@@ -204,8 +203,8 @@ def _referencia_por_archivo(nombre: str) -> Optional[dict]:
 
 
 def _responder_desde_nube(url: str) -> Response:
-    data, tipo = descargar_nube(url)
-    return Response(content=data, media_type=tipo)
+    # Redirect directo a la nube: rapidisimo y no consume la instancia.
+    return RedirectResponse(url, status_code=302)
 
 
 def _exigidos_de(chofer: dict) -> list:

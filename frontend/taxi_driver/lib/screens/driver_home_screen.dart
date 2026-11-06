@@ -10,7 +10,7 @@ import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/cancellation_service.dart';
-import '../widgets/foto_perfil_chofer.dart';
+import '../widgets/menu_lateral_chofer.dart';
 import '../services/address_service.dart';
 import '../services/nav_camera.dart';
 import '../services/vehicle_types_service.dart';
@@ -2264,6 +2264,9 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     return Scaffold(
       key: _scaffoldKey,
       drawer: _buildDrawer(),
+      // Casi transparente: el vidrio del menu ya difumina el mapa, el resto
+      // de la pantalla debe seguir viendose como en el diseno de referencia.
+      drawerScrimColor: Colors.transparent,
       body: Stack(
         children: [
           // El mapa ocupa todo el hueco del Stack. La inclinacion y la rotacion las
@@ -3438,188 +3441,93 @@ if (pickup != null)
   }
 
   Widget _buildDrawer() {
-    return Drawer(
-      backgroundColor: Colors.white,
-      child: SafeArea(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            DrawerHeader(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    const Color(0xFF007AFF),
-                    const Color(0xFF4DABFF),
-                  ],
-                ),
-              ),
-              child: Row(
-                children: [
-                  FotoPerfilChofer(
-                    api: widget.api,
-                    driverId: widget.driverId,
-                    radius: 28,
-                    iniciales: widget.profile.fullName,
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(widget.profile.fullName,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                        Text(widget.profile.email,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 12),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(Icons.star,
-                                color: Color(0xFFFFD700), size: 16),
-                            const SizedBox(width: 4),
-                            Text(
-                              widget.profile.raiting.toStringAsFixed(1),
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+    // Menu lateral premium "Tema Claro Translucido": el vidrio (blur 22 +
+    // blanco 85%) se dibuja sobre el mapa. Cada opcion mantiene EXACTAMENTE
+    // el comportamiento que tenia con los ListTile antiguos.
+    return MenuLateralChofer(
+      api: widget.api,
+      driverId: widget.driverId,
+      fullName: widget.profile.fullName,
+      email: widget.profile.email,
+      calificacion: widget.profile.raiting,
+      onPerfil: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => DriverProfileScreen(
+            api: widget.api,
+            driverId: widget.driverId,
+            initialProfile: widget.profile,
+          ),
+        )).then((_) {
+          // El perfil pudo cambiar el Fondo o el estado: la tarjeta de
+          // ganancias se refresca al volver.
+          if (mounted) _loadTodayEarnings();
+        });
+      },
+      onHistorial: () {
+        Navigator.of(context).pop();
+        // El conductor va a ver sus solicitudes: lo que hubiera sin revisar
+        // ya lo tiene delante, asi que la insignia puede quedar en cero.
+        _notif.resetBadge();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => HistoryScreen(
+            api: widget.api,
+            driverId: widget.driverId,
+            fullName: widget.profile.fullName,
+          ),
+        )).then((_) {
+          if (mounted) _loadTodayEarnings();
+        });
+      },
+      onFondo: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => DriverFondoScreen(
+            api: widget.api,
+            driverId: widget.driverId,
+            fullName: widget.profile.fullName,
+          ),
+        )).then((_) {
+          if (mounted) _loadTodayEarnings();
+        });
+      },
+      onConfiguracion: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => DriverSettingsScreen(
+            api: widget.api,
+            driverId: widget.driverId,
+          ),
+        ));
+      },
+      onGaraje: () async {
+        Navigator.of(context).pop();
+        final seleccion = await Navigator.of(context).push<DriverVehicle>(
+          MaterialPageRoute(
+            builder: (_) => GarageScreen(
+              api: widget.api,
+              driverId: widget.driverId,
+              tipoActivo: _tipoVehiculoActivo,
             ),
-            ListTile(
-              leading: const Icon(Icons.person_outline, color: Color(0xFF333333)),
-              title: const Text('Perfil del conductor'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => DriverProfileScreen(
-                    api: widget.api,
-                    driverId: widget.driverId,
-                    initialProfile: widget.profile,
-                  ),
-                )).then((_) {
-                  // El perfil pudo cambiar el Fondo o el estado: la tarjeta de
-                  // ganancias se refresca al volver.
-                  if (mounted) _loadTodayEarnings();
-                });
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.history, color: Color(0xFF333333)),
-              title: const Text('Historial de viajes'),
-              onTap: () {
-                Navigator.of(context).pop();
-                // El conductor va a ver sus solicitudes: lo que hubiera sin
-                // revisar ya lo tiene delante, asi que el icono puede quedar
-                // en cero.
-                _notif.resetBadge();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => HistoryScreen(
-                    api: widget.api,
-                    driverId: widget.driverId,
-                    fullName: widget.profile.fullName,
-                  ),
-                )).then((_) {
-                  if (mounted) _loadTodayEarnings();
-                });
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.account_balance_wallet_outlined,
-                  color: Color(0xFF333333)),
-              title: const Text('Fondo y transferencias'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => DriverFondoScreen(
-                    api: widget.api,
-                    driverId: widget.driverId,
-                    fullName: widget.profile.fullName,
-                  ),
-                )).then((_) {
-                  if (mounted) _loadTodayEarnings();
-                });
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings_outlined, color: Color(0xFF333333)),
-              title: const Text('Configuración'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => DriverSettingsScreen(
-                    api: widget.api,
-                    driverId: widget.driverId,
-                  ),
-                ));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.directions_car, color: Color(0xFF333333)),
-              title: const Text('Mi Garaje'),
-              onTap: () async {
-                Navigator.of(context).pop();
-                final seleccion = await Navigator.of(context).push<DriverVehicle>(
-                  MaterialPageRoute(
-                    builder: (_) => GarageScreen(
-                      api: widget.api,
-                      driverId: widget.driverId,
-                      tipoActivo: _tipoVehiculoActivo,
-                    ),
-                  ),
-                );
-                // Un vehiculo distinto activado cambia el tipo que pide el
-                // sondeo: se actualiza en caliente, sin reiniciar la app.
-                if (seleccion != null && mounted) {
-                  setState(() => _tipoVehiculoActivo = seleccion.tipoVehiculo);
-                  unawaited(OfertasBackgroundService
-                      .guardarTipo(seleccion.tipoVehiculo));
-                  unawaited(_tick());
-                }
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.support_agent, color: Color(0xFF333333)),
-              title: const Text('Soporte'),
-              onTap: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => const SupportScreen(),
-                ));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.share, color: Color(0xFF333333)),
-              title: const Text('Compartir App'),
-              onTap: _shareApp,
-            ),
-            const Divider(height: 16),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Color(0xFF333333)),
-              title: const Text(
-                'Cerrar sesión',
-                style: TextStyle(color: Color(0xFFB3261E)),
-              ),
-              onTap: _logout,
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+        // Un vehiculo distinto activado cambia el tipo que pide el sondeo:
+        // se actualiza en caliente, sin reiniciar la app.
+        if (seleccion != null && mounted) {
+          setState(() => _tipoVehiculoActivo = seleccion.tipoVehiculo);
+          unawaited(OfertasBackgroundService
+              .guardarTipo(seleccion.tipoVehiculo));
+          unawaited(_tick());
+        }
+      },
+      onSoporte: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => const SupportScreen(),
+        ));
+      },
+      onCompartir: _shareApp,
+      onLogout: _logout,
     );
   }
 }
