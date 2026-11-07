@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import 'client_home_screen.dart';
 import 'forgot_password_screen.dart';
 import 'register_screen.dart';
@@ -153,13 +154,16 @@ class _LoginScreenState extends State<LoginScreen> {
                           Container(
                             padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.90),
-                              borderRadius: BorderRadius.circular(16),
+                              color: Colors.white.withValues(alpha: 0.94),
+                              borderRadius: BorderRadius.circular(26),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.7),
+                              ),
                               boxShadow: const [
                                 BoxShadow(
-                                  color: Colors.black26,
-                                  blurRadius: 12,
-                                  offset: Offset(0, 4),
+                                  color: Color(0x33000000),
+                                  blurRadius: 24,
+                                  offset: Offset(0, 10),
                                 ),
                               ],
                             ),
@@ -174,9 +178,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                     labelText: 'Teléfono',
                                     hintText: 'Número con prefijo',
                                     prefixIcon: Icon(Icons.phone_outlined),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    border: OutlineInputBorder(),
                                   ),
                                   invalidNumberMessage:
                                       'Número inválido para el país seleccionado',
@@ -198,9 +199,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                   decoration: const InputDecoration(
                                     labelText: 'Contraseña',
                                     prefixIcon: Icon(Icons.lock_outline),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    border: OutlineInputBorder(),
                                   ),
                                   validator: (v) => (v == null || v.isEmpty)
                                       ? 'Ingresa tu contraseña'
@@ -234,9 +232,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                     _loading ? 'Ingresando...' : 'Iniciar sesión',
                                   ),
                                   style: FilledButton.styleFrom(
+                                    minimumSize: const Size.fromHeight(52),
                                     padding:
                                         const EdgeInsets.symmetric(vertical: 16),
-                                    backgroundColor: const Color(0xFF007AFF),
                                   ),
                                 ),
                                 const SizedBox(height: 12),
@@ -253,7 +251,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   label: const Text('Registrarse'),
                                   style: OutlinedButton.styleFrom(
                                     minimumSize: const Size.fromHeight(48),
-                                    foregroundColor: const Color(0xFF007AFF),
+                                    foregroundColor: AppColors.tinta,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
@@ -269,7 +267,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   child: const Text(
                                     '¿Olvidaste tu contraseña?',
                                     style: TextStyle(
-                                      color: Color(0xFF007AFF),
+                                      color: AppColors.ambar,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),

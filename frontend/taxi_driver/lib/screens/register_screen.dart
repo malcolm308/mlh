@@ -5,6 +5,7 @@ import 'package:intl_phone_field/intl_phone_field.dart';
 
 import '../services/vehicle_types_service.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/documento_widgets.dart';
 
 /// Formulario de registro de conductor.
@@ -227,7 +228,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.directions_car, size: 56, color: Color(0xFF007AFF)),
+                const Icon(Icons.directions_car,
+                    size: 56, color: AppColors.ambar),
                 const SizedBox(height: 8),
                 const Text(
                   'Regístrate como conductor',
@@ -235,7 +237,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF333333)),
+                      color: AppColors.tinta),
                 ),
                 const SizedBox(height: 24),
                 TextFormField(
@@ -319,7 +321,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 const SizedBox(height: 20),
                 const Text('Datos del vehículo',
                     style: TextStyle(
-                        color: Color(0xFF007AFF),
+                        color: AppColors.ambar,
                         fontWeight: FontWeight.bold,
                         fontSize: 13)),
                 const Divider(height: 18),
@@ -435,7 +437,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 const SizedBox(height: 22),
                 const Text('Documentos para la aprobación',
                     style: TextStyle(
-                        color: Color(0xFF007AFF),
+                        color: AppColors.ambar,
                         fontWeight: FontWeight.bold,
                         fontSize: 13)),
                 const SizedBox(height: 4),
@@ -455,7 +457,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         valueColor: AlwaysStoppedAnimation(
                           _fotos.length == _documentosPedidos.length
                               ? const Color(0xFF2ECC71)
-                              : const Color(0xFF007AFF),
+                              : AppColors.ambar,
                         ),
                       ),
                     ),

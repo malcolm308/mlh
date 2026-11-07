@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui/glass_sheet.dart';
+import '../widgets/ui/warning_box.dart';
 
 /// Choferes bloqueados por el pasajero.
 ///
@@ -62,67 +65,83 @@ class _BlockedDriversScreenState extends State<BlockedDriversScreen> {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
+
     if (_error != null) {
       return ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          const Icon(Icons.error_outline, size: 48, color: Color(0xFFB3261E)),
+          const SizedBox(height: 30),
+          const Icon(Icons.error_outline, size: 52, color: AppColors.error),
           const SizedBox(height: 12),
-          Text(_error!, textAlign: TextAlign.center),
+          Text(_error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.secundario)),
           const SizedBox(height: 16),
           Center(
-            child: OutlinedButton(onPressed: _cargar, child: const Text('Reintentar')),
+            child: OutlinedButton(
+              onPressed: _cargar,
+              child: const Text('Reintentar'),
+            ),
           ),
         ],
       );
     }
+
     if (_bloqueos.isEmpty) {
       return ListView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
         children: const [
-          SizedBox(height: 40),
-          Icon(Icons.block_outlined, size: 56, color: Color(0xFF9AA3AF)),
+          SizedBox(height: 36),
+          Icon(Icons.block_outlined, size: 56, color: AppColors.secundario),
           SizedBox(height: 12),
           Text(
             'No has bloqueado chóferes',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: AppColors.tinta,
+            ),
           ),
           SizedBox(height: 6),
           Text(
             'Cuando bloquees a un chófer desde un viaje, lo verás aquí.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Color(0xFF6B6A70)),
+            style: TextStyle(color: AppColors.secundario, height: 1.4),
           ),
         ],
       );
     }
+
     return ListView.separated(
       padding: const EdgeInsets.all(16),
-      itemCount: _bloqueos.length,
+      itemCount: _bloqueos.length + 1,
       separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (ctx, i) {
-        final b = _bloqueos[i];
+        if (i == 0) {
+          return const WarningBox(
+            title: 'Bloqueos activos',
+            message:
+                'Estos chóferes no volverán a emparejarse contigo. '
+                'Si crees que fue un error, escribe a soporte.',
+            icon: Icons.shield_outlined,
+          );
+        }
+
+        final b = _bloqueos[i - 1];
         final nombre = (b['driver_name'] ?? '').toString().trim();
         final etiqueta = nombre.isNotEmpty ? nombre : 'Chófer bloqueado';
         final motivo = (b['motivo'] ?? '').toString().trim();
         final fecha = _fechaCorta((b['fecha'] ?? '').toString());
-        return Container(
+
+        return SoftCard(
           padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: const [
-              BoxShadow(color: Color(0x14000000), blurRadius: 6, offset: Offset(0, 2)),
-            ],
-          ),
           child: Row(
             children: [
               const CircleAvatar(
                 radius: 24,
-                backgroundColor: Color(0xFFFFE9A8),
-                child: Icon(Icons.person_off_outlined,
-                    color: Color(0xFF1C1E21)),
+                backgroundColor: AppColors.acentoSuave,
+                child: Icon(Icons.person_off_outlined, color: AppColors.tinta),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -134,8 +153,9 @@ class _BlockedDriversScreenState extends State<BlockedDriversScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1C1E21)),
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.tinta,
+                      ),
                     ),
                     if (motivo.isNotEmpty) ...[
                       const SizedBox(height: 2),
@@ -144,7 +164,7 @@ class _BlockedDriversScreenState extends State<BlockedDriversScreen> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF6B6A70)),
+                            fontSize: 12, color: AppColors.secundario),
                       ),
                     ],
                     if (fecha.isNotEmpty) ...[
@@ -152,16 +172,27 @@ class _BlockedDriversScreenState extends State<BlockedDriversScreen> {
                       Text(
                         fecha,
                         style: const TextStyle(
-                            fontSize: 11, color: Color(0xFF9AA3AF)),
+                            fontSize: 11, color: AppColors.secundario),
                       ),
                     ],
                   ],
                 ),
               ),
-              const Chip(
-                label: Text('Bloqueado', style: TextStyle(fontSize: 11)),
-                backgroundColor: Color(0xFFFFF4D6),
-                visualDensity: VisualDensity.compact,
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: const ShapeDecoration(
+                  color: AppColors.acentoSuave,
+                  shape: StadiumBorder(),
+                ),
+                child: const Text(
+                  'Bloqueado',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.ambar,
+                  ),
+                ),
               ),
             ],
           ),

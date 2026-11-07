@@ -25,11 +25,14 @@ import '../services/asistente_ruta.dart';
 import '../services/filtro_gps.dart';
 import '../services/ws_chofer.dart';
 import '../services/whatsapp_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/navigation_map_view.dart';
 import '../widgets/asistente_ruta.dart';
 import '../widgets/cancel_reason_dialog.dart';
 import '../widgets/cancel_trip_dialog.dart';
 import '../widgets/trip_info_panel.dart';
+import '../widgets/ui/glass_sheet.dart';
+import '../widgets/ui/warning_box.dart';
 import 'driver_profile_screen.dart';
 import 'driver_settings_screen.dart';
 import 'driver_fondo_screen.dart';
@@ -2407,7 +2410,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
       color: Colors.white,
       shape: const CircleBorder(),
       elevation: 4,
-      shadowColor: Colors.black26,
+      shadowColor: Colors.black.withValues(alpha: 0.22),
       child: InkWell(
         customBorder: const CircleBorder(),
         onTap: onTap,
@@ -2416,7 +2419,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
           child: SizedBox(
             width: 44,
             height: 44,
-            child: Icon(icon, color: const Color(0xFF333333), size: 22),
+            child: Icon(icon, color: AppColors.tinta, size: 22),
           ),
         ),
       ),
@@ -3004,8 +3007,6 @@ String _fmtCoord(LatLng p) =>
   }
 
   Widget _buildControlPanel() {
-    const mainText = Color(0xFF333333);
-    const secondaryText = Color(0xFF888888);
     final vehicleLabel = widget.profile.vehicleModel.isNotEmpty
         ? widget.profile.vehicleModel
         : (widget.profile.vehicleType ?? 'Vehículo');
@@ -3014,74 +3015,107 @@ String _fmtCoord(LatLng p) =>
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    const Text('Mi vehículo',
-                        style: TextStyle(color: secondaryText, fontSize: 13)),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(Icons.directions_car,
-                            color: Colors.black87, size: 22),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            _vehicleTypeLabel(widget.profile.vehicleType),
-                            style: const TextStyle(
-                              color: mainText,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: const BoxDecoration(
+                        color: AppColors.acentoSuave,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.directions_car_rounded,
+                        color: AppColors.tinta,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Mi vehículo',
+                            style: TextStyle(
+                              color: AppColors.secundario,
+                              fontSize: 12,
                             ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _vehicleTypeLabel(widget.profile.vehicleType),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.tinta,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        const Text('Ganancias de hoy',
-                            style: TextStyle(color: secondaryText, fontSize: 13)),
-                        const SizedBox(width: 8),
-                        InkWell(
-                          onTap: _loadTodayEarnings,
-                          child: const Icon(Icons.refresh, size: 16, color: secondaryText),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${_todayEarnings.toStringAsFixed(0)} CUP',
-                      style: const TextStyle(
-                        color: mainText,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
+                        ],
                       ),
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      const Text(
+                        'Ganancias de hoy',
+                        style: TextStyle(
+                          color: AppColors.secundario,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Material(
+                        color: AppColors.campo,
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: _loadTodayEarnings,
+                          child: const SizedBox(
+                            width: 26,
+                            height: 26,
+                            child: Icon(
+                              Icons.refresh_rounded,
+                              size: 16,
+                              color: AppColors.ambar,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_todayEarnings.toStringAsFixed(0)} CUP',
+                    style: const TextStyle(
+                      color: AppColors.tinta,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFE0E0E0)),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: AppColors.borde),
             ),
             child: Row(
               children: [
@@ -3092,9 +3126,9 @@ String _fmtCoord(LatLng p) =>
                       Text(
                         _online ? 'Aceptando viajes' : 'Viajes pausados',
                         style: const TextStyle(
-                          color: mainText,
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
+                          color: AppColors.tinta,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                       Text(
@@ -3102,47 +3136,26 @@ String _fmtCoord(LatLng p) =>
                             ? 'Listo para recibir solicitudes'
                             : 'No recibirás nuevas solicitudes',
                         style: const TextStyle(
-                            color: secondaryText, fontSize: 12),
+                          color: AppColors.secundario,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 Switch(
                   value: _online,
-                  activeTrackColor: const Color(0xFF007AFF),
+                  activeTrackColor: AppColors.acento,
                   onChanged: _busy ? null : (_) => _toggleOnline(),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(top: 1),
-                child: Icon(Icons.info_outline,
-                    size: 16, color: secondaryText),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      vehicleLabel,
-                      style: const TextStyle(
-                          color: secondaryText, fontSize: 12),
-                    ),
-                    const SizedBox(height: 2),
-                    const Text(
-                      'Al activar esta opción se te mostrarán en pantalla las solicitudes de viajes.',
-                      style: TextStyle(color: secondaryText, fontSize: 12, height: 1.4),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          const SizedBox(height: 10),
+          WarningBox(
+            title: vehicleLabel,
+            message:
+                'Al activar esta opción se te mostrarán en pantalla las solicitudes de viajes.',
           ),
         ],
       ),
@@ -3538,31 +3551,9 @@ class _PanelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      elevation: 12,
-      shadowColor: Colors.black26,
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: const Color(0xFFD0D0D0),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            child: child,
-          ),
-        ],
-      ),
+    return GlassSheet(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      child: child,
     );
   }
 }

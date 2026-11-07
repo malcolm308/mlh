@@ -49,9 +49,23 @@ class BloqueoCreate(BaseModel):
 
 @router.post("/bloquear-chofer", status_code=201)
 async def bloquear_chofer(body: BloqueoCreate, user: dict = Depends(get_current_user)):
-    bloqueo = {"user_id": user["id"], "driver_id": body.driver_id, "trip_id": body.trip_id, "motivo": body.motivo, "fecha": datetime.utcnow()}
-    bloqueos_coleccion.insert_one(bloqueo)
-    incidencia = {"trip_id": body.trip_id, "user_id": user["id"], "driver_id": body.driver_id, "tipo": "bloqueo_chofer", "motivo": body.motivo, "estado": "pendiente", "fecha": datetime.utcnow()}
+    """Bloquea a un chofer para el usuario actual.
+
+    Es idempotente por (usuario, chofer): si ya estaba bloqueado se actualiza
+    el motivo y el viaje en vez de crear un duplicado. La incidencia solo se
+    abre la primera vez, para no llenar la cola del admin con repetidos.
+    """
+    ahora = datetime.utcnow()
+    resultado = bloqueos_coleccion.update_one(
+        {"user_id": user["id"], "driver_id": body.driver_id},
+        {"$set": {"trip_id": body.trip_id, "motivo": body.motivo, "fecha": ahora}},
+        upsert=True,
+    )
+    if resultado.upserted_id is None:
+        # Ya existia: se actualizo el motivo, no se duplica la incidencia.
+        return {"message": "Chofer ya estaba bloqueado; se actualizo el motivo",
+                "incidencia_id": None}
+    incidencia = {"trip_id": body.trip_id, "user_id": user["id"], "driver_id": body.driver_id, "tipo": "bloqueo_chofer", "motivo": body.motivo, "estado": "pendiente", "fecha": ahora}
     result = incidencias_coleccion.insert_one(incidencia)
     return {"message": "Chofer bloqueado e incidencia creada", "incidencia_id": str(result.inserted_id)}
 

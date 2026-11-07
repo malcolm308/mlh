@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -239,44 +241,60 @@ class _CollapsibleTripPanelState extends State<CollapsibleTripPanel> {
         // Estado mínimo: SOLO el asa. El resumen no entra en una tira de
         // pantalla tan baja y solo estorbaría.
         final soloAsa = _estado == _EstadoPanel.minimo;
-        return Material(
-          color: Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          elevation: 12,
-          shadowColor: Colors.black26,
-          clipBehavior: Clip.antiAlias,
-          child: SingleChildScrollView(
-            controller: scrollController,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 8),
-                // Asa de arrastre: gris, 4 px de alto por 40 de ancho.
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _toggle,
-                  child: Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFD0D0D0),
-                        borderRadius: BorderRadius.circular(2),
+        const radius = BorderRadius.vertical(top: Radius.circular(26));
+        return DecoratedBox(
+          decoration: const BoxDecoration(
+            borderRadius: radius,
+            boxShadow: [
+              BoxShadow(
+                color: Color(0x1F000000),
+                blurRadius: 28,
+                offset: Offset(0, -8),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: radius,
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: Material(
+                color: Colors.white.withValues(alpha: 0.9),
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 8),
+                      // Asa de arrastre: gris, 4 px de alto por 40 de ancho.
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _toggle,
+                        child: Center(
+                          child: Container(
+                            width: 42,
+                            height: 4.5,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFD2D6DB),
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      if (!soloAsa) ...[
+                        const SizedBox(height: 4),
+                        Padding(
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          child: _estado == _EstadoPanel.expandido
+                              ? widget.expanded
+                              : widget.collapsed,
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-                if (!soloAsa) ...[
-                  const SizedBox(height: 4),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                    child: _estado == _EstadoPanel.expandido
-                        ? widget.expanded
-                        : widget.collapsed,
-                  ),
-                ],
-              ],
+              ),
             ),
           ),
         );

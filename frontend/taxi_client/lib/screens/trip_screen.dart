@@ -10,7 +10,9 @@ import '../services/api_service.dart';
 import '../services/navegacion_geo.dart';
 import '../services/osrm_service.dart';
 import '../services/ws_cliente.dart';
+import '../theme/app_theme.dart';
 import '../widgets/client_map_view.dart';
+import '../widgets/ui/glass_sheet.dart';
 
 class TripScreen extends StatefulWidget {
   final ApiService api;
@@ -82,6 +84,18 @@ class _TripScreenState extends State<TripScreen> {
   /// Se guarda para poder distinguir "el vehiculo se acerco y hay que acercar"
   /// de "el usuario ya habia movido el mapa", en cuyo caso no se toca nada.
   double? _zoomAuto;
+
+  /// `true` mientras se envia un bloqueo de chofer al backend.
+  bool _bloqueando = false;
+
+  /// Motivos rapidos que ofrece el dialogo de bloqueo.
+  static const List<String> _motivosBloqueo = [
+    'Conducción peligrosa',
+    'Cobro indebido',
+    'Falta de respeto',
+    'Vehículo en mal estado',
+    'Otro motivo',
+  ];
 
   @override
   void initState() {
@@ -683,12 +697,17 @@ class _TripScreenState extends State<TripScreen> {
     final isError = _stepIndex == 4
         ? false
         : (_trip?.status == 'cancelled' || _trip?.status == 'expired');
+    // El estado normal va en amarillo de marca con texto oscuro (contraste
+    // alto); el completado en verde y el error en rojo con texto blanco.
     final color = isError
         ? scheme.error
-        : (_stepIndex == 4 ? Colors.green.shade700 : scheme.primaryContainer);
+        : (_stepIndex == 4 ? Colors.green.shade700 : AppColors.acento);
+    final fg = isError
+        ? scheme.onError
+        : (_stepIndex == 4 ? Colors.white : AppColors.tinta);
     return Material(
       color: color,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(14),
       elevation: 4,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -698,15 +717,15 @@ class _TripScreenState extends State<TripScreen> {
               isError
                   ? Icons.cancel
                   : (_stepIndex == 4 ? Icons.check_circle : Icons.local_taxi),
-              color: isError ? scheme.onError : Colors.white,
+              color: fg,
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
                 _stepLabel,
                 style: TextStyle(
-                  color: isError ? scheme.onError : Colors.white,
-                  fontWeight: FontWeight.bold,
+                  color: fg,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
@@ -749,7 +768,7 @@ class _TripScreenState extends State<TripScreen> {
                             CircleAvatar(
                               radius: 12,
                               backgroundColor: current
-                                  ? scheme.primary
+                                  ? AppColors.acento
                                   : (active
                                       ? Colors.green.shade600
                                       : scheme.surfaceContainerHighest),
@@ -758,7 +777,8 @@ class _TripScreenState extends State<TripScreen> {
                                       width: 14,
                                       height: 14,
                                       child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white))
+                                          strokeWidth: 2,
+                                          color: AppColors.tinta))
                                   : Icon(
                                       active
                                           ? Icons.check
@@ -790,7 +810,7 @@ class _TripScreenState extends State<TripScreen> {
                 ),
               ),
               const Divider(),
-              if (t.driverId != null) _tarjetaChofer(t, scheme),
+              if (t.driverId != null) _tarjetaChofer(t),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -1038,7 +1058,7 @@ class _TripScreenState extends State<TripScreen> {
 
   /// Tarjeta del chofer asignado: foto, nombre, vehiculo y botones de
   /// contacto. La vista del recibo (`_buildSummary`) reutiliza los botones.
-  Widget _tarjetaChofer(ClientTrip t, ColorScheme scheme) {
+  Widget _tarjetaChofer(ClientTrip t) {
     final foto = _fotoChofer(t);
     final modelo = t.driverVehicleModel?.trim();
     final placa = t.driverVehiclePlate?.trim();
@@ -1051,8 +1071,9 @@ class _TripScreenState extends State<TripScreen> {
       margin: const EdgeInsets.only(top: 4, bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
-        borderRadius: BorderRadius.circular(14),
+        color: AppColors.campo,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.borde),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1061,10 +1082,11 @@ class _TripScreenState extends State<TripScreen> {
             children: [
               CircleAvatar(
                 radius: 26,
-                backgroundColor: scheme.primaryContainer,
+                backgroundColor: AppColors.acentoSuave,
                 foregroundImage: foto == null ? null : NetworkImage(foto),
                 onForegroundImageError: foto == null ? null : (_, _) {},
-                child: Icon(Icons.person, size: 30, color: scheme.primary),
+                child: const Icon(Icons.person,
+                    size: 30, color: AppColors.ambar),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1076,7 +1098,9 @@ class _TripScreenState extends State<TripScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.tinta),
                     ),
                     if (detalle.isNotEmpty) ...[
                       const SizedBox(height: 2),
@@ -1085,7 +1109,7 @@ class _TripScreenState extends State<TripScreen> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF6B7280)),
+                            fontSize: 12, color: AppColors.secundario),
                       ),
                     ],
                   ],
@@ -1097,9 +1121,130 @@ class _TripScreenState extends State<TripScreen> {
             const SizedBox(height: 10),
             _botonesContacto(t.driverPhone!),
           ],
+          const SizedBox(height: 2),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _bloqueando ? null : () => _bloquearChofer(t),
+              icon: _bloqueando
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.block_rounded, size: 16),
+              label: const Text('Bloquear chófer'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.ambar,
+                textStyle: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 34),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  /// Pide el motivo y bloquea al chofer del viaje.
+  ///
+  /// El bloqueo lo guarda el backend por usuario y chofer (idempotente): si ya
+  /// estaba bloqueado solo se actualiza el motivo. La lista se ve luego en
+  /// "Chóferes bloqueados" del menu lateral.
+  Future<void> _bloquearChofer(ClientTrip t) async {
+    final driverId = t.driverId;
+    if (driverId == null || driverId.isEmpty || _bloqueando) return;
+
+    final motivo = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: GlassSheet(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Bloquear chófer',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.tinta,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'No volverás a recibir viajes de ${_nombreChofer(t)}. '
+                'Cuéntanos qué pasó.',
+                style: const TextStyle(
+                    fontSize: 13, color: AppColors.secundario, height: 1.35),
+              ),
+              const SizedBox(height: 14),
+              for (final m in _motivosBloqueo)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: AppColors.campo,
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => Navigator.of(ctx).pop(m),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 13),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                m,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.tinta,
+                                ),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right_rounded,
+                                size: 20, color: AppColors.secundario),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 2),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancelar'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (motivo == null || !mounted) return;
+
+    setState(() => _bloqueando = true);
+    try {
+      await widget.api.blockDriver(
+        driverId: driverId,
+        tripId: t.tripId,
+        motivo: motivo,
+      );
+      if (!mounted) return;
+      _aviso_('Chófer bloqueado. No volverás a emparejarte con él.');
+    } catch (e) {
+      if (!mounted) return;
+      _aviso_('No se pudo bloquear al chófer. Inténtalo otra vez.');
+    } finally {
+      if (mounted) setState(() => _bloqueando = false);
+    }
   }
 
   /// Nombre legible del chofer. El id de Mongo NUNCA se pinta en la interfaz

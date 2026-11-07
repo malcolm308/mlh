@@ -25,6 +25,14 @@ class LocationService {
   static final _positions = StreamController<LatLng>.broadcast();
   static bool _handlerReady = false;
   static bool _watching = false;
+  static DateTime? _lastFixAt;
+  static LatLng? _lastPosition;
+
+  /// Momento del ultimo fix recibido, o `null` si aun no llego ninguno.
+  static DateTime? get lastFixAt => _lastFixAt;
+
+  /// Ultima posicion recibida por [watch], o `null` si aun no hay ninguna.
+  static LatLng? get lastPosition => _lastPosition;
 
   static void _ensureHandler() {
     if (_handlerReady) return;
@@ -32,7 +40,11 @@ class LocationService {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onLocation') {
         final p = _toLatLng(call.arguments);
-        if (p != null && !_positions.isClosed) _positions.add(p);
+        if (p != null && !_positions.isClosed) {
+          _lastFixAt = DateTime.now();
+          _lastPosition = p;
+          _positions.add(p);
+        }
       }
       return null;
     });
@@ -47,16 +59,36 @@ class LocationService {
     Duration interval = const Duration(seconds: 10),
   }) {
     _ensureHandler();
-    if (!_watching) {
-      _watching = true;
-      _channel.invokeMethod('start', <String, dynamic>{
+    // Siempre se (re)arranca el listener nativo: es idempotente y evita que
+    // una bandera vieja deje el GPS apagado para siempre.
+    unawaited(ensureWatching(
+      distanceFilter: distanceFilter,
+      interval: interval,
+    ));
+    return _positions.stream;
+  }
+
+  /// Arranca (o reinicia) el listener nativo de posicion.
+  ///
+  /// Devuelve `true` si Android acepto el pedido. Es seguro llamarlo varias
+  /// veces: [MainActivity] quita el listener anterior antes de registrar el
+  /// nuevo.
+  static Future<bool> ensureWatching({
+    int distanceFilter = 8,
+    Duration interval = const Duration(seconds: 5),
+  }) async {
+    _ensureHandler();
+    try {
+      final ok = await _channel.invokeMethod<bool>('start', <String, dynamic>{
         'intervalMs': interval.inMilliseconds,
         'minDistanceM': distanceFilter,
-      }).catchError((_) {
-        _watching = false;
       });
+      _watching = ok ?? true;
+      return _watching;
+    } catch (_) {
+      _watching = false;
+      return false;
     }
-    return _positions.stream;
   }
 
   /// Detiene las actualizaciones continuas.

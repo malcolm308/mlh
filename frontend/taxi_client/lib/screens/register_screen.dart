@@ -3,6 +3,7 @@ import 'package:intl_phone_field/intl_phone_field.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import 'client_home_screen.dart';
 
 /// Formulario de registro de cliente según POST /cliente.
@@ -115,7 +116,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.person_add, size: 56, color: Color(0xFF007AFF)),
+                const Icon(Icons.person_add, size: 56, color: AppColors.ambar),
                 const SizedBox(height: 8),
                 const Text(
                   'Regístrate como cliente',

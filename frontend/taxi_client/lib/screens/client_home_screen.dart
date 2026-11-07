@@ -15,8 +15,12 @@ import '../services/api_service.dart';
 import '../services/geocode_service.dart';
 import '../services/location_service.dart';
 import '../services/osrm_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/client_map_view.dart';
 import '../widgets/menu_lateral_cliente.dart';
+import '../widgets/ui/glass_sheet.dart';
+import '../widgets/ui/pill_button.dart';
+import '../widgets/ui/pill_tabs.dart';
 import '../widgets/vehicle_selector_sheet.dart';
 import 'blocked_drivers_screen.dart';
 import 'favorite_locations_screen.dart';
@@ -49,7 +53,8 @@ enum ClientState {
   waitingForDriver,  // Viaje solicitado, mostrando carga
 }
 
-class _ClientHomeScreenState extends State<ClientHomeScreen> {
+class _ClientHomeScreenState extends State<ClientHomeScreen>
+    with WidgetsBindingObserver {
   final ClientMapController _mapController = ClientMapController();
 
   /// Clave del Scaffold para abrir el menu desde el boton flotante.
@@ -173,6 +178,11 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   LocationPermissionState? _gpsState;
   StreamSubscription<LatLng>? _gpsSub;
 
+  /// Momento del ultimo fix recibido. El vigilante lo usa para detectar que el
+  /// canal nativo dejo de emitir (pantalla bloqueada, GPS reiniciado, etc.).
+  DateTime? _ultimoFixGps;
+  Timer? _gpsWatchdog;
+
   /// El pasajero movio el pin o eligio un lugar: el GPS ya no pisa el
   /// punto de recogida hasta que pulse "mi ubicacion".
   bool _pickupTouched = false;
@@ -180,6 +190,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pickup = _myLoc;
     _searchFocus.addListener(() {
       if (!_searchFocus.hasFocus) _cerrarOverlaySugerencias();
@@ -191,6 +202,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _gpsWatchdog?.cancel();
     _gpsSub?.cancel();
     _searchDebounce?.cancel();
     _cerrarOverlaySugerencias();
@@ -198,6 +211,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     _searchFocus.dispose();
     _mapController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_reanudarGps());
+    }
   }
 
   // ---------------- GPS ----------------
@@ -219,28 +239,88 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     if (fix != null && mounted) _applyGpsPosition(fix, moveMap: true);
     if (mounted) setState(() => _gpsState = LocationPermissionState.granted);
 
+    _escucharGps();
+  }
+
+  /// Se suscribe al GPS continuo y arma un vigilante.
+  ///
+  /// El canal nativo puede dejar de emitir sin avisar (el sistema apaga el
+  /// proveedor al bloquear la pantalla o al pasar la app a segundo plano), y
+  /// antes no habia nada que lo volviera a arrancar: la flecha se quedaba
+  /// congelada en la ultima posicion para siempre. El vigilante comprueba que
+  /// sigan llegando fixes y, si no, reinicia el listener y pide uno nuevo.
+  void _escucharGps() {
     _gpsSub?.cancel();
-    _gpsSub = LocationService.watch().listen((p) {
+    _gpsSub = LocationService.watch(
+      distanceFilter: 8,
+      interval: const Duration(seconds: 5),
+    ).listen((p) {
       if (!mounted) return;
+      _ultimoFixGps = DateTime.now();
       debugPrint('[GPS] pasajero en ${p.latitude},${p.longitude}');
       _applyGpsPosition(p, moveMap: false);
     });
+    _gpsWatchdog?.cancel();
+    _gpsWatchdog = Timer.periodic(
+      const Duration(seconds: 12),
+      (_) => unawaited(_refrescarGpsSiHaceFalta()),
+    );
+  }
+
+  /// Si no llega un fix en 25 s, reinicia el canal y pide la posicion actual.
+  Future<void> _refrescarGpsSiHaceFalta() async {
+    if (!mounted || _gpsState != LocationPermissionState.granted) return;
+    final ultimo = _ultimoFixGps;
+    if (ultimo != null &&
+        DateTime.now().difference(ultimo) < const Duration(seconds: 25)) {
+      return;
+    }
+    await LocationService.ensureWatching(
+      distanceFilter: 8,
+      interval: const Duration(seconds: 5),
+    );
+    final p = await LocationService.current(timeout: const Duration(seconds: 8));
+    if (!mounted || p == null) return;
+    _ultimoFixGps = DateTime.now();
+    if (LocationService.distanceBetween(_myLoc, p) < 3) return;
+    _applyGpsPosition(p, moveMap: false);
+  }
+
+  /// Al volver del segundo plano: reengancha el GPS y refresca la posicion.
+  Future<void> _reanudarGps() async {
+    if (_gpsState != LocationPermissionState.granted) {
+      await _initGps();
+      return;
+    }
+    final p = await LocationService.current(timeout: const Duration(seconds: 8));
+    if (!mounted) return;
+    if (p != null) {
+      _ultimoFixGps = DateTime.now();
+      _applyGpsPosition(p, moveMap: false);
+    }
+    _escucharGps();
   }
 
   void _applyGpsPosition(LatLng p, {required bool moveMap}) {
-    final wasDefault = _samePoint(_myLoc, ApiConfig.defaultClientLocation);
+    final anterior = _myLoc;
+    final movido = LocationService.distanceBetween(anterior, p);
     setState(() {
       _gpsState = LocationPermissionState.granted;
       _myLoc = p;
-      // El punto de recogida sigue al GPS solo si el pasajero no lo movio a
-      // mano ni eligio otro lugar por busqueda.
-      if (!_pickupTouched && (wasDefault || _pickup == null)) {
+      // El punto de recogida sigue al GPS mientras el pasajero no lo haya
+      // fijado a mano ni haya elegido otra direccion en el buscador.
+      if (!_pickupTouched) {
         _pickup = p;
         _pickupAddr = null;
       }
     });
     if (moveMap) _mapController.move(p, 15);
-    if (_pickup != null) _loadRoutePreview();
+    // Recalcular la ruta en cada tick de GPS seria una llamada a OSRM cada
+    // 5 s: solo se hace cuando el pasajero se movio lo suficiente como para
+    // que el trazado cambie de verdad.
+    if (_pickup != null && _dropoff != null && (movido >= 25 || _route.isEmpty)) {
+      _loadRoutePreview();
+    }
   }
 
   /// Pide permiso si hace falta, toma la posicion real y la impone como punto
@@ -277,6 +357,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       _pickup = p;
       _pickupAddr = null;
     });
+    _ultimoFixGps = DateTime.now();
+    // Reengancha el flujo continuo: si el canal nativo se habia quedado
+    // dormido, este es el punto donde vuelve a arrancar.
+    _escucharGps();
     _moveMapTo(p);
     _loadRoutePreview();
     _reverseToAddress(p, updateSearch: true);
@@ -488,7 +572,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
                 return ListTile(
                   dense: true,
                   leading: const Icon(Icons.place_outlined,
-                      size: 18, color: Color(0xFF007AFF)),
+                      size: 18, color: AppColors.ambar),
                   title: Text(
                     s.shortLabel ?? s.displayName,
                     maxLines: 1,
@@ -587,6 +671,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
         _pickup = place.point;
         _myLoc = place.point;
         _pickupAddr = place.shortLabel ?? place.displayName;
+        // La direccion la eligio el pasajero: el GPS ya no debe pisarla.
+        _pickupTouched = true;
         _pinMode = _PinMode.dropoff;
       } else {
         _dropoff = place.point;
@@ -928,21 +1014,35 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
           Positioned(
             top: topPad + 8,
             left: 8,
-            child: _circularButton(
-              Icons.menu,
-              () => _scaffoldKey.currentState?.openDrawer(),
+            child: RoundIconButton(
+              icon: Icons.menu_rounded,
+              tooltip: 'Menú',
+              onTap: () => _scaffoldKey.currentState?.openDrawer(),
             ),
           ),
           Positioned(
             top: topPad + 8,
             right: 8,
-            child: _circularButton(
-              _gpsState == LocationPermissionState.granted
-                  ? Icons.my_location
-                  : Icons.location_disabled,
-              // Recentra en la posicion real y la usa como recogida. La
-              // funcion pide el permiso si falta, asi que siempre responde.
-              _useMyLocation,
+            child: Row(
+              children: [
+                RoundIconButton(
+                  icon: Icons.notifications_none_rounded,
+                  tooltip: 'Notificaciones',
+                  onTap: _showNotifications,
+                ),
+                const SizedBox(width: 8),
+                RoundIconButton(
+                  icon: _gpsState == LocationPermissionState.granted
+                      ? Icons.my_location_rounded
+                      : Icons.location_disabled_rounded,
+                  tooltip: _gpsState == LocationPermissionState.granted
+                      ? 'Mi ubicación'
+                      : 'Activar GPS',
+                  // Recentra en la posicion real y la usa como recogida. La
+                  // funcion pide el permiso si falta, asi que siempre responde.
+                  onTap: _useMyLocation,
+                ),
+              ],
             ),
           ),
           Positioned(
@@ -956,21 +1056,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
     );
   }
 
-  Widget _circularButton(IconData icon, VoidCallback onTap) {
-    return Material(
-      color: Colors.white,
-      shape: const CircleBorder(),
-      elevation: 3,
-      shadowColor: Colors.black26,
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Icon(icon, size: 22, color: const Color(0xFF333333)),
-        ),
-      ),
-    );
+  void _showNotifications() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(
+        content: Text('No tienes notificaciones por el momento'),
+      ));
   }
 
   /// Clave de SharedPreferences donde se guarda la última lista de tarifas.
@@ -1179,23 +1270,23 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE0E0E0)),
+        border: Border.all(color: AppColors.borde),
       ),
       child: Column(
         children: [
-          Icon(icon, size: 18, color: const Color(0xFF007AFF)),
+          Icon(icon, size: 18, color: AppColors.ambar),
           const SizedBox(height: 4),
           Text(
             value,
             style: const TextStyle(
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w700,
               fontSize: 14,
-              color: Color(0xFF333333),
+              color: AppColors.tinta,
             ),
           ),
           Text(
             label,
-            style: const TextStyle(fontSize: 10, color: Color(0xFF888888)),
+            style: const TextStyle(fontSize: 10, color: AppColors.secundario),
           ),
         ],
       ),
@@ -1203,104 +1294,61 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
   }
 
   Widget _buildBottomPanel() {
-    final scheme = Theme.of(context).colorScheme;
     final bothSet = _pickup != null && _dropoff != null;
+    final nombre = widget.profile.fullName.trim().split(RegExp(r'\s+')).first;
+    final direccion =
+        (_pinMode == _PinMode.pickup ? _pickupAddr : _dropoffAddr)?.trim();
 
-    return Material(
-      color: Colors.white,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      elevation: 12,
-      shadowColor: Colors.black26,
-      clipBehavior: Clip.antiAlias,
+    return GlassSheet(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: const Color(0xFFD0D0D0),
-              borderRadius: BorderRadius.circular(2),
+          Text(
+            'Hola, $nombre',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: AppColors.secundario,
             ),
           ),
-          const SizedBox(height: 4),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("Hola, ${widget.profile.fullName.split(' ').first}",
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: Color(0xFF888888))),
-                          const SizedBox(height: 2),
-                          const Text('¿Dónde quieres ir?',
-                              style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF333333))),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: SegmentedButton<_PinMode>(
-                        style: ButtonStyle(
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        segments: const [
-                          ButtonSegment(
-                            value: _PinMode.pickup,
-                            label: Text('Recogida'),
-                            icon: Icon(Icons.arrow_upward),
-                          ),
-                          ButtonSegment(
-                            value: _PinMode.dropoff,
-                            label: Text('Destino'),
-                            icon: Icon(Icons.flag),
-                          ),
-                        ],
-                        selected: {_pinMode},
-                        onSelectionChanged: (s) =>
-                            setState(() => _pinMode = s.first),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Material(
-                      color: const Color(0xFF007AFF),
-                      shape: const CircleBorder(),
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: () {
-                          // La flecha azul: fija la recogida en el GPS real,
-                          // recentra el mapa y deja el buscador en modo
-                          // recogida con la direccion inversa.
-                          setState(() => _pinMode = _PinMode.pickup);
-                          _useMyLocation();
-                        },
-                        child: const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Icon(Icons.near_me,
-                              color: Colors.white, size: 20),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                LayoutBuilder(
+          const SizedBox(height: 2),
+          const Text(
+            '¿Dónde quieres ir?',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              color: AppColors.tinta,
+              height: 1.15,
+            ),
+          ),
+          const SizedBox(height: 12),
+          PillTabs<_PinMode>(
+            value: _pinMode,
+            onChanged: (modo) {
+              setState(() => _pinMode = modo);
+              _cerrarOverlaySugerencias();
+              FocusScope.of(context).unfocus();
+            },
+            items: const [
+              PillTabItem(
+                value: _PinMode.pickup,
+                label: 'Recogida',
+                icon: Icons.arrow_upward_rounded,
+              ),
+              PillTabItem(
+                value: _PinMode.dropoff,
+                label: 'Destino',
+                icon: Icons.flag_rounded,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: LayoutBuilder(
                   builder: (context, constraints) {
                     _searchFieldWidth = constraints.maxWidth;
                     return CompositedTransformTarget(
@@ -1310,15 +1358,21 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
                         focusNode: _searchFocus,
                         onChanged: _onSearchChanged,
                         textInputAction: TextInputAction.search,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: AppColors.tinta,
+                        ),
                         decoration: InputDecoration(
-                          prefixIcon: const Icon(Icons.search, size: 20),
+                          prefixIcon:
+                              const Icon(Icons.search_rounded, size: 20),
                           hintText: _pinMode == _PinMode.pickup
                               ? 'Buscar la calle de recogida...'
                               : 'Buscar la calle del destino...',
-                          border: const OutlineInputBorder(),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                           suffixIcon: _searching
                               ? const Padding(
                                   padding: EdgeInsets.all(12),
@@ -1331,7 +1385,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
                                 )
                               : (_searchController.text.isNotEmpty
                                   ? IconButton(
-                                      icon: const Icon(Icons.clear, size: 18),
+                                      icon: const Icon(Icons.clear_rounded,
+                                          size: 18),
                                       onPressed: () {
                                         _searchDebounce?.cancel();
                                         _cerrarOverlaySugerencias();
@@ -1350,130 +1405,170 @@ class _ClientHomeScreenState extends State<ClientHomeScreen> {
                     );
                   },
                 ),
-                // Las sugerencias NO van en este Column: se pintan en una
-                // ventana flotante del Overlay (ver `_buildOverlaySugerencias`)
-                // para que no empujen el campo ni el resto del panel.
-                if (_searchHelp != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6, left: 4, right: 4),
-                    child: Text(
-                      _searchHelp!,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.orange.shade800,
-                        fontWeight: FontWeight.w500,
-                      ),
+              ),
+              const SizedBox(width: 8),
+              // Flecha "mi ubicacion": boton redondo amarillo a la derecha
+              // del buscador, como en el diseno.
+              Material(
+                color: AppColors.acento,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () {
+                    setState(() => _pinMode = _PinMode.pickup);
+                    _useMyLocation();
+                  },
+                  child: const SizedBox(
+                    width: 46,
+                    height: 46,
+                    child: Icon(
+                      Icons.near_me_rounded,
+                      color: AppColors.tinta,
+                      size: 20,
                     ),
                   ),
-                if (_searchError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6, left: 4, right: 4),
-                    child: Text(
-                      _searchError!,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.red,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 8),
-                Text(
-                  _pinMode == _PinMode.pickup
-                      ? 'Toca el mapa o busca una calle para la RECOGIDA'
-                      : 'Toca el mapa o busca una calle para el DESTINO',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                      color: scheme.primary),
                 ),
-                if (_pickupAddr != null || _dropoffAddr != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_pickupAddr != null)
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(Icons.arrow_upward,
-                                  size: 14, color: Colors.green),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(_pickupAddr!,
-                                    style: const TextStyle(
-                                        fontSize: 12, color: Color(0xFF1F2937))),
-                              ),
-                            ],
-                          ),
-                        if (_pickupAddr != null && _dropoffAddr != null)
-                          const SizedBox(height: 2),
-                        if (_dropoffAddr != null)
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(Icons.flag,
-                                  size: 14,
-                                  color: Color(
-                                      0xFFB91C1C)),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(_dropoffAddr!,
-                                    style: const TextStyle(
-                                        fontSize: 12, color: Color(0xFF1F2937))),
-                              ),
-                            ],
-                          ),
-                      ],
-                    ),
+              ),
+            ],
+          ),
+          // Las sugerencias NO van en este Column: se pintan en una ventana
+          // flotante del Overlay (ver `_buildOverlaySugerencias`) para que no
+          // empujen el campo ni el resto del panel.
+          if (_searchHelp != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6, left: 4, right: 4),
+              child: Text(
+                _searchHelp!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.ambar,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          if (_searchError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6, left: 4, right: 4),
+              child: Text(
+                _searchError!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.error,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Text.rich(
+            TextSpan(
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.secundario,
+                height: 1.3,
+              ),
+              children: [
+                const TextSpan(text: 'Toca el mapa o busca una calle'),
+                TextSpan(
+                  text: (direccion != null && direccion.isNotEmpty)
+                      ? ' · $direccion'
+                      : ' para la ${_pinMode == _PinMode.pickup ? 'RECOGIDA' : 'DESTINO'}',
+                  style: const TextStyle(
+                    color: AppColors.ambar,
+                    fontStyle: FontStyle.italic,
+                    fontWeight: FontWeight.w600,
                   ),
-                ],
-                if (bothSet) ...[
-                  const SizedBox(height: 12),
-                  _buildRouteStats(scheme),
-                ],
-                const SizedBox(height: 12),
-                // Botón de acción: solo "Confirmar ruta" en Paso 1
-                // En otros estados (selectingVehicle, waitingForDriver) no se muestra
-                if (_currentState == ClientState.selectingRoute)
-                  FilledButton.icon(
-                    onPressed: (!bothSet || _estFareBusy) ? null : _loadEstimate,
-                    icon: _estFareBusy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.route),
-                    label: Text(_estFareBusy ? 'Calculando...' : 'Confirmar ruta'),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                    ),
-                  ),
-                // Indicador de carga cuando el viaje está siendo solicitado
-                if (_currentState == ClientState.waitingForDriver)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 12),
-                        Text('Solicitando viaje...', style: TextStyle(fontSize: 14)),
-                      ],
-                    ),
-                  ),
+                ),
               ],
             ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
+          if (_pickupAddr != null || _dropoffAddr != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: AppColors.campo,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_pickupAddr != null)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.arrow_upward_rounded,
+                            size: 14, color: AppColors.exito),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            _pickupAddr!,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.tinta,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (_pickupAddr != null && _dropoffAddr != null)
+                    const SizedBox(height: 2),
+                  if (_dropoffAddr != null)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.flag_rounded,
+                            size: 14, color: AppColors.error),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            _dropoffAddr!,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.tinta,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ],
+          if (bothSet) ...[
+            const SizedBox(height: 12),
+            _buildRouteStats(Theme.of(context).colorScheme),
+          ],
+          const SizedBox(height: 12),
+          // Boton de accion: solo "Confirmar ruta" en Paso 1. En otros
+          // estados (selectingVehicle, waitingForDriver) no se muestra.
+          if (_currentState == ClientState.selectingRoute)
+            PillButton(
+              label: _estFareBusy ? 'Calculando...' : 'Confirmar ruta',
+              loading: _estFareBusy,
+              loadingLabel: 'Calculando...',
+              icon: Icons.route_rounded,
+              onPressed: bothSet ? _loadEstimate : null,
+            ),
+          // Indicador de carga cuando el viaje esta siendo solicitado.
+          if (_currentState == ClientState.waitingForDriver)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 12),
+                  Text(
+                    'Solicitando viaje...',
+                    style: TextStyle(
+                        fontSize: 14, color: AppColors.secundario),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

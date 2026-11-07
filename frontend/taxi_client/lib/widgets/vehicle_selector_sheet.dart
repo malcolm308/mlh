@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
+import 'ui/glass_sheet.dart';
+import 'ui/pill_button.dart';
+
 /// Modelo de vehículo con su precio y datos
 class VehicleOption {
   final String type;
@@ -87,21 +91,9 @@ class VehicleSelectorSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x29000000),
-            blurRadius: 12,
-            offset: Offset(0, -3),
-          ),
-        ],
-      ),
+    return GlassSheet(
+      showHandle: false,
+      padding: EdgeInsets.zero,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -141,7 +133,7 @@ class VehicleSelectorSheet extends StatelessWidget {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.grey[300],
+                    color: const Color(0xFFD2D6DB),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -199,7 +191,7 @@ class VehicleSelectorSheet extends StatelessWidget {
                   icon: Icons.attach_money,
                   label: 'Precio',
                   value: '${_selected.price.toStringAsFixed(0)} CUP',
-                  valueColor: const Color(0xFF007AFF),
+                  valueColor: AppColors.ambar,
                 ),
                 _DetailColumn(
                   icon: Icons.payment,
@@ -217,32 +209,12 @@ class VehicleSelectorSheet extends StatelessWidget {
           const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-            child: SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: FilledButton.icon(
-                onPressed: isLoading ? null : onConfirmTrip,
-                icon: isLoading
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.local_taxi),
-                label: Text(
-                  isLoading ? 'Solicitando...' : 'Viajar ahora',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF007AFF),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
+            child: PillButton(
+              label: isLoading ? 'Solicitando...' : 'Viajar ahora',
+              loading: isLoading,
+              loadingLabel: 'Solicitando...',
+              icon: Icons.local_taxi_rounded,
+              onPressed: isLoading ? null : onConfirmTrip,
             ),
           ),
         ],
@@ -321,12 +293,10 @@ class _VehicleCard extends StatelessWidget {
         margin: const EdgeInsets.only(right: 12),
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFF007AFF).withValues(alpha: 0.08)
-              : Colors.grey[100],
-          borderRadius: BorderRadius.circular(14),
+          color: isSelected ? AppColors.acentoSuave : AppColors.campo,
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected ? const Color(0xFF007AFF) : Colors.grey[300]!,
+            color: isSelected ? AppColors.acento : AppColors.borde,
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -350,8 +320,8 @@ class _VehicleCard extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 12,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                color: isSelected ? const Color(0xFF007AFF) : Colors.grey[800],
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected ? AppColors.tinta : AppColors.secundario,
                 decoration: isSelected ? TextDecoration.underline : null,
               ),
               maxLines: 1,
