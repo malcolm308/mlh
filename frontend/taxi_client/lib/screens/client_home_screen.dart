@@ -130,6 +130,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   String? _etaText;
   String _paymentMethod = 'Efectivo';
 
+  /// Datos del pasajero para esta solicitud: cuántos viajan, si llevan
+  /// equipaje y si llevan mascota. Se envían al backend con el viaje.
+  int _numPasajes = 1;
+  bool _equipaje = false;
+  bool _mascota = false;
+
   /// Resetea TODO el estado y vuelve a Paso 1 (selectingRoute)
   void _resetTripState() {
     setState(() {
@@ -149,6 +155,11 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       _vehicles = const [];
       _etaText = null;
       _paymentMethod = 'Efectivo';
+
+      // Pasajeros / equipaje / mascota
+      _numPasajes = 1;
+      _equipaje = false;
+      _mascota = false;
 
       // Cotización
       _backendFare = null;
@@ -805,6 +816,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         paymentMethod: _paymentMethod,
         vehicles: _vehicles,
         initialSelectedIndex: initialIndex < 0 ? 0 : initialIndex,
+        numPasajes: _numPasajes,
+        equipaje: _equipaje,
+        mascota: _mascota,
+        onPasajerosChanged: (v) => setState(() => _numPasajes = v),
+        onEquipajeChanged: (v) => setState(() => _equipaje = v),
+        onMascotaChanged: (v) => setState(() => _mascota = v),
         onConfirm: (selectedIndex) {
           setState(() => _selectedVehicle = _vehicles[selectedIndex]);
           Navigator.of(ctx).pop(true);
@@ -852,6 +869,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         dropoffLat: dropoff.latitude,
         dropoffLng: dropoff.longitude,
         vehicleType: _selectedVehicle!.type,
+        numPasajes: _numPasajes,
+        equipaje: _equipaje,
+        mascota: _mascota,
         requestAddress: _pickupAddr ?? _coordLabel(pickup),
         dropoffAddress: _dropoffAddr ?? _coordLabel(dropoff),
       );
@@ -983,8 +1003,30 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
               if (_dropoff != null)
                 MapPin(_dropoff!, color: Colors.red, radius: 20),
             ],
+            // Rayo 3D sobre los puntos ya confirmados. La punta del PNG cae
+            // en el centro-abajo, asi que `iconAnchor: bottom` lo clava en la
+            // coordenada exacta.
+            rayoPins: [?_pickup, ?_dropoff],
             onTap: _placePin,
           ),
+          // Rayo flotante mientras se elige el punto: la punta marca el
+          // centro del mapa. El desplazamiento de -32.5 px (mitad de los
+          // 65 px) deja la punta justo en `Alignment.center`.
+          if (_currentState == ClientState.selectingRoute)
+            IgnorePointer(
+              child: Align(
+                alignment: Alignment.center,
+                child: Transform.translate(
+                  offset: const Offset(0, -32.5),
+                  child: Image.asset(
+                    'assets/icons/rayo_3d.png',
+                    width: 65,
+                    height: 65,
+                    cacheWidth: 150,
+                  ),
+                ),
+              ),
+            ),
           if (_error != null)
             Positioned(
               top: topPad + 64,
@@ -1657,6 +1699,12 @@ class _VehicleSelectorStateful extends StatefulWidget {
   final String paymentMethod;
   final List<VehicleOption> vehicles;
   final int initialSelectedIndex;
+  final int numPasajes;
+  final bool equipaje;
+  final bool mascota;
+  final ValueChanged<int> onPasajerosChanged;
+  final ValueChanged<bool> onEquipajeChanged;
+  final ValueChanged<bool> onMascotaChanged;
   final ValueChanged<int> onConfirm;
   final VoidCallback onBack;
   final bool isLoading;
@@ -1671,6 +1719,12 @@ class _VehicleSelectorStateful extends StatefulWidget {
     required this.paymentMethod,
     required this.vehicles,
     required this.initialSelectedIndex,
+    required this.numPasajes,
+    required this.equipaje,
+    required this.mascota,
+    required this.onPasajerosChanged,
+    required this.onEquipajeChanged,
+    required this.onMascotaChanged,
     required this.onConfirm,
     required this.onBack,
     required this.isLoading,
@@ -1708,6 +1762,12 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
       paymentMethod: widget.paymentMethod,
       vehicles: widget.vehicles,
       selectedIndex: _selectedIndex,
+      numPasajes: widget.numPasajes,
+      equipaje: widget.equipaje,
+      mascota: widget.mascota,
+      onPasajerosChanged: widget.onPasajerosChanged,
+      onEquipajeChanged: widget.onEquipajeChanged,
+      onMascotaChanged: widget.onMascotaChanged,
       onVehicleSelected: (index) {
         setState(() {
           _selectedIndex = index;

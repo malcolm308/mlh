@@ -81,6 +81,25 @@ class _TripScreenState extends State<TripScreen> {
   /// suya: nadie quiere que el mapa le salte mientras esta mirando otra cosa.
   bool _siguiendo = true;
 
+  /// Hay una peticion `_refresh()` en vuelo.
+  ///
+  /// El sondeo de 3 s y los eventos del WebSocket pueden solaparse. Sin este
+  /// cerrojo dos respuestas competian por pintar el estado y provocaban
+  /// rebuilds encadenados (y redimensionados del PlatformView del mapa justo
+  /// mientras la camara animaba), que es el escenario del crash nativo.
+  bool _refrescando = false;
+
+  /// Llego otra peticion mientras `_refresh()` estaba ocupado: se repite al
+  /// terminar para no perder el evento (por ejemplo `driver_arrived`).
+  bool _refrescoPendiente = false;
+
+  /// La camara no se mueve hasta este instante.
+  ///
+  /// Al cambiar de estado el panel inferior cambia de contenido y el mapa se
+  /// redimensiona; animar la camara en ese mismo frame es lo que tumbaba la
+  /// app en algunos dispositivos. Se deja que el layout se asiente.
+  DateTime _pausaCamaraHasta = DateTime.fromMillisecondsSinceEpoch(0);
+
   /// Zoom de la ultima decision automatica.
   ///
   /// Se guarda para poder distinguir "el vehiculo se acerco y hay que acercar"
@@ -123,11 +142,15 @@ class _TripScreenState extends State<TripScreen> {
         return;
       }
       switch (evento) {
-        case 'trip_accepted' ||
-        'trip_started' ||
-        'trip_cancelled' ||
-        'trip_expired' ||
-        'trip_completed':
+        // `driver_arrived` ("he llegado") tambien cambia el panel y la copia
+        // de la pantalla: antes se ignoraba y el cliente no se enteraba hasta
+        // el siguiente sondeo de 3 s.
+        case 'driver_arrived' ||
+              'trip_accepted' ||
+              'trip_started' ||
+              'trip_cancelled' ||
+              'trip_expired' ||
+              'trip_completed':
           unawaited(_refresh());
         case 'trip_route' || 'trip_route_updated':
           // El chofer es el DUEÑO de la ruta: replica SU geometria (mismas
@@ -167,6 +190,15 @@ class _TripScreenState extends State<TripScreen> {
   }
 
   Future<void> _refresh() async {
+    if (_popped) return;
+    // Un solo refresh a la vez: el sondeo y el WebSocket se solapaban y dos
+    // respuestas viejas competian por pintar el estado. Si llega otra
+    // peticion mientras tanto, se recuerda y se repite al terminar.
+    if (_refrescando) {
+      _refrescoPendiente = true;
+      return;
+    }
+    _refrescando = true;
     try {
       final t = await widget.api.getTrip(widget.tripId);
       if (!mounted || _popped) return;
@@ -179,6 +211,10 @@ class _TripScreenState extends State<TripScreen> {
         // Nueva fase: la ruta del chofer de la fase anterior ya no sirve.
         _rutaDelChofer = false;
         _seguidorRuta.reiniciar();
+        // El panel cambia de alto al cambiar de fase: se le da un respiro al
+        // PlatformView antes de volver a mover la camara.
+        _pausaCamaraHasta =
+            DateTime.now().add(const Duration(milliseconds: 450));
       }
       if (t.status == 'completed' || t.status == 'cancelled' || t.status == 'expired') {
         _poll?.cancel();
@@ -221,6 +257,12 @@ class _TripScreenState extends State<TripScreen> {
       }
     } catch (e) {
       if (mounted && !_popped) setState(() => _error = '$e');
+    } finally {
+      _refrescando = false;
+      if (_refrescoPendiente) {
+        _refrescoPendiente = false;
+        if (mounted && !_popped) unawaited(_refresh());
+      }
     }
   }
 
@@ -259,7 +301,6 @@ class _TripScreenState extends State<TripScreen> {
       });
       _seguidorRuta.reiniciar();
       _seguirVehiculo(_driverPos);
-      _aplicarVista3D();
       return;
     }
     final antes = _driverPos;
@@ -305,6 +346,9 @@ class _TripScreenState extends State<TripScreen> {
   /// Anima la camara 3D (pitch 50 + bearing de la ruta + zoom por velocidad).
   void _aplicarVista3D() {
     if (!_siguiendo || !mounted) return;
+    // Cambio de fase reciente: el panel se esta redimensionando y animar la
+    // camara ahora mismo es lo que hacia saltar el PlatformView.
+    if (DateTime.now().isBefore(_pausaCamaraHasta)) return;
     final t = _trip;
     final vehiculo = _driverPos;
     if (t == null ||
@@ -395,6 +439,7 @@ class _TripScreenState extends State<TripScreen> {
   /// Cuando el pasajero ha tocado el mapa no se hace nada: manda el usuario.
   void _seguirVehiculo(LatLng? antes) {
     if (!_siguiendo) return;
+    if (DateTime.now().isBefore(_pausaCamaraHasta)) return;
     final vehiculo = _driverPos;
     final t = _trip;
     if (vehiculo == null || t == null) return;
@@ -486,6 +531,8 @@ class _TripScreenState extends State<TripScreen> {
 
   /// Vuelve a seguir al vehiculo tras un toque del pasajero.
   void _recentrarEnVehiculo() {
+    // Accion explicita del usuario: no espera al asentamiento del panel.
+    _pausaCamaraHasta = DateTime.fromMillisecondsSinceEpoch(0);
     setState(() => _siguiendo = true);
     _encuadrarTrayecto();
     _zoomAuto = null;
@@ -564,28 +611,6 @@ class _TripScreenState extends State<TripScreen> {
     }
   }
 
-  String get _stepLabel {
-    final status = _trip?.status ?? 'requested';
-    switch (status) {
-      case 'requested':
-        return 'Buscando chofer...';
-      case 'accepted':
-        return 'Chofer asignado, en camino';
-      case 'driver_arrived':
-        return 'El chofer llegó';
-      case 'in_progress':
-        return 'Viaje en curso';
-      case 'completed':
-        return 'Viaje completado';
-      case 'cancelled':
-        return 'Viaje cancelado';
-      case 'expired':
-        return 'Viaje expirado';
-      default:
-        return status;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = _trip;
@@ -596,17 +621,9 @@ class _TripScreenState extends State<TripScreen> {
       return _buildCompletedScreen(t);
     }
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Viaje ${t?.tripId.split('-').first ?? ''}'),
-        automaticallyImplyLeading: _stepIndex == 0 || _stepIndex == 4,
-        leading: (_stepIndex == 0 || _stepIndex == 4)
-            ? null
-            : IconButton(
-                tooltip: 'Salir (el viaje continúa)',
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-      ),
+      // Sin AppBar: el mapa ocupa tambien la franja superior. La X de salida
+      // flota sobre el mapa para no robarle ancho a la vista ni dejar una
+      // barra con el codigo del viaje (dato tecnico que no aporta nada).
       body: t == null
           ? const Center(child: CircularProgressIndicator())
           : Column(
@@ -663,13 +680,27 @@ class _TripScreenState extends State<TripScreen> {
                           if (_siguiendo) setState(() => _siguiendo = false);
                         },
                       ),
-                      if (_stepIndex < 4)
-                        Positioned(
-                          top: 12,
-                          left: 12,
-                          right: 12,
-                          child: _statusBanner(),
+                      // Salir del seguimiento sin ocupar una barra entera: la
+                      // X flota arriba a la izquierda sobre el mapa. El estado
+                      // ya se ve en el stepper del panel inferior.
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        child: SafeArea(
+                          bottom: false,
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: FloatingActionButton.small(
+                              heroTag: 'salirViaje',
+                              tooltip: 'Salir (el viaje continúa)',
+                              backgroundColor: Colors.white,
+                              foregroundColor: AppColors.tinta,
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Icon(Icons.close),
+                            ),
+                          ),
                         ),
+                      ),
                       // Boton flotante "Centrar": SIEMPRE visible, para que el
                       // pasajero pueda volver a la vista 3D del vehiculo en
                       // cualquier momento. Si ya va siguiendo, el toque
@@ -691,49 +722,6 @@ class _TripScreenState extends State<TripScreen> {
                 _buildDetailsPanel(),
               ],
             ),
-    );
-  }
-
-  Widget _statusBanner() {
-    final scheme = Theme.of(context).colorScheme;
-    final isError = _stepIndex == 4
-        ? false
-        : (_trip?.status == 'cancelled' || _trip?.status == 'expired');
-    // El estado normal va en amarillo de marca con texto oscuro (contraste
-    // alto); el completado en verde y el error en rojo con texto blanco.
-    final color = isError
-        ? scheme.error
-        : (_stepIndex == 4 ? Colors.green.shade700 : AppColors.acento);
-    final fg = isError
-        ? scheme.onError
-        : (_stepIndex == 4 ? Colors.white : AppColors.tinta);
-    return Material(
-      color: color,
-      borderRadius: BorderRadius.circular(14),
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            Icon(
-              isError
-                  ? Icons.cancel
-                  : (_stepIndex == 4 ? Icons.check_circle : Icons.local_taxi),
-              color: fg,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                _stepLabel,
-                style: TextStyle(
-                  color: fg,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 

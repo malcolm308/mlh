@@ -67,6 +67,12 @@ class VehicleSelectorSheet extends StatelessWidget {
   final String paymentMethod;
   final List<VehicleOption> vehicles;
   final int selectedIndex;
+  final int numPasajes;
+  final bool equipaje;
+  final bool mascota;
+  final ValueChanged<int> onPasajerosChanged;
+  final ValueChanged<bool> onEquipajeChanged;
+  final ValueChanged<bool> onMascotaChanged;
   final ValueChanged<int> onVehicleSelected;
   final VoidCallback onConfirmTrip;
   final VoidCallback? onBack;
@@ -81,6 +87,12 @@ class VehicleSelectorSheet extends StatelessWidget {
     required this.paymentMethod,
     required this.vehicles,
     required this.selectedIndex,
+    required this.numPasajes,
+    required this.equipaje,
+    required this.mascota,
+    required this.onPasajerosChanged,
+    required this.onEquipajeChanged,
+    required this.onMascotaChanged,
     required this.onVehicleSelected,
     required this.onConfirmTrip,
     this.onBack,
@@ -182,6 +194,58 @@ class VehicleSelectorSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // Pasajeros / equipaje / mascota: se envian con la solicitud y el
+          // chofer los ve antes de aceptar.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.people_alt_rounded,
+                        size: 18, color: AppColors.secundario),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Pasajeros',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.tinta,
+                      ),
+                    ),
+                    const Spacer(),
+                    _PassengerCounter(
+                      value: numPasajes,
+                      onChanged: onPasajerosChanged,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _ExtraToggle(
+                        icon: Icons.luggage_rounded,
+                        label: 'Equipaje',
+                        value: equipaje,
+                        onChanged: onEquipajeChanged,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _ExtraToggle(
+                        icon: Icons.pets_rounded,
+                        label: 'Mascota',
+                        value: mascota,
+                        onChanged: onMascotaChanged,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
@@ -218,6 +282,147 @@ class VehicleSelectorSheet extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Contador compacto de pasajeros (1 a 6).
+class _PassengerCounter extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  const _PassengerCounter({
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.campo,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.borde),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _stepButton(
+            icon: Icons.remove_rounded,
+            enabled: value > 1,
+            onTap: () => onChanged(value - 1),
+            tooltip: 'Quitar pasajero',
+          ),
+          SizedBox(
+            width: 26,
+            child: Text(
+              '$value',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.tinta,
+              ),
+            ),
+          ),
+          _stepButton(
+            icon: Icons.add_rounded,
+            enabled: value < 6,
+            onTap: () => onChanged(value + 1),
+            tooltip: 'Agregar pasajero',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepButton({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+    required String tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(9),
+        child: Container(
+          width: 26,
+          height: 26,
+          decoration: BoxDecoration(
+            color: enabled ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(
+              color: enabled ? AppColors.borde : Colors.transparent,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 16,
+            color: enabled ? AppColors.tinta : AppColors.deshabilitadoTexto,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Chip de equipaje/mascota: se enciende con el acento del tema.
+class _ExtraToggle extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _ExtraToggle({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => onChanged(!value),
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: value ? AppColors.acentoSuave : AppColors.campo,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: value ? AppColors.acento : AppColors.borde,
+            width: value ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: value ? AppColors.acento : AppColors.secundario,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: value ? FontWeight.w700 : FontWeight.w500,
+                  color: value ? AppColors.tinta : AppColors.secundario,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

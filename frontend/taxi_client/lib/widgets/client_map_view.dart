@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:latlong2/latlong.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as mlib;
 
@@ -30,6 +31,23 @@ class MapPin {
   });
 }
 
+/// Fotograma pendiente de la vista 3D (ver [ClientMapController.animar3D]).
+class _Peticion3D {
+  final LatLng destino;
+  final double rumbo;
+  final double zoom;
+  final double tilt;
+  final int durationMs;
+
+  const _Peticion3D(
+    this.destino,
+    this.rumbo, {
+    required this.zoom,
+    required this.tilt,
+    required this.durationMs,
+  });
+}
+
 /// Envoltorio de la camara que usan las pantallas.
 ///
 /// Sustituye a `MapController` de `flutter_map`. Se expone con los mismos
@@ -39,6 +57,15 @@ class ClientMapController {
   mlib.MapLibreMapController? _ctl;
   double _zoom = ApiConfig.defaultZoom;
   LatLng? _center;
+
+  /// Peticion de vista 3D que llego mientras otra animacion estaba en vuelo.
+  ///
+  /// MapLibre no tolera dos `animateCamera` solapadas sobre el mismo mapa:
+  /// la segunda puede dejar el PlatformView a medio redimensionar y tumbar la
+  /// app. Se guarda solo la ultima (la posicion mas reciente) y se lanza al
+  /// terminar la actual.
+  _Peticion3D? _anim3DPendiente;
+  bool _animando3D = false;
 
   /// Ventana durante la cual se ignoran los gestos, para que el `onCameraMove`
   /// que provoca un `moveCamera` propio no se confunda con un arrastre.
@@ -133,6 +160,18 @@ class ClientMapController {
       int durationMs = 1000}) async {
     final ctl = _ctl;
     if (ctl == null) return;
+    if (_animando3D) {
+      // Ya hay una animacion en marcha: solo se recuerda la ultima peticion.
+      _anim3DPendiente = _Peticion3D(
+        destino,
+        rumbo,
+        zoom: zoom,
+        tilt: tilt,
+        durationMs: durationMs,
+      );
+      return;
+    }
+    _animando3D = true;
     _ignorarGestosHasta =
         DateTime.now().add(Duration(milliseconds: durationMs + 200));
     try {
@@ -149,10 +188,25 @@ class ClientMapController {
       );
     } catch (_) {
       // Un fallo de animacion no debe tumbar el seguimiento.
+    } finally {
+      _animando3D = false;
+    }
+    final siguiente = _anim3DPendiente;
+    _anim3DPendiente = null;
+    if (siguiente != null && _ctl != null) {
+      await animar3D(
+        siguiente.destino,
+        siguiente.rumbo,
+        zoom: siguiente.zoom,
+        tilt: siguiente.tilt,
+        durationMs: siguiente.durationMs,
+      );
     }
   }
 
   void dispose() {
+    _anim3DPendiente = null;
+    _animando3D = false;
     _ctl = null;
   }
 
@@ -187,6 +241,12 @@ class ClientMapView extends StatefulWidget {
   final List<MapPin> pins;
   final Color haloColor;
 
+  /// Puntos que llevan el marcador 3D "rayo" (recogida y destino ya fijados).
+  ///
+  /// Se pintan como una capa de simbolos con la imagen
+  /// `assets/icons/rayo_3d.png`, anclada por la punta inferior.
+  final List<LatLng> rayoPins;
+
   /// Tap en una zona sin pin.
   final void Function(LatLng point)? onTap;
 
@@ -208,6 +268,7 @@ class ClientMapView extends StatefulWidget {
     this.straightColor = const Color(0x66000000),
     this.pins = const [],
     this.haloColor = const Color(0x2E007AFF),
+    this.rayoPins = const [],
     this.onTap,
     this.onGesture,
   });
@@ -226,12 +287,21 @@ class _ClientMapViewState extends State<ClientMapView> {
   static const _layerPins = 'cliente-pins-circulo';
   static const _srcPinsHalo = 'cliente-pins-halo';
   static const _layerPinsHalo = 'cliente-pins-halo-circulo';
+  static const _srcRayos = 'cliente-rayos';
+  static const _layerRayos = 'cliente-rayos-simbolo';
+  static const _rayoImagen = 'rayo_pin';
 
   /// Capa del estilo sobre la que se dibuja la ruta. Las carreteras estan por
   /// debajo y los rotulos por encima, que es lo que quiere el cliente.
   static const _debajoDe = 'nombres-carretera';
 
   bool _estiloListo = false;
+
+  /// La imagen del rayo ya se registro en el estilo del mapa.
+  bool _rayoImagenLista = false;
+
+  /// La fuente y la capa de simbolos del rayo ya existen.
+  bool _rayosCreados = false;
 
   @override
   void initState() {
@@ -245,6 +315,7 @@ class _ClientMapViewState extends State<ClientMapView> {
     if (!_estiloListo) return;
     unawaited(_pintarRuta());
     unawaited(_pintarPins());
+    unawaited(_pintarRayos());
   }
 
   @override
@@ -309,6 +380,21 @@ class _ClientMapViewState extends State<ClientMapView> {
         ],
       };
 
+  Map<String, dynamic> _geojsonRayos() => {
+        'type': 'FeatureCollection',
+        'features': [
+          for (final punto in widget.rayoPins)
+            {
+              'type': 'Feature',
+              'properties': const <String, dynamic>{},
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [punto.longitude, punto.latitude],
+              },
+            }
+        ],
+      };
+
   /// Convierte un `Color` a `#rrggbb`, que es lo que espera MapLibre.
   static String _hex(Color c) =>
       '#${(c.r * 255).round().toRadixString(16).padLeft(2, '0')}'
@@ -319,9 +405,12 @@ class _ClientMapViewState extends State<ClientMapView> {
   /// argumentos, asi que el controlador se toma del que guardo `onMapCreated`.
   Future<void> _onStyleLoaded() async {
     _estiloListo = true;
+    _rayoImagenLista = false;
+    _rayosCreados = false;
     try {
       await _pintarRuta(crearCapas: true);
       await _pintarPins(crearCapas: true);
+      await _pintarRayos(crearCapas: true);
     } catch (e) {
       debugPrint('Mapa del cliente: no se pudieron crear las capas: $e');
     }
@@ -434,6 +523,43 @@ class _ClientMapViewState extends State<ClientMapView> {
     await ctl.setGeoJsonSource(_srcPinsHalo, _geojsonHalos());
   }
 
+  /// Pinta el marcador 3D "rayo" en los puntos ya fijados (recogida/destino).
+  ///
+  /// La imagen se registra una sola vez por estilo y la punta del PNG coincide
+  /// con el centro-abajo del lienzo, por eso `iconAnchor: bottom` la deja
+  /// exactamente sobre la coordenada.
+  Future<void> _pintarRayos({bool crearCapas = false}) async {
+    final ctl = widget.controller._ctl;
+    if (ctl == null) return;
+
+    if (crearCapas) {
+      if (!_rayoImagenLista) {
+        final data = await rootBundle.load('assets/icons/rayo_3d.png');
+        await ctl.addImage(_rayoImagen, data.buffer.asUint8List());
+        _rayoImagenLista = true;
+      }
+      if (!_rayosCreados) {
+        await ctl.addGeoJsonSource(_srcRayos, _geojsonRayos());
+        await ctl.addSymbolLayer(
+          _srcRayos,
+          _layerRayos,
+          mlib.SymbolLayerProperties(
+            iconImage: _rayoImagen,
+            iconAnchor: 'bottom',
+            iconSize: 0.5,
+            iconAllowOverlap: true,
+            iconIgnorePlacement: true,
+          ),
+        );
+        _rayosCreados = true;
+      }
+      return;
+    }
+
+    if (!_rayosCreados) return;
+    await ctl.setGeoJsonSource(_srcRayos, _geojsonRayos());
+  }
+
   /// El grosor sigue al zoom para que la calle pintada se vea entera igual que
   /// en la app del chofer, en vez de quedarse en una raya al acercarse.
   static List<dynamic> _grosor(double anchoPx) => [
@@ -474,6 +600,7 @@ class _ClientMapViewState extends State<ClientMapView> {
         if (_estiloListo) {
           unawaited(_pintarRuta(crearCapas: true));
           unawaited(_pintarPins(crearCapas: true));
+          unawaited(_pintarRayos(crearCapas: true));
         }
       },
       onStyleLoadedCallback: () => unawaited(_onStyleLoaded()),

@@ -27,6 +27,7 @@ import '../services/ws_chofer.dart';
 import '../services/whatsapp_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/navigation_map_view.dart';
+import '../widgets/slide_to_confirm.dart';
 import '../widgets/asistente_ruta.dart';
 import '../widgets/cancel_reason_dialog.dart';
 import '../widgets/cancel_trip_dialog.dart';
@@ -2920,7 +2921,11 @@ String _fmtCoord(LatLng p) =>
   }
 
   Widget _buildPanelInferior() {
-    if (_loading) {
+    // El spinner de carga completa solo sustituye al panel cuando no hay viaje
+    // en curso. Con viaje activo el panel se queda (y el `SlideToConfirm` es
+    // quien muestra el progreso): si desapareciera, el mapa pegaria un salto
+    // de layout en mitad de una accion del chofer.
+    if (_loading && _activeTrip == null) {
       return const Positioned(
         left: 8,
         right: 8,
@@ -3219,121 +3224,334 @@ String _fmtCoord(LatLng p) =>
     final trip = _activeTrip!;
     final pickup = trip.pickup;
     final nextStep = switch (trip.status) {
-      'accepted' => 'He llegado al punto de recogida',
+      'accepted' => 'He llegado',
       'driver_arrived' => 'Iniciar viaje',
       'in_progress' => 'Completar viaje',
       _ => null,
     };
-    // Sin `_PanelCard`: el asa y el material los pone `CollapsibleTripPanel`,
-    // que es el contenedor de este contenido cuando hay viaje en curso.
+    final enRecogida = trip.status == 'accepted';
+    final enViaje = trip.status == 'in_progress';
+    final km = enRecogida ? _toPickupKm : (enViaje ? _tripKm : null);
+    final min = enRecogida ? _toPickupMin : (enViaje ? _tripMin : null);
+    final etapa = enRecogida
+        ? 'A recogida'
+        : enViaje
+            ? 'Al destino'
+            : 'En el punto';
+    const muted = Color(0xFF6B7280);
+    const text = Color(0xFF1F2937);
+    final accionColor = enViaje ? AppColors.exito : AppColors.acento;
+    final accionTexto = enViaje ? Colors.white : AppColors.tinta;
+
+    // Sin `_PanelCard`: el asa y el material los pone `CollapsibleTripPanel`.
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ---- Cabecera: estado + etapa del viaje ----
         Row(
-            children: [
-              const Icon(Icons.route, color: Colors.orangeAccent),
-              const SizedBox(width: 8),
-              Text('VIAJE EN CURSO · ${estadoViaje(trip.status)}',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, color: Colors.orangeAccent)),
-            ],
-          ),
-          const SizedBox(height: 10),
-if (pickup != null)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.person, size: 16, color: Color(0xFF1E88E5)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Recogida',
-                          style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
-                      _addressLine(trip, pickup: true),
-                    ],
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.ambarFondo,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.ambarBorde),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.route_rounded,
+                      size: 14, color: AppColors.ambar),
+                  const SizedBox(width: 5),
+                  Text(
+                    estadoViaje(trip.status),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.ambar,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          if (trip.dropoff != null)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CheckeredFlag(color: Colors.black, checks: Colors.white),
+            const Spacer(),
+            if (km != null || min != null)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.campo,
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Destino',
-                          style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
-                      _addressLine(trip, pickup: false),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      etapa,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: muted,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    if (km != null) ...[
+                      const SizedBox(width: 6),
+                      Text('${km.toStringAsFixed(1)} km',
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: text,
+                              fontWeight: FontWeight.w700)),
                     ],
-                  ),
-                ),
-              ],
-            ),
-          const SizedBox(height: 8),
-          Text('Precio estimado: ${trip.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP'),
-          _lineaEspera(trip),
-          if (trip.clientName != null) Text('Cliente: ${trip.clientName}'),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _enviarWhatsApp,
-                  icon: const Icon(Icons.chat, size: 20),
-                  label: const Text('Mensaje por WhatsApp'),
+                    if (min != null) ...[
+                      const SizedBox(width: 4),
+                      Text('· ${min.ceil()} min',
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: text,
+                              fontWeight: FontWeight.w700)),
+                    ],
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _llamarPorWhatsApp,
-                  icon: const Icon(Icons.call, size: 20),
-                  label: const Text('Llamar por WhatsApp'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (nextStep != null)
-            FilledButton.icon(
-              onPressed: trip.status == 'in_progress'
-                  ? _completeTrip
-                  : _advanceTrip,
-              icon: Icon(trip.status == 'in_progress'
-                  ? Icons.done_all
-                  : Icons.directions_car),
-              label: Text(nextStep),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-              ),
-            )
-          else
-            Text(
-              'Estado: ${trip.status}',
-              style: const TextStyle(fontStyle: FontStyle.italic),
-            ),
+          ],
+        ),
+        const SizedBox(height: 10),
 
-          // Cancelar viaje.
-          //
-          // Va DEBAJO de la accion principal y en segundo plano, a proposito:
-          // cancelar descuenta una de las tres chances del dia, asi que un toque
-          // accidental no puede costar una. El dialogo de confirmacion es lo que
-          // protege de verdad, pero un boton que parece secundario tampoco
-          // convida a pulsarlo sin querer.
-          const SizedBox(height: 8),
-          _buildBotonCancelar(trip),
+        // ---- Pasajero, contacto y extras ----
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+          decoration: BoxDecoration(
+            color: AppColors.fondo,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.borde),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: const BoxDecoration(
+                      color: AppColors.acentoSuave,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.person_rounded,
+                        size: 19, color: AppColors.ambar),
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          trip.clientName ?? 'Pasajero',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: text,
+                          ),
+                        ),
+                        Text(
+                          '${trip.numPasajes} ${trip.numPasajes == 1 ? 'pasajero' : 'pasajeros'}',
+                          style: const TextStyle(fontSize: 11, color: muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _accionCliente(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    tooltip: 'Mensaje por WhatsApp',
+                    onTap: _enviarWhatsApp,
+                  ),
+                  const SizedBox(width: 6),
+                  _accionCliente(
+                    icon: Icons.call_outlined,
+                    tooltip: 'Llamar por WhatsApp',
+                    onTap: _llamarPorWhatsApp,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _chipExtra(
+                    icon: Icons.people_alt_rounded,
+                    label: '${trip.numPasajes}',
+                    activo: true,
+                  ),
+                  const SizedBox(width: 6),
+                  _chipExtra(
+                    icon: Icons.luggage_rounded,
+                    label: 'Equipaje',
+                    activo: trip.equipaje,
+                  ),
+                  const SizedBox(width: 6),
+                  _chipExtra(
+                    icon: Icons.pets_rounded,
+                    label: 'Mascota',
+                    activo: trip.mascota,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // ---- Ruta ----
+        if (pickup != null)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 3),
+                child: Icon(Icons.circle, size: 10, color: AppColors.exito),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Recogida',
+                        style: TextStyle(fontSize: 10, color: muted)),
+                    _addressLine(trip, pickup: true),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        if (trip.dropoff != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 3),
+                child: Icon(Icons.flag_rounded,
+                    size: 12, color: AppColors.error),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Destino',
+                        style: TextStyle(fontSize: 10, color: muted)),
+                    _addressLine(trip, pickup: false),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
+        _lineaEspera(trip),
+        const SizedBox(height: 10),
+
+        // ---- Precio + accion principal ----
+        Row(
+          children: [
+            const Text('Precio estimado',
+                style: TextStyle(fontSize: 11, color: muted)),
+            const Spacer(),
+            Text(
+              '${trip.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: AppColors.tinta,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (nextStep != null)
+          SlideToConfirm(
+            label: nextStep,
+            icon: enViaje
+                ? Icons.done_all_rounded
+                : (enRecogida
+                    ? Icons.location_on_rounded
+                    : Icons.play_arrow_rounded),
+            color: accionColor,
+            foregroundColor: accionTexto,
+            loading: _loading,
+            onConfirmed: enViaje ? _completeTrip : _advanceTrip,
+          )
+        else
+          Text(
+            'Estado: ${trip.status}',
+            style: const TextStyle(fontStyle: FontStyle.italic),
+          ),
+
+        // Cancelar viaje: debajo de la accion principal y en segundo plano.
+        const SizedBox(height: 4),
+        _buildBotonCancelar(trip),
+      ],
+    );
+  }
+
+  /// Boton redondo y compacto para contactar al pasajero.
+  Widget _accionCliente({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.white,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Icon(icon, size: 18, color: AppColors.ambar),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Chip de pasajeros/equipaje/mascota: encendido en acento, apagado en gris.
+  Widget _chipExtra({
+    required IconData icon,
+    required String label,
+    required bool activo,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: activo ? AppColors.acentoSuave : AppColors.campo,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: activo ? AppColors.ambarBorde : AppColors.borde,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 13,
+            color: activo ? AppColors.ambar : AppColors.deshabilitadoTexto,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: activo ? FontWeight.w700 : FontWeight.w500,
+              color: activo ? AppColors.tinta : AppColors.secundario,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
