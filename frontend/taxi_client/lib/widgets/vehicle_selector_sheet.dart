@@ -63,6 +63,9 @@ class VehicleSelectorSheet extends StatelessWidget {
   final String pickupAddress;
   final String dropoffAddress;
   final double distanceKm;
+
+  /// Duracion del trayecto en minutos (la de OSRM, no la llegada del chofer).
+  final double durationMin;
   final String etaText;
   final String paymentMethod;
   final List<VehicleOption> vehicles;
@@ -83,6 +86,7 @@ class VehicleSelectorSheet extends StatelessWidget {
     required this.pickupAddress,
     required this.dropoffAddress,
     required this.distanceKm,
+    this.durationMin = 0,
     required this.etaText,
     required this.paymentMethod,
     required this.vehicles,
@@ -172,6 +176,28 @@ class VehicleSelectorSheet extends StatelessWidget {
                   address: dropoffAddress,
                   label: 'Destino',
                 ),
+                // Distancia y tiempo REALES del trazado (OSRM). Si la ruta
+                // aun no tiene datos no se muestra nada en vez de un "0.0 km"
+                // que parezca un fallo.
+                if (distanceKm > 0) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.route_rounded,
+                          size: 15, color: AppColors.secundario),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${distanceKm.toStringAsFixed(1)} km · '
+                        '${durationMin.ceil()} min',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.secundario,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

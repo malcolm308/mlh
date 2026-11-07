@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
@@ -20,7 +19,6 @@ import '../widgets/client_map_view.dart';
 import '../widgets/menu_lateral_cliente.dart';
 import '../widgets/ui/glass_sheet.dart';
 import '../widgets/ui/pill_button.dart';
-import '../widgets/ui/pill_tabs.dart';
 import '../widgets/vehicle_selector_sheet.dart';
 import 'blocked_drivers_screen.dart';
 import 'favorite_locations_screen.dart';
@@ -44,8 +42,6 @@ class ClientHomeScreen extends StatefulWidget {
   State<ClientHomeScreen> createState() => _ClientHomeScreenState();
 }
 
-enum _PinMode { pickup, dropoff }
-
 // Estados estrictos del flujo de solicitud de viaje
 enum ClientState {
   selectingRoute,    // Paso 1: Mapa + buscadores + botón "Confirmar ruta"
@@ -56,6 +52,9 @@ enum ClientState {
 class _ClientHomeScreenState extends State<ClientHomeScreen>
     with WidgetsBindingObserver {
   final ClientMapController _mapController = ClientMapController();
+
+  /// Permite disparar el pulso del rayo flotante cuando el mapa se detiene.
+  final GlobalKey<_RayoFlotanteState> _rayoKey = GlobalKey<_RayoFlotanteState>();
 
   /// Clave del Scaffold para abrir el menu desde el boton flotante.
   ///
@@ -69,7 +68,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   LatLng _myLoc = ApiConfig.defaultClientLocation;
   LatLng? _pickup;
   LatLng? _dropoff;
-  _PinMode _pinMode = _PinMode.pickup;
 
   // Estado del flujo controlado por enum
   ClientState _currentState = ClientState.selectingRoute;
@@ -106,6 +104,30 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   bool _searching = false;
   Timer? _searchDebounce;
 
+  // ---- Flujo de selección por centro del mapa (rayo fijo) ----
+  //
+  // El pasajero NO toca pines: mueve el mapa bajo el rayo. Tras 2 s quieto se
+  // geocodifica el centro y el panel muestra la dirección. Primero se confirma
+  // la recogida y después el destino; hasta confirmar el destino no se traza
+  // ninguna ruta.
+  bool _pickupConfirmado = false;
+
+  /// Centro geocodificado y su dirección. `null` mientras no hay respuesta.
+  LatLng? _centroMapa;
+  String? _centroAddr;
+
+  /// La geocodificación inversa del centro está en vuelo.
+  bool _buscandoCentro = false;
+
+  /// No se pudo resolver una dirección de calle: se usará la coordenada.
+  String? _centroError;
+
+  /// Token de la última petición de geocodificación del centro.
+  int _centroReq = 0;
+
+  /// Espera de 2 s sin mover la cámara antes de pedir la dirección.
+  Timer? _centroTimer;
+
   /// Foco del buscador. Sirve para saber si el pasajero esta ESCRIBIENDO:
   /// mientras el campo tiene foco y texto, la geocodificacion inversa del pin
   /// no debe sobrescribir lo tecleado (era la otra via por la que el cursor
@@ -138,16 +160,27 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
 
   /// Resetea TODO el estado y vuelve a Paso 1 (selectingRoute)
   void _resetTripState() {
+    // Se toma antes del `setState` porque este limpia `_centroMapa`.
+    final centro = _centroActual();
+    // Invalida respuestas en vuelo (ruta / tarifa) de la seleccion anterior.
+    _routeReq++;
+    _estReq++;
     setState(() {
       _currentState = ClientState.selectingRoute;
       
       // Coordenadas y direcciones
-      _pickup = _myLoc;
+      _pickup = centro;
       _dropoff = null;
       _pickupAddr = null;
       _dropoffAddr = null;
       _pickupTouched = false;
-      _pinMode = _PinMode.pickup;
+
+      // Flujo por centro del mapa
+      _pickupConfirmado = false;
+      _centroMapa = null;
+      _centroAddr = null;
+      _centroError = null;
+      _buscandoCentro = false;
 
       // Vehículo
       _vehicleType = '';
@@ -183,6 +216,11 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       _searchHelp = null;
       _suggestions = const [];
     });
+    _centroTimer?.cancel();
+    // Vuelta al paso 1: el rayo vuelve a apuntar a lo que haya en el centro.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_geocodificarCentro());
+    });
   }
 
   /// Estado del GPS del dispositivo.
@@ -209,6 +247,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     _resolveDefaultAddress();
     _initGps();
     _loadTarifas();
+    // Dirección del centro nada más abrir, sin esperar a que el pasajero mueva.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_geocodificarCentro());
+    });
   }
 
   @override
@@ -217,6 +259,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     _gpsWatchdog?.cancel();
     _gpsSub?.cancel();
     _searchDebounce?.cancel();
+    _centroTimer?.cancel();
     _cerrarOverlaySugerencias();
     _searchController.dispose();
     _searchFocus.dispose();
@@ -313,25 +356,18 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   }
 
   void _applyGpsPosition(LatLng p, {required bool moveMap}) {
-    final anterior = _myLoc;
-    final movido = LocationService.distanceBetween(anterior, p);
     setState(() {
       _gpsState = LocationPermissionState.granted;
       _myLoc = p;
       // El punto de recogida sigue al GPS mientras el pasajero no lo haya
-      // fijado a mano ni haya elegido otra direccion en el buscador.
-      if (!_pickupTouched) {
+      // fijado a mano, haya elegido otra direccion en el buscador o ya lo
+      // haya confirmado. Tras confirmar queda CONGELADO.
+      if (!_pickupTouched && !_pickupConfirmado) {
         _pickup = p;
         _pickupAddr = null;
       }
     });
     if (moveMap) _mapController.move(p, 15);
-    // Recalcular la ruta en cada tick de GPS seria una llamada a OSRM cada
-    // 5 s: solo se hace cuando el pasajero se movio lo suficiente como para
-    // que el trazado cambie de verdad.
-    if (_pickup != null && _dropoff != null && (movido >= 25 || _route.isEmpty)) {
-      _loadRoutePreview();
-    }
   }
 
   /// Pide permiso si hace falta, toma la posicion real y la impone como punto
@@ -363,18 +399,21 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
 
     setState(() {
       _gpsState = LocationPermissionState.granted;
-      _pickupTouched = false;
       _myLoc = p;
-      _pickup = p;
-      _pickupAddr = null;
+      // Antes de confirmar, la recogida sigue al GPS (aunque quien manda es
+      // el centro del mapa). Después de confirmar no se toca.
+      if (!_pickupConfirmado) _pickup = p;
+      _centroMapa = p;
+      _centroError = null;
     });
     _ultimoFixGps = DateTime.now();
     // Reengancha el flujo continuo: si el canal nativo se habia quedado
     // dormido, este es el punto donde vuelve a arrancar.
     _escucharGps();
     _moveMapTo(p);
-    _loadRoutePreview();
-    _reverseToAddress(p, updateSearch: true);
+    // Si el mapa ya estaba en ese punto no habrá `onCameraIdle`: la espera de
+    // 2 s cubre ese caso.
+    _onMapaMovido();
   }
 
   void _showLocationError(LocationPermissionState state) {
@@ -411,6 +450,19 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   String _coordLabel(LatLng p) =>
       '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}';
 
+  bool _coordValida(LatLng p) =>
+      p.latitude.isFinite &&
+      p.longitude.isFinite &&
+      p.latitude.abs() <= 90 &&
+      p.longitude.abs() <= 180;
+
+  /// Punto que marca el rayo: la camara REAL del mapa.
+  ///
+  /// `_mapController.center` se actualiza con cada `onCameraMove` (por eso el
+  /// mapa lleva `trackCameraPosition: true`). Los otros dos son solo respaldo
+  /// para el primer frame, antes de que exista el controlador nativo.
+  LatLng _centroActual() => _mapController.center ?? _centroMapa ?? _myLoc;
+
   /// Garantiza que la direccion de un punto este en el estado ANTES de abrir
   /// el BottomSheet. Si el geocodificador inverso aun no respondio, se espera
   /// aqui; si falla, se usa la coordenada para que el destino nunca quede vacio.
@@ -445,89 +497,224 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
 
   Future<void> _resolveDefaultAddress() async {
     final addr = await AddressService.de(_myLoc);
-    if (!mounted || _pickup == null || !_samePoint(_pickup!, _myLoc)) return;
+    // Si mientras se resolvia el pasajero ya confirmo la recogida (o movio el
+    // punto), esta respuesta es vieja: no puede pisar la direccion fijada.
+    if (!mounted ||
+        _pickupConfirmado ||
+        _pickupTouched ||
+        _pickup == null ||
+        !_samePoint(_pickup!, _myLoc)) {
+      return;
+    }
     setState(() => _pickupAddr = addr.vacia ? null : addr.texto);
   }
 
-  void _placePin(LatLng p) {
-    setState(() {
-      if (_pinMode == _PinMode.pickup) {
-        _pickup = p;
-        _myLoc = p;
-        _pickupAddr = null;
-        _pickupTouched = true;
-      } else {
-        _dropoff = p;
-        _dropoffAddr = null;
-      }
+  // ---------------- Selección por centro del mapa ----------------
+
+  /// El mapa se ha movido: se reinicia la espera de 2 s.
+  ///
+  /// No se hace `setState` aquí: `onCameraMove` dispara decenas de veces por
+  /// segundo y reconstruir el panel en cada fotograma arruinaría la fluidez.
+  /// El panel se actualiza una sola vez, cuando llega la dirección.
+  void _onMapaMovido() {
+    if (_currentState != ClientState.selectingRoute) return;
+    _centroTimer?.cancel();
+    // Invalida cualquier geocodificación en vuelo: si el rayo se movió, la
+    // respuesta de la posición anterior ya no vale y no debe cambiar el texto.
+    _centroReq++;
+    _centroTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) unawaited(_geocodificarCentro());
     });
-    _loadRoutePreview();
-    _reverseToAddress(p);
   }
 
-  Future<void> _reverseToAddress(LatLng p, {bool updateSearch = false}) async {
-    final key =
-        '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
-    final cached = _reverseCache[key];
-    if (cached != null) {
-      _applyReverseAddress(p, cached, updateSearch: updateSearch);
+  /// La cámara se detuvo: solo pulso del rayo.
+  ///
+  /// Aquí NO se geocodifica. `onCameraIdle` llega en cuanto termina el gesto,
+  /// así que pedir la dirección aquí cambiaría el texto aunque el pasajero
+  /// acabe de moverse. La dirección se pide cuando de verdad han pasado 2 s
+  /// sin mover (lo controla `_onMapaMovido`).
+  void _onMapaQuieto() {
+    _rayoKey.currentState?.pulso();
+  }
+
+  /// Geocodifica el centro actual del mapa (donde apunta el rayo).
+  Future<void> _geocodificarCentro() async {
+    if (_currentState != ClientState.selectingRoute) return;
+    final centro = _centroActual();
+    final req = ++_centroReq;
+    if (!_buscandoCentro) setState(() => _buscandoCentro = true);
+    final dir = await AddressService.de(centro);
+    if (!mounted ||
+        req != _centroReq ||
+        _currentState != ClientState.selectingRoute) {
       return;
     }
-    final dir = await AddressService.de(p);
-    final addr = dir.vacia ? null : dir.texto;
-    if (addr != null) _reverseCache[key] = addr;
-    if (!mounted) return;
-    _applyReverseAddress(p, addr, updateSearch: updateSearch);
+    final texto = dir.vacia ? null : dir.texto;
+    setState(() {
+      _buscandoCentro = false;
+      _centroMapa = centro;
+      _centroAddr = texto ?? _coordLabel(centro);
+      _centroError =
+          texto == null ? 'No se pudo obtener la dirección exacta.' : null;
+    });
   }
 
-  void _applyReverseAddress(LatLng p, String? addr,
-      {bool updateSearch = false}) {
-    final texto = (addr ?? '').trim();
-    // El pasajero esta con el teclado abierto y contenido ya escrito:
-    // NINGUNA geocodificacion puede tocar el controller. Es la via que
-    // reescribia el texto y aplastaba el cursor al trabajar en el medio.
-    final escribiendo =
-        _searchFocus.hasFocus && _searchController.text.isNotEmpty;
-    // Escrit segura para cuando no hay teclado: se conserva el hueco del
-    // cursor (con clamp) en vez de dejarlo al final del texto nuevo.
-    void escribirSeguro(String nuevo) {
-      final sel = _searchController.selection;
-      final largo = _searchController.text.length;
-      _searchController.text = nuevo;
-      if (sel.isValid && sel.baseOffset >= 0 && sel.baseOffset < largo &&
-          largo > 0) {
-        _searchController.selection = TextSelection.collapsed(
-            offset: math.min(sel.baseOffset + nuevo.length - largo, nuevo.length));
+  /// Confirma el centro actual como punto de recogida y pasa a ubicar destino.
+  ///
+  /// La direccion se CONGELA aqui en `_pickupAddr`: el panel de destino, la
+  /// solicitud del viaje y el selector de vehiculo leen siempre ese valor.
+  Future<void> _confirmarRecogida() async {
+    if (_currentState != ClientState.selectingRoute || _pickupConfirmado) {
+      return;
+    }
+    _centroTimer?.cancel();
+    final centro = _centroActual();
+
+    // Si el panel ya muestra la direccion de ESTE centro, se congela tal cual:
+    // no se vuelve a geocodificar (una respuesta nueva podria devolver otra
+    // variante del nombre y parecer que la recogida "cambio sola").
+    final mostrada = (_centroAddr ?? '').trim();
+    final coincide = _centroMapa != null && _samePoint(_centroMapa!, centro);
+    String texto;
+    if (mostrada.isNotEmpty && coincide) {
+      texto = mostrada;
+    } else {
+      setState(() {
+        _buscandoCentro = true;
+        _centroError = null;
+      });
+      final dir = await AddressService.de(centro);
+      if (!mounted ||
+          _currentState != ClientState.selectingRoute ||
+          _pickupConfirmado) {
+        return;
       }
+      texto = dir.vacia ? _coordLabel(centro) : dir.texto;
     }
 
-    if (_pickup != null && _samePoint(p, _pickup!)) {
-      final escribir =
-          updateSearch && _pinMode == _PinMode.pickup && texto.isNotEmpty;
-      if (escribir || _pickupAddr != addr) {
-        setState(() {
-          _pickupAddr = addr;
-          if (escribir && !escribiendo) {
-            escribirSeguro(texto);
-            _suggestions = const [];
-          }
-        });
-        if (escribir && !escribiendo) _cerrarOverlaySugerencias();
-      }
-    } else if (_dropoff != null && _samePoint(p, _dropoff!)) {
-      final escribir =
-          updateSearch && _pinMode == _PinMode.dropoff && texto.isNotEmpty;
-      if (escribir || _dropoffAddr != addr) {
-        setState(() {
-          _dropoffAddr = addr;
-          if (escribir && !escribiendo) {
-            escribirSeguro(texto);
-            _suggestions = const [];
-          }
-        });
-        if (escribir && !escribiendo) _cerrarOverlaySugerencias();
-      }
+    setState(() {
+      _buscandoCentro = false;
+      _centroMapa = centro;
+      _centroAddr = texto;
+      _pickup = centro;
+      _pickupAddr = texto; // CONGELADA: ya nadie la sobrescribe
+      _pickupTouched = true;
+      _pickupConfirmado = true;
+      // El destino se elige desde cero, con el mismo centro como punto de
+      // partida. No hay ruta ni pines que conservar.
+      _dropoff = null;
+      _dropoffAddr = null;
+      _route = const [];
+      _routeKm = null;
+      _routeMin = null;
+    });
+  }
+
+  /// Confirma el destino, traza la ruta por calles y abre el selector de
+  /// vehículo. Solo se dibuja la línea: nunca pines de inicio/fin.
+  Future<void> _confirmarDestino() async {
+    if (_currentState != ClientState.selectingRoute || !_pickupConfirmado) {
+      return;
     }
+    final pickup = _pickup;
+    if (pickup == null) return;
+    _centroTimer?.cancel();
+    final centro = _centroActual();
+
+    // Nunca mandar a OSRM coordenadas invalidas ni el mismo punto dos veces:
+    // eso devolvia 0.0 km y una ruta inexistente.
+    if (!_coordValida(pickup) || !_coordValida(centro)) {
+      _showError('Las coordenadas del viaje no son válidas.');
+      return;
+    }
+    if (const Distance().as(LengthUnit.Meter, pickup, centro) < 10) {
+      _showError(
+          'El destino está demasiado cerca de la recogida. Mueve el mapa.');
+      return;
+    }
+
+    setState(() {
+      _buscandoCentro = true;
+      _centroError = null;
+      _routing = true;
+      _route = const [];
+      _routeKm = null;
+      _routeMin = null;
+    });
+    final dir = await AddressService.de(centro);
+    if (!mounted ||
+        _currentState != ClientState.selectingRoute ||
+        !_pickupConfirmado) {
+      return;
+    }
+    final texto = dir.vacia ? _coordLabel(centro) : dir.texto;
+
+    final req = ++_routeReq;
+    final r = await OsrmService.route(pickup, centro);
+    if (!mounted || req != _routeReq) return;
+
+    // Sin geometria o con distancia 0 no hay viaje: se avisa y se queda en el
+    // mapa para reintentar, en vez de abrir el selector con "0.0 km".
+    if (r == null || r.points.length < 2 || r.distanceMeters <= 0) {
+      setState(() {
+        _buscandoCentro = false;
+        _routing = false;
+        _route = const [];
+        _routeKm = null;
+        _routeMin = null;
+      });
+      _showError(
+          'No se pudo calcular la ruta. Revisa tu conexión e inténtalo de nuevo.');
+      return;
+    }
+
+    setState(() {
+      _buscandoCentro = false;
+      _routing = false;
+      _centroMapa = centro;
+      _centroAddr = texto;
+      _dropoff = centro;
+      _dropoffAddr = texto; // CONGELADA para el panel y el selector
+      _route = r.points;
+      _routeKm = r.distanceKm;
+      _routeMin = r.durationMinutes;
+    });
+
+    await _loadEstimate();
+  }
+
+  /// Boton "atras" de la fase de destino: deshace la recogida confirmada y
+  /// vuelve al paso 1 con el rayo donde este el mapa, listo para reubicarla.
+  ///
+  /// Lo que se dejo atras (destino elegido, ruta trazada, direcciones) se
+  /// limpia de una vez; en la fase de recogida el pan del panel vuelve a leer
+  /// `_centroAddr`, que se regeocodifica enseguida (la cache responde al
+  /// instante si el punto no cambio).
+  void _volverARecogida() {
+    if (_currentState != ClientState.selectingRoute || !_pickupConfirmado) {
+      return;
+    }
+    _centroTimer?.cancel();
+    _routeReq++; // invalida rutas/estimaciones en vuelo
+    setState(() {
+      _pickupConfirmado = false;
+      // La recogida vuelve a vivir en el centro del rayo: lo que el usuario
+      // vera al volver atras es exactamente ese punto.
+      _pickup = _centroActual();
+      _pickupAddr = null;
+      _dropoff = null;
+      _dropoffAddr = null;
+      _route = const [];
+      _routeKm = null;
+      _routeMin = null;
+      _routing = false;
+      _buscandoCentro = false;
+      _centroError = null;
+      // NO se pone `_pickupTouched = false`: el GPS no debe pisar el punto
+      // del rayo ni por accidente.
+      _pickupTouched = true;
+    });
+    unawaited(_geocodificarCentro());
   }
 
   /// Muestra/actualiza la ventana flotante de sugerencias debajo del campo.
@@ -678,52 +865,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       _searching = false;
       _searchError = null;
       _searchHelp = null;
-      if (_pinMode == _PinMode.pickup) {
-        _pickup = place.point;
-        _myLoc = place.point;
-        _pickupAddr = place.shortLabel ?? place.displayName;
-        // La direccion la eligio el pasajero: el GPS ya no debe pisarla.
-        _pickupTouched = true;
-        _pinMode = _PinMode.dropoff;
-      } else {
-        _dropoff = place.point;
-        _dropoffAddr = place.shortLabel ?? place.displayName;
-      }
+      // El rayo geocodificará este punto en cuanto el mapa se detenga.
+      _centroMapa = place.point;
+      _centroAddr = place.shortLabel ?? place.displayName;
+      _centroError = null;
     });
-    _mapController.move(place.point, 15);
-    _loadRoutePreview();
-  }
-
-  Future<void> _loadRoutePreview() async {
-    final pickup = _pickup;
-    final dropoff = _dropoff;
-    if (pickup == null || dropoff == null || pickup == dropoff) {
-      if (!mounted) return;
-      setState(() {
-        _route = const [];
-        _routeKm = null;
-        _routeMin = null;
-        _routing = false;
-      });
-      return;
-    }
-    final req = ++_routeReq;
-    setState(() => _routing = true);
-    _loadEstimate();
-    final r = await OsrmService.route(pickup, dropoff);
-    if (!mounted || req != _routeReq) return;
-    setState(() {
-      _routing = false;
-      if (r != null && r.points.length >= 2) {
-        _route = r.points;
-        _routeKm = r.distanceKm;
-        _routeMin = r.durationMinutes;
-      } else {
-        _route = const [];
-        _routeKm = null;
-        _routeMin = null;
-      }
-    });
+    _moveMapTo(place.point, zoom: 16);
+    _onMapaMovido();
   }
 
   double? get _estimatedFare => _backendFare;
@@ -737,9 +885,19 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   Future<void> _loadEstimate() async {
     final pickup = _pickup;
     final dropoff = _dropoff;
-    if (pickup == null || dropoff == null || pickup == dropoff) return;
+    if (pickup == null || dropoff == null) return;
     // Solo cargar estimación si estamos en Paso 1
     if (_currentState != ClientState.selectingRoute) return;
+    if (!_coordValida(pickup) || !_coordValida(dropoff)) {
+      _showError('Las coordenadas del viaje no son válidas.');
+      return;
+    }
+    // Origen y destino deben ser puntos distintos: con el mismo punto el
+    // backend devuelve una tarifa minima y el mapa una ruta de 0.0 km.
+    if (const Distance().as(LengthUnit.Meter, pickup, dropoff) < 10) {
+      _showError('El destino está demasiado cerca de la recogida.');
+      return;
+    }
 
     // FIX: el destino debe estar escrito en el estado ANTES de abrir el panel.
     // Si el usuario tocó el mapa, el geocodificador inverso puede seguir en
@@ -767,6 +925,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
           _estFareBusy = false;
           _estFareError = true;
         });
+        _showError('No hay vehículos disponibles en este momento.');
         return;
       }
       // Transición a Paso 2: cambiar estado Y abrir panel en un solo setState
@@ -787,6 +946,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         _estFareBusy = false;
         _estFareError = true;
       });
+      _showError('No se pudo calcular la tarifa. Inténtalo de nuevo.');
     }
   }
 
@@ -812,6 +972,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
             ? _dropoffAddr!
             : _coordLabel(_dropoff ?? _myLoc),
         distanceKm: _routeKm ?? 0,
+        durationMin: _routeMin ?? 0,
         etaText: _etaText ?? '--',
         paymentMethod: _paymentMethod,
         vehicles: _vehicles,
@@ -961,7 +1122,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final bothSet = _pickup != null && _dropoff != null;
     // Los botones flotantes NO pueden arrancar en el borde fisico: la app
     // dibuja edge-to-edge y la barra de estado se come el primer centimetro.
     // Con el inset real quedan debajo de la hora/bateria y clickeables (asi
@@ -983,50 +1143,33 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
             minZoom: ApiConfig.minZoom.toDouble(),
             maxZoom: ApiConfig.maxZoom.toDouble(),
             route: _route,
-            straightLine: bothSet ? [_pickup!, _dropoff!] : const [],
+            // Sin pines de origen/destino ni recta provisional: durante la
+            // selección solo existe el rayo central, y tras confirmar el
+            // destino solo la línea azul de la ruta.
             routeColor: const Color(0xFF007AFF),
             routeHaloColor: const Color(0xE6FFFFFF),
             routeWidth: 4,
-            straightColor: Colors.black45,
             pins: [
-              // El halo y el punto azul van en un solo pin: antes eran dos
-              // marcadores superpuestos y aqui basta con el radio del halo.
+              // Punto azul de "mi ubicacion" (GPS). Es pequeno a proposito:
+              // antes media 40 px + halo de 70 px y se confundia con un
+              // circulo de carga atascado en el centro del mapa.
               MapPin(
                 _myLoc,
                 color: const Color(0xFF007AFF),
-                radius: 20,
-                haloRadius: 35,
+                radius: 7,
+                haloRadius: 16,
                 haloColor: const Color(0x2E007AFF),
               ),
-              if (_pickup != null)
-                MapPin(_pickup!, color: Colors.green, radius: 20),
-              if (_dropoff != null)
-                MapPin(_dropoff!, color: Colors.red, radius: 20),
             ],
-            // Rayo 3D sobre los puntos ya confirmados. La punta del PNG cae
-            // en el centro-abajo, asi que `iconAnchor: bottom` lo clava en la
-            // coordenada exacta.
-            rayoPins: [?_pickup, ?_dropoff],
-            onTap: _placePin,
+            // Cada movimiento reinicia la espera de 2 s; al detenerse, el rayo
+            // hace un pulso (ver `_onMapaMovido` / `_onMapaQuieto`).
+            onCameraMove: _onMapaMovido,
+            onCameraIdle: _onMapaQuieto,
           ),
           // Rayo flotante mientras se elige el punto: la punta marca el
-          // centro del mapa. El desplazamiento de -32.5 px (mitad de los
-          // 65 px) deja la punta justo en `Alignment.center`.
+          // centro del mapa y flota suavemente (ver `_RayoFlotante`).
           if (_currentState == ClientState.selectingRoute)
-            IgnorePointer(
-              child: Align(
-                alignment: Alignment.center,
-                child: Transform.translate(
-                  offset: const Offset(0, -32.5),
-                  child: Image.asset(
-                    'assets/icons/rayo_3d.png',
-                    width: 65,
-                    height: 65,
-                    cacheWidth: 150,
-                  ),
-                ),
-              ),
-            ),
+            _RayoFlotante(key: _rayoKey),
           if (_error != null)
             Positioned(
               top: topPad + 64,
@@ -1129,7 +1272,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       setState(() {
         _vehicleType = _vehicleTypeMarcado(tarifas);
       });
-      _loadEstimate();
       unawaited(_loadCortesia());
     } catch (_) {
       if (!mounted) return;
@@ -1336,10 +1478,15 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   }
 
   Widget _buildBottomPanel() {
-    final bothSet = _pickup != null && _dropoff != null;
     final nombre = widget.profile.fullName.trim().split(RegExp(r'\s+')).first;
-    final direccion =
-        (_pinMode == _PinMode.pickup ? _pickupAddr : _dropoffAddr)?.trim();
+    final enRecogida = !_pickupConfirmado;
+    // El boton atras solo existe mientras se esta ubicando el destino en el
+    // mapa (Paso 1). Con el panel de vehiculos abierto o esperando chofer la
+    // vuelta atras la maneja cada pantalla propia.
+    final enDestinoActivo =
+        _currentState == ClientState.selectingRoute && !enRecogida;
+    final direccion = (_centroAddr ?? '').trim();
+    final recogida = (_pickupAddr ?? '').trim();
 
     return GlassSheet(
       padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
@@ -1356,37 +1503,44 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
             ),
           ),
           const SizedBox(height: 2),
-          const Text(
-            '¿Dónde quieres ir?',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: AppColors.tinta,
-              height: 1.15,
-            ),
-          ),
-          const SizedBox(height: 12),
-          PillTabs<_PinMode>(
-            value: _pinMode,
-            onChanged: (modo) {
-              setState(() => _pinMode = modo);
-              _cerrarOverlaySugerencias();
-              FocusScope.of(context).unfocus();
-            },
-            items: const [
-              PillTabItem(
-                value: _PinMode.pickup,
-                label: 'Recogida',
-                icon: Icons.arrow_upward_rounded,
-              ),
-              PillTabItem(
-                value: _PinMode.dropoff,
-                label: 'Destino',
-                icon: Icons.flag_rounded,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Boton atras: solo en la fase de DESTINO. Permite volver a la
+              // recogida y reubicarla sin empezar todo el viaje de cero
+              // (en el selector de vehiculo ya existe "Cambiar ruta").
+              if (enDestinoActivo) ...[
+                RoundIconButton(
+                  icon: Icons.arrow_back_rounded,
+                  size: 38,
+                  tooltip: 'Cambiar la recogida',
+                  onTap: _volverARecogida,
+                ),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                child: Text(
+                  enRecogida ? 'Ubica tu recogida' : 'Ubica tu destino',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.tinta,
+                    height: 1.15,
+                  ),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 4),
+          const Text(
+            'Mueve el mapa: el rayo marca el punto exacto.',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppColors.secundario,
+              height: 1.3,
+            ),
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
@@ -1407,7 +1561,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
                         decoration: InputDecoration(
                           prefixIcon:
                               const Icon(Icons.search_rounded, size: 20),
-                          hintText: _pinMode == _PinMode.pickup
+                          hintText: enRecogida
                               ? 'Buscar la calle de recogida...'
                               : 'Buscar la calle del destino...',
                           isDense: true,
@@ -1449,17 +1603,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
                 ),
               ),
               const SizedBox(width: 8),
-              // Flecha "mi ubicacion": boton redondo amarillo a la derecha
-              // del buscador, como en el diseno.
+              // Flecha "mi ubicacion": centra el mapa en la posicion real.
               Material(
                 color: AppColors.acento,
                 shape: const CircleBorder(),
                 child: InkWell(
                   customBorder: const CircleBorder(),
-                  onTap: () {
-                    setState(() => _pinMode = _PinMode.pickup);
-                    _useMyLocation();
-                  },
+                  onTap: _useMyLocation,
                   child: const SizedBox(
                     width: 46,
                     height: 46,
@@ -1500,99 +1650,105 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
                 ),
               ),
             ),
-          const SizedBox(height: 8),
-          Text.rich(
-            TextSpan(
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.secundario,
-                height: 1.3,
-              ),
+          const SizedBox(height: 10),
+
+          // Dirección del punto al que apunta el rayo. Mientras se resuelve se
+          // muestra "Buscando dirección...".
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            decoration: BoxDecoration(
+              color: AppColors.campo,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
               children: [
-                const TextSpan(text: 'Toca el mapa o busca una calle'),
-                TextSpan(
-                  text: (direccion != null && direccion.isNotEmpty)
-                      ? ' · $direccion'
-                      : ' para la ${_pinMode == _PinMode.pickup ? 'RECOGIDA' : 'DESTINO'}',
-                  style: const TextStyle(
-                    color: AppColors.ambar,
-                    fontStyle: FontStyle.italic,
-                    fontWeight: FontWeight.w600,
+                if (_buscandoCentro)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Icon(
+                    enRecogida
+                        ? Icons.trip_origin_rounded
+                        : Icons.flag_rounded,
+                    size: 18,
+                    color: _centroError != null
+                        ? AppColors.error
+                        : (enRecogida ? AppColors.exito : AppColors.ambar),
+                  ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _buscandoCentro
+                        ? 'Buscando dirección...'
+                        : (direccion.isNotEmpty
+                            ? direccion
+                            : 'Mueve el mapa para elegir el punto'),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.25,
+                      fontWeight: FontWeight.w600,
+                      color: _centroError != null
+                          ? AppColors.error
+                          : AppColors.tinta,
+                    ),
                   ),
                 ),
               ],
             ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
           ),
-          if (_pickupAddr != null || _dropoffAddr != null) ...[
+
+          // Recogida ya confirmada: se mantiene a la vista mientras se elige
+          // el destino.
+          if (!enRecogida && recogida.isNotEmpty) ...[
             const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-              decoration: BoxDecoration(
-                color: AppColors.campo,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (_pickupAddr != null)
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.arrow_upward_rounded,
-                            size: 14, color: AppColors.exito),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            _pickupAddr!,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.tinta,
-                            ),
-                          ),
-                        ),
-                      ],
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.arrow_upward_rounded,
+                    size: 14, color: AppColors.exito),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Recogida: $recogida',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.secundario,
                     ),
-                  if (_pickupAddr != null && _dropoffAddr != null)
-                    const SizedBox(height: 2),
-                  if (_dropoffAddr != null)
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.flag_rounded,
-                            size: 14, color: AppColors.error),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            _dropoffAddr!,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.tinta,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
           ],
-          if (bothSet) ...[
+
+          // Métricas reales de la ruta mientras OSRM responde (después el
+          // panel de vehículos ocupa la pantalla).
+          if (_dropoff != null) ...[
             const SizedBox(height: 12),
             _buildRouteStats(Theme.of(context).colorScheme),
           ],
           const SizedBox(height: 12),
-          // Boton de accion: solo "Confirmar ruta" en Paso 1. En otros
-          // estados (selectingVehicle, waitingForDriver) no se muestra.
+
+          // Botón grande amarillo: confirma la fase actual del flujo.
           if (_currentState == ClientState.selectingRoute)
             PillButton(
-              label: _estFareBusy ? 'Calculando...' : 'Confirmar ruta',
-              loading: _estFareBusy,
-              loadingLabel: 'Calculando...',
-              icon: Icons.route_rounded,
-              onPressed: bothSet ? _loadEstimate : null,
+              label: enRecogida ? 'Confirmar recogida' : 'Confirmar destino',
+              loading: !enRecogida && (_routing || _estFareBusy),
+              loadingLabel: enRecogida ? 'Confirmando...' : 'Trazando ruta...',
+              icon: enRecogida
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.route_rounded,
+              height: 56,
+              onPressed: _buscandoCentro
+                  ? null
+                  : (enRecogida ? _confirmarRecogida : _confirmarDestino),
             ),
           // Indicador de carga cuando el viaje esta siendo solicitado.
           if (_currentState == ClientState.waitingForDriver)
@@ -1695,6 +1851,7 @@ class _VehicleSelectorStateful extends StatefulWidget {
   final String pickupAddress;
   final String dropoffAddress;
   final double distanceKm;
+  final double durationMin;
   final String etaText;
   final String paymentMethod;
   final List<VehicleOption> vehicles;
@@ -1715,6 +1872,7 @@ class _VehicleSelectorStateful extends StatefulWidget {
     required this.pickupAddress,
     required this.dropoffAddress,
     required this.distanceKm,
+    this.durationMin = 0,
     required this.etaText,
     required this.paymentMethod,
     required this.vehicles,
@@ -1739,10 +1897,20 @@ class _VehicleSelectorStateful extends StatefulWidget {
 class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
   late int _selectedIndex;
 
+  // Estado local de la hoja: el modal vive en su propia ruta, asi que el
+  // `setState` de la pantalla de fondo no la reconstruye. Sin estos campos los
+  // botones de pasajeros/equipaje/mascota se pulsaban pero la UI no cambiaba.
+  late int _numPasajes;
+  late bool _equipaje;
+  late bool _mascota;
+
   @override
   void initState() {
     super.initState();
     _selectedIndex = widget.initialSelectedIndex;
+    _numPasajes = widget.numPasajes;
+    _equipaje = widget.equipaje;
+    _mascota = widget.mascota;
     widget.onOpen();
   }
 
@@ -1758,16 +1926,26 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
       pickupAddress: widget.pickupAddress,
       dropoffAddress: widget.dropoffAddress,
       distanceKm: widget.distanceKm,
+      durationMin: widget.durationMin,
       etaText: widget.etaText,
       paymentMethod: widget.paymentMethod,
       vehicles: widget.vehicles,
       selectedIndex: _selectedIndex,
-      numPasajes: widget.numPasajes,
-      equipaje: widget.equipaje,
-      mascota: widget.mascota,
-      onPasajerosChanged: widget.onPasajerosChanged,
-      onEquipajeChanged: widget.onEquipajeChanged,
-      onMascotaChanged: widget.onMascotaChanged,
+      numPasajes: _numPasajes,
+      equipaje: _equipaje,
+      mascota: _mascota,
+      onPasajerosChanged: (v) {
+        setState(() => _numPasajes = v);
+        widget.onPasajerosChanged(v);
+      },
+      onEquipajeChanged: (v) {
+        setState(() => _equipaje = v);
+        widget.onEquipajeChanged(v);
+      },
+      onMascotaChanged: (v) {
+        setState(() => _mascota = v);
+        widget.onMascotaChanged(v);
+      },
       onVehicleSelected: (index) {
         setState(() {
           _selectedIndex = index;
@@ -1778,6 +1956,98 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
       },
       onBack: widget.onBack,
       isLoading: widget.isLoading,
+    );
+  }
+}
+
+/// Marcador 3D del centro del mapa, con dos animaciones independientes:
+///
+///  * **Flotar**: sube y baja ±5 px en bucle (1 s por tramo) para que el rayo
+///    respire sobre el mapa en vez de quedarse clavado.
+///  * **Pulso**: al soltar el mapa (`onCameraIdle`) escala 1.0 → 1.2 → 1.0 en
+///    medio segundo, como confirmación de que la vista se detuvo.
+///
+/// La escala se ancla en `bottomCenter` para que la punta siga marcando el
+/// centro exacto del mapa mientras el rayo crece.
+class _RayoFlotante extends StatefulWidget {
+  const _RayoFlotante({super.key});
+
+  @override
+  State<_RayoFlotante> createState() => _RayoFlotanteState();
+}
+
+class _RayoFlotanteState extends State<_RayoFlotante>
+    with SingleTickerProviderStateMixin {
+  static const double _tamano = 32.5;
+  static const double _anclaje = -16.25; // mitad del tamaño: punta al centro
+
+  late final AnimationController _flotar;
+  late final AnimationController _pulso;
+  late final Animation<double> _escala;
+
+  @override
+  void initState() {
+    super.initState();
+    _flotar = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 1),
+    )..repeat(reverse: true);
+    _pulso = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _escala = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 1.0, end: 1.2)
+            .chain(CurveTween(curve: Curves.easeOut)),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween(begin: 1.2, end: 1.0)
+            .chain(CurveTween(curve: Curves.easeIn)),
+        weight: 50,
+      ),
+    ]).animate(_pulso);
+  }
+
+  /// Rebote de confirmación al detenerse la cámara.
+  void pulso() {
+    if (mounted) _pulso.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _flotar.dispose();
+    _pulso.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Align(
+        alignment: Alignment.center,
+        child: AnimatedBuilder(
+          animation: Listenable.merge([_flotar, _pulso]),
+          builder: (context, child) {
+            return Transform.translate(
+              // -5 a +5 px alrededor del anclaje original.
+              offset: Offset(0, _anclaje + (_flotar.value * 10 - 5)),
+              child: Transform.scale(
+                scale: _escala.value,
+                alignment: Alignment.bottomCenter,
+                child: child,
+              ),
+            );
+          },
+          child: Image.asset(
+            'assets/icons/rayo_3d.png',
+            width: _tamano,
+            height: _tamano,
+            cacheWidth: 150,
+          ),
+        ),
+      ),
     );
   }
 }

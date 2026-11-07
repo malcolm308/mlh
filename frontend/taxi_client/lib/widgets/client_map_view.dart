@@ -95,6 +95,10 @@ class ClientMapController {
   void move(LatLng p, double zoom) {
     final ctl = _ctl;
     if (ctl == null) return;
+    // Se anota de inmediato: la pantalla puede leer `center` justo despues de
+    // pedir el movimiento, antes de que llegue el primer `onCameraMove`.
+    _center = p;
+    _zoom = zoom;
     _ignorarGestosHasta = DateTime.now().add(const Duration(milliseconds: 400));
     ctl.moveCamera(
       mlib.CameraUpdate.newCameraPosition(
@@ -253,6 +257,15 @@ class ClientMapView extends StatefulWidget {
   /// El usuario ha tocado o arrastrado el mapa.
   final VoidCallback? onGesture;
 
+  /// La cámara se ha detenido (fin de arrastre o de animación).
+  final VoidCallback? onCameraIdle;
+
+  /// La cámara se ha movido (arrastre del usuario o animación propia).
+  ///
+  /// Se usa para reiniciar la espera de 2 s que dispara la geocodificación
+  /// inversa del centro del mapa.
+  final VoidCallback? onCameraMove;
+
   const ClientMapView({
     super.key,
     required this.controller,
@@ -271,6 +284,8 @@ class ClientMapView extends StatefulWidget {
     this.rayoPins = const [],
     this.onTap,
     this.onGesture,
+    this.onCameraIdle,
+    this.onCameraMove,
   });
 
   @override
@@ -546,7 +561,7 @@ class _ClientMapViewState extends State<ClientMapView> {
           mlib.SymbolLayerProperties(
             iconImage: _rayoImagen,
             iconAnchor: 'bottom',
-            iconSize: 0.5,
+            iconSize: 0.25,
             iconAllowOverlap: true,
             iconIgnorePlacement: true,
           ),
@@ -594,6 +609,15 @@ class _ClientMapViewState extends State<ClientMapView> {
       ),
       onMapCreated: (ctl) {
         widget.controller._ctl = ctl;
+        // Centro inicial conocido desde el primer frame: sin esto la pantalla
+        // no puede geocodificar hasta que el usuario mueva el mapa.
+        widget.controller._anotarCamara(mlib.CameraPosition(
+          target: mlib.LatLng(
+            widget.initialCenter.latitude,
+            widget.initialCenter.longitude,
+          ),
+          zoom: widget.initialZoom,
+        ));
         // El estilo puede haber cargado antes de llegar aqui; sin esta
         // comprobacion las capas nunca se crearian y el mapa se quedaria sin
         // ruta ni marcadores.
@@ -609,8 +633,10 @@ class _ClientMapViewState extends State<ClientMapView> {
         // Un arrastre del usuario llega aqui sin que la pantalla haya pedido
         // nada: es la unica senal de que deja de seguir al vehiculo.
         if (!widget.controller.enMovimientoPropio) widget.onGesture?.call();
+        widget.onCameraMove?.call();
       },
       onMapClick: (_, punto) => _gestionarTap(punto),
+      onCameraIdle: widget.onCameraIdle,
       // Sin esto MapLibre usa MinMaxZoomPreference.unbounded y por debajo de z8
       // el mapa se queda en blanco, y por encima de z16 estira teselas.
       minMaxZoomPreference: mlib.MinMaxZoomPreference(
@@ -622,7 +648,14 @@ class _ClientMapViewState extends State<ClientMapView> {
       myLocationTrackingMode: mlib.MyLocationTrackingMode.none,
       // La camara la lleva la pantalla de forma explicita; el seguimiento
       // automatico del motor pelea con ella.
-      trackCameraPosition: false,
+      //
+      // PERO el seguimiento de posicion SI debe estar activo: en MapLibre
+      // Android `onCameraMove` retorna sin emitir nada si
+      // `trackCameraPosition` es false, y `cameraPosition` se queda congelada.
+      // Sin esto la pantalla nunca sabia donde estaba el rayo (geocodificaba
+      // el centro inicial) y el destino acababa siendo el mismo punto que la
+      // recogida (ruta de 0.0 km).
+      trackCameraPosition: true,
     );
   }
 }
