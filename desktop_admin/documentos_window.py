@@ -186,22 +186,33 @@ class VentanaDocumentos(tk.Toplevel):
         self.after(200, self._revisar_descargas)
 
     def _descargar_todas(self, pasada):
+        from concurrent.futures import ThreadPoolExecutor
+
         detalle = (self.datos or {}).get("documentos", {})
+        tareas = []
         for clave, etiqueta in DOCUMENTOS:
             llave = (clave, etiqueta)
             if llave not in self._labels:
                 continue
-            info = detalle.get(clave) or {}
+            tareas.append((llave, detalle.get(clave) or {}))
+
+        def bajar(tarea):
+            llave, info = tarea
             ruta = None
             if info.get("subido") and info.get("archivo"):
                 try:
                     ruta = self._descargar(info.get("archivo"))
                 except Exception:
                     ruta = None
-            # Si mientras tanto se refresco la vista, esta pasada ya no vale.
-            if pasada != self._pasada:
-                return
-            self._descargas[llave] = ruta
+            return llave, ruta
+
+        # 4 a la vez: en serie, 10 fotos desde la nube se hacian eternas.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for llave, ruta in pool.map(bajar, tareas):
+                # Si mientras tanto se refresco la vista, esta pasada ya no vale.
+                if pasada != self._pasada:
+                    return
+                self._descargas[llave] = ruta
         if pasada == self._pasada:
             self._descargas_listas = True
 

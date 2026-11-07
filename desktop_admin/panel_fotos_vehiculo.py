@@ -129,15 +129,24 @@ class VentanaFotosVehiculo(tk.Toplevel):
         self.after(200, self._revisar_descargas)
 
     def _descargar_todas(self, pasada):
+        from concurrent.futures import ThreadPoolExecutor
+
         fotos = self.vehiculo.get("fotos") or {}
-        for campo in list(self._labels):
-            info = fotos.get(campo) or {}
+        tareas = [(campo, fotos.get(campo) or {})
+                  for campo in list(self._labels)]
+
+        def bajar(tarea):
+            campo, info = tarea
             ruta = None
             if info.get("archivo"):
                 ruta = self._descargar(info.get("archivo"))
-            if pasada != self._pasada:
-                return
-            self._descargas[campo] = ruta
+            return campo, ruta
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            for campo, ruta in pool.map(bajar, tareas):
+                if pasada != self._pasada:
+                    return
+                self._descargas[campo] = ruta
         if pasada == self._pasada:
             self._descargas_listas = True
 

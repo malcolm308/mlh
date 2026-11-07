@@ -5,6 +5,7 @@ Uso:  python main.py
 import os
 import sys
 import threading
+import traceback
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk, messagebox
@@ -44,6 +45,23 @@ class AppAdmin(tk.Tk):
         self.after(1000, self._tick_token)   # el token dura 30 min
         self.after(100, self._revisar_ping)
         self.status("Sesion iniciada como %s" % api.admin_email)
+
+    def report_callback_exception(self, exc, valor, tb):
+        """Un fallo en un boton no debe cerrar el panel.
+
+        Tkinter, por defecto, imprime el traceback... y con `pythonw` no hay
+        consola donde verlo, asi que la ventana desaparecia sin explicacion.
+        Aqui se guarda en `panel_error.log` y se avisa al administrador.
+        """
+        _registrar_error(exc, valor, tb)
+        try:
+            messagebox.showerror(
+                "Error inesperado",
+                "El panel encontro un problema pero sigue abierto.\n\n"
+                "%s: %s\n\nEl detalle quedo en panel_error.log"
+                % (getattr(exc, "__name__", exc), valor))
+        except Exception:
+            pass
 
     # ---------------- estilo ----------------
     def _estilo(self):
@@ -222,7 +240,21 @@ class AppAdmin(tk.Tk):
         VentanaAltaAdmin(self, self.api)
 
 
+def _registrar_error(exc, valor, tb):
+    """Escribe el fallo en `panel_error.log` (pythonw no tiene consola)."""
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "panel_error.log")
+    try:
+        with open(ruta, "a", encoding="utf-8") as f:
+            f.write("\n" + "=" * 70 + "\n")
+            f.write(datetime.now().isoformat(timespec="seconds") + "\n")
+            f.write("".join(traceback.format_exception(exc, valor, tb)))
+    except Exception:
+        pass
+
+
 def main():
+    sys.excepthook = _registrar_error
     root = tk.Tk()
     root.withdraw()
 
