@@ -27,7 +27,7 @@ class TabPromociones(ttk.Frame):
         self.api = app.api
         self._consulta_en_curso = False
         self._build()
-        self.after(200, self.cargar)
+        # La carga la dispara main.py al abrir la pestana (carga perezosa).
 
     # ---------------- construccion ----------------
 

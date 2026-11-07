@@ -6,22 +6,9 @@ from tkinter import ttk
 from api_client import ApiError
 
 
-def consultar_en_hilo(ventana, llamada, al_terminar, al_error,
-                      mensaje_espera="Consultando..."):
-    """Ejecuta una llamada al backend sin congelar la ventana.
-
-    Tkinter solo admite cambios de widgets desde su hilo principal, asi que
-    aqui el reparto es estricto: el hilo auxiliar solo hace la llamada y deja
-    el resultado (o el error) en una caja; el hilo de Tkinter la recoge y es el
-    unico que pinta.
-
-    Sin esto, abrir una pestana con el backend dormido dejaba la ventana
-    entera colgada 30-60 s y Windows la marcaba como "no responde".
-
-    * `llamada`: recibe el cliente y devuelve el resultado de la consulta.
-    * `al_terminar(resultado)`: se ejecuta en el hilo principal, sin errores.
-    * `al_error(ApiError)`: idem, para el fallo.
-    """
+def _lanzar_en_hilo(ventana, llamada, al_terminar, al_error, mensaje_espera,
+                    marcar_consulta):
+    """Motor comun de `consultar_en_hilo` y `ejecutar_en_hilo`."""
     api = ventana.api
     caja = {}
 
@@ -49,14 +36,47 @@ def consultar_en_hilo(ventana, llamada, al_terminar, al_error,
                     "El servidor esta despertando (plan gratuito de Render)...")
             ventana.after(200, vigilar)
             return
-        ventana._consulta_en_curso = False
+        if marcar_consulta:
+            ventana._consulta_en_curso = False
         if "error" in caja:
             al_error(caja["error"])
         else:
             al_terminar(caja.get("ok"))
 
-    ventana._consulta_en_curso = True
+    if marcar_consulta:
+        ventana._consulta_en_curso = True
     ventana.after(200, vigilar)
+
+
+def consultar_en_hilo(ventana, llamada, al_terminar, al_error,
+                      mensaje_espera="Consultando..."):
+    """Ejecuta una llamada al backend sin congelar la ventana.
+
+    Tkinter solo admite cambios de widgets desde su hilo principal, asi que
+    aqui el reparto es estricto: el hilo auxiliar solo hace la llamada y deja
+    el resultado (o el error) en una caja; el hilo de Tkinter la recoge y es el
+    unico que pinta.
+
+    Sin esto, abrir una pestana con el backend dormido dejaba la ventana
+    entera colgada 30-60 s y Windows la marcaba como "no responde".
+
+    * `llamada`: recibe el cliente y devuelve el resultado de la consulta.
+    * `al_terminar(resultado)`: se ejecuta en el hilo principal, sin errores.
+    * `al_error(ApiError)`: idem, para el fallo.
+    """
+    _lanzar_en_hilo(ventana, llamada, al_terminar, al_error, mensaje_espera,
+                    marcar_consulta=True)
+
+
+def ejecutar_en_hilo(ventana, llamada, al_terminar, al_error,
+                     mensaje_espera="Procesando..."):
+    """Igual que `consultar_en_hilo` pero para acciones (recargar, aprobar...).
+
+    No toca `_consulta_en_curso`: la accion puede terminar y recargar la tabla
+    sin que la recarga se vea como una consulta duplicada.
+    """
+    _lanzar_en_hilo(ventana, llamada, al_terminar, al_error, mensaje_espera,
+                    marcar_consulta=False)
 
 
 def money(v):

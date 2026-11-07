@@ -112,6 +112,14 @@ class AppAdmin(tk.Tk):
         self.notebook.add(self.tab_promociones, text="Promociones y Comisiones")
         self.notebook.add(self.tab_tarifas, text="Tarifas y Espera")
 
+        # Las pestanas NO se cargan todas a la vez al entrar. Cada una pide
+        # sus datos la primera vez que se abre: con el backend dormido, siete
+        # consultas en paralelo al iniciar sesion hacian que el panel tardara
+        # una eternidad y pareciera colgado.
+        self._tabs_cargadas = set()
+        self.notebook.bind("<<NotebookTabChanged>>", self._al_cambiar_pestana)
+        self.after(200, self._al_cambiar_pestana)
+
         # barra de estado
         self.lbl_status = tk.Label(self, text="Listo", bg="#243447", fg="#9fb3c8",
                                    font=("Segoe UI", 9), anchor="w", padx=12)
@@ -124,6 +132,27 @@ class AppAdmin(tk.Tk):
     def recargar_pestana(self):
         idx = self.notebook.index(self.notebook.select())
         self.notebook.select(idx)
+
+    def _al_cambiar_pestana(self, _evento=None):
+        """Carga los datos de una pestana la primera vez que se abre.
+
+        Es el complemento de `consultar_en_hilo`: cada pestana ya consulta en
+        un hilo aparte, pero si las siete arrancan juntas la instancia gratuita
+        de Render recibe siete peticiones a la vez, tarda en despertar y el
+        panel se siente roto. Con esto solo trabaja la pestana visible.
+        """
+        try:
+            pestana = self.notebook.nametowidget(self.notebook.select())
+        except (tk.TclError, KeyError):
+            return
+        if pestana is None or pestana in self._tabs_cargadas:
+            return
+        cargar = (getattr(pestana, "cargar", None)
+                  or getattr(pestana, "cargar_movimientos", None))
+        if cargar is None:
+            return
+        self._tabs_cargadas.add(pestana)
+        cargar()
 
     def _tick_token(self):
         """Comprueba en segundo plano que el token siga vivo.

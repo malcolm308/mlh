@@ -45,6 +45,10 @@ class VentanaFotosVehiculo(tk.Toplevel):
         self.api = api
         self.vehiculo = vehiculo
         self.rutas = {}
+        self._labels = {}
+        self._descargas = {}
+        self._descargas_listas = True
+        self._pasada = 0
         self.title("Fotos del vehiculo - %s" % (vehiculo.get("chofer") or "-"))
         self.configure(bg="#1b2a3a")
         self.geometry("1060x720")
@@ -111,26 +115,39 @@ class VentanaFotosVehiculo(tk.Toplevel):
         # Estado de descarga de esta pasada: campo -> ruta (o None si fallo).
         self._descargas = {}
         self._labels = {}
+        self._descargas_listas = False
+        self._pasada = getattr(self, "_pasada", 0) + 1
+        pasada = self._pasada
         for i, (campo, etiqueta) in enumerate(FOTOS_VEHICULO):
             fila, col = divmod(i, 2)
             self._tarjeta(fila, col, campo, etiqueta,
                           fotos.get(campo) or {})
         # Todas las descargas van en UN hilo: desde Cloudinary tardan poco,
         # pero en serie desde el hilo de Tk congelaban la ventana.
-        threading.Thread(target=self._descargar_todas, daemon=True).start()
+        threading.Thread(target=self._descargar_todas, args=(pasada,),
+                         daemon=True).start()
         self.after(200, self._revisar_descargas)
 
-    def _descargar_todas(self):
+    def _descargar_todas(self, pasada):
         fotos = self.vehiculo.get("fotos") or {}
-        for campo, info in fotos.items():
-            if not (info or {}).get("archivo"):
-                continue
-            self._descargas[campo] = self._descargar(info.get("archivo"))
+        for campo in list(self._labels):
+            info = fotos.get(campo) or {}
+            ruta = None
+            if info.get("archivo"):
+                ruta = self._descargar(info.get("archivo"))
+            if pasada != self._pasada:
+                return
+            self._descargas[campo] = ruta
+        if pasada == self._pasada:
+            self._descargas_listas = True
 
     def _revisar_descargas(self):
         """Pinta las miniaturas conforme llegan (hilo de Tkinter)."""
+        if not self.winfo_exists():
+            return
         for campo, ruta in list(self._descargas.items()):
             if campo not in self._labels:
+                self._descargas.pop(campo, None)
                 continue
             lbl = self._labels.pop(campo)
             etiqueta = dict(FOTOS_VEHICULO).get(campo, campo)
@@ -142,9 +159,11 @@ class VentanaFotosVehiculo(tk.Toplevel):
                          lambda e, r=ruta, t=etiqueta: self._abrir(r, t))
                 lbl.config(cursor="hand2")
             else:
-                lbl.configure(text="(no disponible)", fg="#ff6b6b")
+                lbl.configure(text="(foto no encontrada)", fg="#ff6b6b")
             del self._descargas[campo]
-        if self._descargas:
+        # Se sigue sondeando hasta que el hilo termine; cortar al primer tick
+        # vacio dejaba las miniaturas en "Cargando..." para siempre.
+        if self._descargas or not self._descargas_listas:
             self.after(200, self._revisar_descargas)
 
     def _tarjeta(self, fila, col, campo, etiqueta, info):

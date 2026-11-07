@@ -17,7 +17,7 @@ class TabViajes(ttk.Frame):
         # `ventana` que espera `ui_common.consultar_en_hilo`.
         self._consulta_en_curso = False
         self._build()
-        self.after(200, self.cargar)
+        # La carga la dispara main.py al abrir la pestana (carga perezosa).
 
     def _build(self):
         # --- barra superior ---
@@ -58,7 +58,7 @@ class TabViajes(ttk.Frame):
         self.tabla.pack(fill="both", expand=True, padx=10, pady=(0, 6))
         self.tabla.tree.tag_configure("vacio", background="#f2f4f7")
         self.tabla.tree.tag_configure("hoy", background="#fff4d6")
-        self.tabla.tree.bind("<Double-1>", self._ver_dia)
+        self.tabla.tree.bind("<Double-1>", self._ver_dia_seleccionado)
 
         # --- detalle del dia ---
         frame_det = tk.LabelFrame(self, text="Detalle del dia (doble clic en una fila)",
@@ -107,17 +107,20 @@ class TabViajes(ttk.Frame):
 
         self.tabla.limpiar()
         for f in filas:
-            dia = f["dia"]
+            dia = f.get("dia") or ""
             try:
                 etiqueta = "%s %s" % (DIAS_SEMANA[date.fromisoformat(dia).weekday()][:3],
                                       dia[8:] + "/" + dia[5:7])
             except ValueError:
                 etiqueta = dia
-            tags = ("hoy",) if dia == hoy else (("vacio",) if f["total"] == 0 else ())
+            total = f.get("total") or 0
+            tags = ("hoy",) if dia == hoy else (("vacio",) if not total else ())
             self.tabla.agregar([
-                etiqueta, f["total"], f["completados"], f["cancelados"],
-                f["expirados"], f["solicitados"], money(f["facturado"]),
-                money(f["ticket_promedio"]), ("%.1f" % f["km_recorridos"]), f["choferes"],
+                etiqueta, total, f.get("completados") or 0,
+                f.get("cancelados") or 0, f.get("expirados") or 0,
+                f.get("solicitados") or 0, money(f.get("facturado")),
+                money(f.get("ticket_promedio")),
+                ("%.1f" % (f.get("km_recorridos") or 0)), f.get("choferes") or 0,
             ], iid=dia, tags=tags)
 
         prom = (totales.get("completados") or 0) and (
@@ -133,18 +136,35 @@ class TabViajes(ttk.Frame):
         self.app.status("%d dias cargados (%s - %s)" % (
             len(filas), datos.get("desde"), datos.get("hasta")))
         if filas:
-            self._ver_dia(hoy if any(f["dia"] == hoy for f in filas) else filas[-1]["dia"])
+            self._ver_dia(hoy if any(f.get("dia") == hoy for f in filas)
+                          else filas[-1].get("dia"))
+
+    def _ver_dia_seleccionado(self, _evento=None):
+        """Doble clic en la tabla: usa el dia de la fila elegida.
+
+        Antes se pasaba el evento de Tkinter como si fuera la fecha, asi que
+        el detalle del dia nunca cargaba.
+        """
+        sel = self.tabla.seleccion()
+        if sel:
+            self._ver_dia(sel[0])
 
     def _ver_dia(self, dia):
         if not dia:
             return
         self.var_estado_dia.set(dia)
+        self._pidiendo_dia = dia
         self.app.status("Cargando viajes de %s..." % dia)
-        self.update_idletasks()
-        try:
-            datos = self.api.viajes_del_dia(dia)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
+        consultar_en_hilo(
+            self,
+            lambda api: api.viajes_del_dia(dia),
+            self._pintar_dia,
+            lambda e: self.app.status("Error: %s" % e.mensaje, error=True),
+            "Cargando viajes de %s..." % dia)
+
+    def _pintar_dia(self, datos):
+        # Si el usuario ya pidio otro dia mientras llegaba, se descarta.
+        if (datos or {}).get("fecha") != getattr(self, "_pidiendo_dia", None):
             return
 
         self.detalle.limpiar()
@@ -160,7 +180,8 @@ class TabViajes(ttk.Frame):
                 ("%.1f" % km) if km else "-",
                 money(v.get("total_fare")) if v.get("total_fare") else "-",
             ], tags=(estado,) if estado in ("completed", "cancelled", "expired") else ())
-        self.app.status("Dia %s: %d viajes" % (dia, datos.get("total", 0)))
+        self.app.status("Dia %s: %d viajes" % (datos.get("fecha"),
+                                               datos.get("total", 0)))
 
     # ---------------- export ----------------
     def exportar(self):

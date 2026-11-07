@@ -19,7 +19,7 @@ class TabChoferes(ttk.Frame):
         # `ventana` que espera `ui_common.consultar_en_hilo`.
         self._consulta_en_curso = False
         self._build()
-        self.after(200, self.cargar)
+        # La carga la dispara main.py al abrir la pestana (carga perezosa).
 
     def _build(self):
         top = tk.Frame(self, bg="#243447")

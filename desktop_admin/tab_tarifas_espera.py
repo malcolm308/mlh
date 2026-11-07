@@ -29,7 +29,7 @@ class TabTarifasEspera(ttk.Frame):
         self.app = app
         self.api = app.api
         self._build()
-        self.after(200, self.cargar)
+        # La carga la dispara main.py al abrir la pestana (carga perezosa).
 
     # ---------------- construccion ----------------
 

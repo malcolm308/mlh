@@ -24,7 +24,7 @@ class TabVehiculos(ttk.Frame):
         self.api = app.api
         self._consulta_en_curso = False
         self._build()
-        self.after(200, self.cargar)
+        # La carga la dispara main.py al abrir la pestana (carga perezosa).
 
     def _build(self):
         top = tk.Frame(self, bg="#243447")
@@ -207,13 +207,13 @@ class TabVehiculos(ttk.Frame):
 
     def _cambiar(self, v, decision, motivo):
         self.app.status("Actualizando vehiculo de %s..." % v["chofer"])
-        self.update_idletasks()
-        try:
-            r = self.api.cambiar_estado_vehiculo(v["id"], decision, motivo)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
-            return
+        consultar_en_hilo(
+            self,
+            lambda api: api.cambiar_estado_vehiculo(v["id"], decision, motivo),
+            self._cambio_listo, self._fallo,
+            "Actualizando vehiculo...")
+
+    def _cambio_listo(self, r):
         mensaje = r.get("message") if isinstance(r, dict) else None
         self.app.status(mensaje or "Listo")
         self.cargar()

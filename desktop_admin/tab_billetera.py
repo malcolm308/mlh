@@ -4,7 +4,8 @@ from datetime import datetime
 from tkinter import ttk, messagebox, simpledialog
 
 from api_client import ApiError
-from ui_common import Tabla, money, boton, PanelDesplazable, consultar_en_hilo
+from ui_common import (Tabla, money, boton, PanelDesplazable,
+                       consultar_en_hilo, ejecutar_en_hilo)
 
 METODOS = ["efectivo", "transferencia", "pasarela", "promocion", "ajuste"]
 
@@ -18,7 +19,7 @@ class TabBilletera(ttk.Frame):
         # `ventana` que espera `ui_common.consultar_en_hilo`.
         self._consulta_en_curso = False
         self._build()
-        self.after(200, self.cargar_movimientos)
+        # La carga la dispara main.py al abrir la pestana (carga perezosa).
 
     def _build(self):
         # ---------------- izquierda: buscador + recarga ----------------
@@ -166,16 +167,24 @@ class TabBilletera(ttk.Frame):
             return
         driver_id = sel[0]
         self.api = self.app.api
-        try:
-            info = self.api.saldo(driver_id)
-        except ApiError as e:
-            messagebox.showerror("Error", str(e.mensaje))
+        # Si el usuario cambia de fila mientras llega la respuesta, se descarta
+        # la del chofer anterior (solo vale la ultima pedida).
+        self._saldo_pedido = driver_id
+        ejecutar_en_hilo(
+            self,
+            lambda api: api.saldo(driver_id),
+            self._pintar_saldo,
+            lambda e: self._fallo(e),
+            "Consultando saldo...")
+
+    def _pintar_saldo(self, info):
+        if (info or {}).get("driver_id") != getattr(self, "_saldo_pedido", None):
             return
         self.seleccionado = info
         self.lbl_info.config(
-            text="Nombre: %s\nEmail: %s\nChofer ID: %s\nFondo actual: %s CUP"
+            text="Nombre: %s\nEmail: %s\nFondo actual: %s CUP"
                  % (info.get("nombre") or "-", info.get("email") or "-",
-                    info["driver_id"], money(info.get("saldo"))))
+                    money(info.get("saldo"))))
         if not self.var_todos.get():
             self.cargar_movimientos()
 
@@ -260,24 +269,27 @@ class TabBilletera(ttk.Frame):
             return
 
         self.app.status("Registrando recarga...")
-        self.update_idletasks()
-        try:
-            r = self.api.recarga(driver_id=ch["driver_id"], monto=monto,
-                                 metodo=self.var_metodo.get(),
-                                 referencia=self.var_ref.get().strip() or None,
-                                 nota=self.var_nota.get().strip() or None)
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
+        parametros = dict(
+            driver_id=ch["driver_id"], monto=monto,
+            metodo=self.var_metodo.get(),
+            referencia=self.var_ref.get().strip() or None,
+            nota=self.var_nota.get().strip() or None)
+        if getattr(self, "_operando", False):
             return
+        self._operando = True
+        ejecutar_en_hilo(
+            self, lambda api: api.recarga(**parametros),
+            self._recarga_lista, self._accion_fallida,
+            "Registrando recarga...")
 
+    def _recarga_lista(self, r):
+        self._operando = False
         self.var_ref.set("")
         self.var_nota.set("")
         messagebox.showinfo("Recarga hecha",
                             "%s\n\nNuevo fondo: %s CUP"
                             % (r.get("message"), money(r.get("saldo_nuevo"))))
         self._elegir_busqueda()
-        self.cargar_movimientos()
         self.app.status("Recarga registrada")
 
     def descontar(self):
@@ -295,17 +307,26 @@ class TabBilletera(ttk.Frame):
                                       money(ch.get("saldo")))):
             return
         self.app.status("Registrando debito...")
-        self.update_idletasks()
-        try:
-            r = self.api.descargo(driver_id=ch["driver_id"], monto=monto,
-                                  nota=nota or "Ajuste del administrador")
-        except ApiError as e:
-            self.app.status("Error: %s" % e.mensaje, error=True)
-            messagebox.showerror("Error", str(e.mensaje))
+        if getattr(self, "_operando", False):
             return
+        self._operando = True
+        ejecutar_en_hilo(
+            self,
+            lambda api: api.descargo(
+                driver_id=ch["driver_id"], monto=monto,
+                nota=nota or "Ajuste del administrador"),
+            self._descargo_listo, self._accion_fallida,
+            "Registrando debito...")
+
+    def _descargo_listo(self, r):
+        self._operando = False
         messagebox.showinfo("Debito hecho",
                             "%s\n\nNuevo fondo: %s CUP"
                             % (r.get("message"), money(r.get("saldo_nuevo"))))
         self._elegir_busqueda()
-        self.cargar_movimientos()
         self.app.status("Debito registrado")
+
+    def _accion_fallida(self, e):
+        self._operando = False
+        self.app.status("Error: %s" % e.mensaje, error=True)
+        messagebox.showerror("Error", str(e.mensaje))

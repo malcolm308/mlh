@@ -36,7 +36,8 @@ class TabMonitor(ttk.Frame):
         self._viajes = {}
         self._auto = None
         self._build()
-        self.after(200, self.cargar)
+        # La carga inicial la dispara main.py al abrir la pestana (carga
+        # perezosa); el refresco automatico sigue activo si "Auto" esta puesto.
         self._programar_refresco()
 
     # ---------------- construccion ----------------

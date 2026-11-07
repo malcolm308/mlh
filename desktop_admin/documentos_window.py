@@ -55,6 +55,8 @@ class VentanaDocumentos(tk.Toplevel):
         self.error_descarga = None
         self._labels = {}
         self._descargas = {}
+        self._descargas_listas = True
+        self._pasada = 0
         self._rutas = {}
         self.title("Documentos - %s" % chofer.get("nombre", ""))
         self.configure(bg="#1b2a3a")
@@ -171,29 +173,48 @@ class VentanaDocumentos(tk.Toplevel):
         # Estado de descargas de esta pasada; clave "clave|etiqueta".
         self._descargas = {}
         self._labels = {}
+        self._descargas_listas = False
+        self._pasada = getattr(self, "_pasada", 0) + 1
+        pasada = self._pasada
         # 2 columnas x 5 filas
         for i, (clave, etiqueta) in enumerate(DOCUMENTOS):
             info = detalle.get(clave, {})
             fila, col = divmod(i, 2)
             self._tarjeta(fila, col, etiqueta, info, clave)
-        threading.Thread(target=self._descargar_todas, daemon=True).start()
+        threading.Thread(target=self._descargar_todas, args=(pasada,),
+                         daemon=True).start()
         self.after(200, self._revisar_descargas)
 
-    def _descargar_todas(self):
+    def _descargar_todas(self, pasada):
         detalle = (self.datos or {}).get("documentos", {})
         for clave, etiqueta in DOCUMENTOS:
-            info = detalle.get(clave) or {}
-            if not info.get("subido"):
+            llave = (clave, etiqueta)
+            if llave not in self._labels:
                 continue
-            try:
-                ruta = self._descargar(info.get("archivo"))
-                self._descargas[(clave, etiqueta)] = ruta
-            except Exception:
-                self._descargas[(clave, etiqueta)] = None
+            info = detalle.get(clave) or {}
+            ruta = None
+            if info.get("subido") and info.get("archivo"):
+                try:
+                    ruta = self._descargar(info.get("archivo"))
+                except Exception:
+                    ruta = None
+            # Si mientras tanto se refresco la vista, esta pasada ya no vale.
+            if pasada != self._pasada:
+                return
+            self._descargas[llave] = ruta
+        if pasada == self._pasada:
+            self._descargas_listas = True
 
     def _revisar_descargas(self):
+        # La ventana pudo cerrarse mientras las descargas seguian: sin esto,
+        # Tkinter lanzaba TclError sobre widgets ya destruidos.
+        if not self.winfo_exists():
+            return
         for llave, ruta in list(self._descargas.items()):
             if llave not in self._labels:
+                # Pasada vieja o etiqueta ya pintada: no dejar basura que
+                # impida que termine el sondeo.
+                self._descargas.pop(llave, None)
                 continue
             lbl = self._labels.pop(llave)
             clave, etiqueta = llave
@@ -219,10 +240,12 @@ class VentanaDocumentos(tk.Toplevel):
                 self._no_visible(marco_img, ruta)
                 marco_img.pack_propagate(True)
             else:
-                lbl.configure(text="(imagen no disponible)\nreintenta "
-                                   "con Actualizar", fg="#ff6b6b")
+                lbl.configure(text="(foto no encontrada)\nel chofer debe\n"
+                                   "volver a subirla", fg="#ff6b6b")
             del self._descargas[llave]
-        if self._descargas:
+        # Se sigue sondeando hasta que el hilo de descargas termine; antes se
+        # cortaba en el primer tick vacio y las miniaturas nunca aparecian.
+        if self._descargas or not self._descargas_listas:
             self.after(200, self._revisar_descargas)
 
     def _tarjeta(self, fila, col, etiqueta, info, clave=""):
