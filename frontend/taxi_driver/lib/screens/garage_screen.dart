@@ -735,6 +735,7 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
   void _pedirFoto(String campo) {
     showModalBottomSheet<ImageSource>(
       context: context,
+      backgroundColor: Colors.white,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,

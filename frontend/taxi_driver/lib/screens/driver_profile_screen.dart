@@ -4,7 +4,9 @@ import 'package:image_picker/image_picker.dart';
 import '../models/models.dart';
 import '../services/vehicle_types_service.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/foto_perfil_chofer.dart';
+import '../widgets/ui/glass_sheet.dart';
 
 /// Campos que se editan desde el perfil: SOLO documentos personales.
 /// El vehiculo (interiores, exteriores, circulacion) se gestiona en Mi Garaje
@@ -335,6 +337,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
   Future<void> _cambiarFoto(String campo) async {
     final origen = await showModalBottomSheet<ImageSource>(
       context: context,
+      backgroundColor: Colors.white,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -465,10 +468,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
   }
 
   Widget _section(String title, List<Widget> rows) {
-    return Card(
-      elevation: 0,
-      color: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    return SoftCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -476,8 +476,8 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
           children: [
             Text(title,
                 style: const TextStyle(
-                    color: Color(0xFF007AFF),
-                    fontWeight: FontWeight.bold,
+                    color: AppColors.ambar,
+                    fontWeight: FontWeight.w800,
                     fontSize: 13)),
             const Divider(height: 18),
             ...rows,
@@ -492,7 +492,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: const Color(0xFF888888)),
+          Icon(icon, size: 20, color: AppColors.secundario),
           const SizedBox(width: 12),
           Expanded(
             child: Text(label,

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
+import '../widgets/ui/glass_sheet.dart';
+
 /// Pantalla de soporte/ayuda (opción del menú hamburguesa).
 class SupportScreen extends StatelessWidget {
   const SupportScreen({super.key});
@@ -11,66 +14,78 @@ class SupportScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Icon(Icons.support_agent, size: 64, color: Color(0xFF007AFF)),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
+          const Icon(Icons.support_agent, size: 54, color: AppColors.ambar),
+          const SizedBox(height: 10),
           const Text(
             '¿Necesitas ayuda?',
             textAlign: TextAlign.center,
             style: TextStyle(
                 fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF333333)),
+                fontWeight: FontWeight.w800,
+                color: AppColors.tinta),
           ),
           const SizedBox(height: 4),
           const Text(
             'Contáctanos y te ayudaremos lo antes posible',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Color(0xFF888888)),
+            style: TextStyle(color: AppColors.secundario, height: 1.4),
           ),
-          const SizedBox(height: 24),
-          _card(
-            Icons.headset_mic_outlined,
-            'Teléfono',
-            '+53 59295207',
-          ),
-          const SizedBox(height: 12),
-          _card(
-            Icons.mail_outline,
-            'Correo',
-            'rapitaxicuba@gmail.com',
-          ),
-          const SizedBox(height: 12),
-          _card(
-            Icons.schedule,
-            'Horario de atención',
-            'Lunes a sábado · 8:00 am - 8:00 pm',
-          ),
-          const SizedBox(height: 12),
-          _card(
-            Icons.telegram,
-            'Bot de Telegram',
-            '@RapiTaxiSoporte_bot',
+          const SizedBox(height: 22),
+          SoftCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _fila(Icons.headset_mic_outlined, 'Teléfono', '+53 59295207'),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                _fila(Icons.mail_outline_rounded, 'Correo',
+                    'rapitaxicuba@gmail.com'),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                _fila(Icons.schedule_rounded, 'Horario de atención',
+                    'Lunes a sábado · 8:00 am - 8:00 pm'),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                _fila(Icons.send_outlined, 'Bot de Telegram',
+                    '@RapiTaxiSoporte_bot'),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _card(IconData icon, String label, String value) {
-    return Card(
-      elevation: 0,
-      color: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ListTile(
-        leading: CircleAvatar(
-          radius: 22,
-          backgroundColor: const Color(0xFF007AFF).withValues(alpha: 0.12),
-          child: Icon(icon, color: const Color(0xFF007AFF)),
-        ),
-        title: Text(label, style: const TextStyle(color: Color(0xFF888888))),
-        subtitle: Text(value,
-            style: const TextStyle(
-                color: Color(0xFF333333), fontWeight: FontWeight.w600)),
+  Widget _fila(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: const BoxDecoration(
+              color: AppColors.acentoSuave,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 18, color: AppColors.ambar),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.secundario)),
+                const SizedBox(height: 2),
+                Text(value,
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.tinta)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

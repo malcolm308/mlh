@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui/glass_sheet.dart';
 
 /// Configuración general del conductor (opción del menú hamburguesa).
 class DriverSettingsScreen extends StatefulWidget {
@@ -36,9 +38,9 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
                 title: const Text('Notificaciones',
                     style: TextStyle(fontWeight: FontWeight.w600)),
                 subtitle: const Text('Recibir alertas de solicitudes',
-                    style: TextStyle(color: Color(0xFF888888))),
+                    style: TextStyle(color: AppColors.secundario)),
                 value: _notifications,
-                activeTrackColor: const Color(0xFF007AFF),
+                activeTrackColor: AppColors.acento,
                 onChanged: (v) => setState(() => _notifications = v),
               ),
               SwitchListTile(
@@ -46,9 +48,9 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
                 title: const Text('Sonido',
                     style: TextStyle(fontWeight: FontWeight.w600)),
                 subtitle: const Text('Reproducir sonido en nuevas solicitudes',
-                    style: TextStyle(color: Color(0xFF888888))),
+                    style: TextStyle(color: AppColors.secundario)),
                 value: _sonido,
-                activeTrackColor: const Color(0xFF007AFF),
+                activeTrackColor: AppColors.acento,
                 onChanged: (v) => setState(() => _sonido = v),
               ),
             ],
@@ -59,11 +61,10 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
             [
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.info_outline,
-                    color: Color(0xFF333333)),
+                leading: const Icon(Icons.info_outline, color: AppColors.tinta),
                 title: const Text('Acerca de'),
                 subtitle: const Text('RapiTaxi Chofer 1.0.0',
-                    style: TextStyle(color: Color(0xFF888888))),
+                    style: TextStyle(color: AppColors.secundario)),
                 trailing: IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Probar conexión',
@@ -91,10 +92,7 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
   }
 
   Widget _card(String title, List<Widget> children) {
-    return Card(
-      elevation: 0,
-      color: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    return SoftCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -102,8 +100,8 @@ class _DriverSettingsScreenState extends State<DriverSettingsScreen> {
           children: [
             Text(title,
                 style: const TextStyle(
-                    color: Color(0xFF007AFF),
-                    fontWeight: FontWeight.bold,
+                    color: AppColors.ambar,
+                    fontWeight: FontWeight.w800,
                     fontSize: 13)),
             const Divider(height: 18),
             ...children,

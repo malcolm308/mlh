@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui/glass_sheet.dart';
 
 /// Historial de viajes enriquecido con datos del chofer y vehículo.
 class HistoryScreen extends StatefulWidget {
@@ -36,26 +38,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
     try {
       final trips = await widget.api.getTripHistory(widget.clientId);
       if (!mounted) return;
-      setState(() {
-        _trips = trips;
-        _loading = false;
-      });
+      _trips = trips;
+      _loading = false;
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = '$e';
-      });
+      _error = '$e';
+      _loading = false;
     }
+    setState(() {});
   }
 
   Color _statusColor(String status) => switch (status) {
-        'completed' => Colors.green.shade600,
-        'in_progress' => Colors.amber.shade700,
-        'accepted' || 'driver_arrived' => Colors.lightBlue.shade700,
-        'requested' => Colors.orange.shade700,
-        'cancelled' || 'expired' => Colors.red.shade600,
-        _ => Colors.grey.shade600,
+        'completed' => const Color(0xFF1E7A3D),
+        'in_progress' => AppColors.ambar,
+        'accepted' || 'driver_arrived' => const Color(0xFF1A73E8),
+        'requested' => AppColors.ambar,
+        'cancelled' || 'expired' => const Color(0xFFD93840),
+        _ => AppColors.secundario,
       };
 
   String _statusLabel(String status) => switch (status) {
@@ -81,106 +80,192 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return '${mins}m ${remainingSecs}s';
   }
 
+  /// ISO completo -> `07 nov 2026 · 01:34`: fecha legible, no el codigo
+  /// crudo de Mongo que tapaba el historial.
   String _formatDate(String? iso) {
     if (iso == null || iso.isEmpty) return '—';
     final d = DateTime.tryParse(iso);
     if (d == null) return iso;
-    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+    const meses = [
+      'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+      'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+    ];
+    final mes = (d.month >= 1 && d.month <= 12) ? meses[d.month - 1] : '?';
+    final hh = d.hour.toString().padLeft(2, '0');
+    final mm = d.minute.toString().padLeft(2, '0');
+    return '${d.day.toString().padLeft(2, '0')} $mes ${d.year} · $hh:$mm';
   }
 
+  /// Hoja de detalle con vidrio sobre el fondo oscurecido.
+  ///
+  /// Antes usaba un `showModalBottomSheet` "pelao": el tema global pinta la
+  /// baseline transparente para las hojas de vidrio, y esta quedaba con su
+  /// contenido flotando EN BLANCO sobre la pantalla, parecia que los datos
+  /// "salian transparentes". Ahora siempre envuelve en [GlassSheet].
   void _showDetail(Map<String, dynamic> trip) {
+    final status = trip['status']?.toString() ?? '';
+    final colorEstado = _statusColor(status);
+    final fecha =
+        _formatDate(trip['completed_at'] ?? trip['requested_at']);
+    final distanciaKm = trip['distance_km'] is num
+        ? (trip['distance_km'] as num).toDouble()
+        : null;
+    final total = (trip['total_fare'] as num?)?.toDouble();
+    final moneda = (trip['currency']?.toString().isNotEmpty == true)
+        ? trip['currency'].toString()
+        : 'CUP';
+    final chofer = trip['driver_name']?.toString().trim();
+    final vehiculo = '${trip['vehicle_brand'] ?? ''} ${trip['vehicle_model'] ?? ''}'
+        .trim();
+
     showModalBottomSheet<void>(
       context: context,
+      backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Viaje ${trip['trip_id'] ?? '—'}',
-                    style: Theme.of(ctx).textTheme.titleMedium,
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _statusColor(trip['status'] ?? '').withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: _statusColor(trip['status'] ?? ''), width: 1),
-                  ),
-                  child: Text(
-                    _statusLabel(trip['status'] ?? ''),
-                    style: TextStyle(
-                      color: _statusColor(trip['status'] ?? ''),
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: GlassSheet(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _statusLabel(status),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.tinta,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const Divider(height: 20),
-            if (trip['request_address'] != null && trip['request_address'].toString().isNotEmpty)
-              _detailRow(Icons.location_on_outlined, 'Origen', trip['request_address']),
-            if (trip['dropoff_address'] != null && trip['dropoff_address'].toString().isNotEmpty)
-              _detailRow(Icons.flag_outlined, 'Destino', trip['dropoff_address']),
-            const SizedBox(height: 8),
-            _detailRow(Icons.directions_car, 'Vehículo', '${trip['vehicle_type'] ?? '—'}'),
-            if (trip['driver_name'] != null)
-              _detailRow(Icons.person, 'Chofer', trip['driver_name']),
-            if (trip['vehicle_brand'] != null || trip['vehicle_model'] != null)
-              _detailRow(
-                Icons.car_rental,
-                'Automóvil',
-                '${trip['vehicle_brand'] ?? ''} ${trip['vehicle_model'] ?? ''}'.trim(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
+                    decoration: ShapeDecoration(
+                      color: colorEstado.withValues(alpha: 0.12),
+                      shape: const StadiumBorder(
+                        side: BorderSide(color: Colors.transparent),
+                      ),
+                    ),
+                    child: Text(
+                      fecha,
+                      style: TextStyle(
+                        color: colorEstado,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            const Divider(height: 16),
-            _detailRow(Icons.calendar_today, 'Fecha', _formatDate(trip['completed_at'] ?? trip['requested_at'])),
-            if (trip['distance_km'] != null)
-              _detailRow(Icons.straighten, 'Distancia', '${(trip['distance_km'] as num).toStringAsFixed(2)} km'),
-            if (trip['duration_secs'] != null)
-              _detailRow(Icons.timer, 'Duración', _formatDuration(trip['duration_secs'])),
-            const Divider(height: 16),
-            _detailRow(
-              Icons.attach_money,
-              'Total',
-              '${(trip['total_fare'] as num?)?.toStringAsFixed(2) ?? '0.00'} ${trip['currency'] ?? 'CUP'}',
-              bold: true,
-            ),
-          ],
+              const SizedBox(height: 14),
+              if (trip['request_address'] != null &&
+                  trip['request_address'].toString().isNotEmpty)
+                _detailRow(Icons.location_on_outlined, 'Recogida',
+                    trip['request_address']),
+              if (trip['dropoff_address'] != null &&
+                  trip['dropoff_address'].toString().isNotEmpty)
+                _detailRow(Icons.flag_outlined, 'Destino',
+                    trip['dropoff_address']),
+              if (chofer != null && chofer.isNotEmpty)
+                _detailRow(Icons.person_outline_rounded, 'Chofer', chofer),
+              if (vehiculo.isNotEmpty)
+                _detailRow(Icons.directions_car_outlined, 'Vehículo',
+                    '${trip['vehicle_type'] ?? ''} · $vehiculo'),
+              if (distanciaKm != null && distanciaKm > 0)
+                _detailRow(Icons.straighten, 'Distancia',
+                    '${distanciaKm.toStringAsFixed(2)} km'),
+              _detailRow(Icons.timer_outlined, 'Duración',
+                  _formatDuration(trip['duration_secs'] as int?)),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF8D6),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: const Color(0xFFF3E4A8)),
+                ),
+                child: Row(
+                  children: [
+                    const Text(
+                      'TOTAL',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.7,
+                        color: AppColors.ambar,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${total?.toStringAsFixed(2) ?? '0.00'} $moneda',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.tinta,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 2),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cerrar'),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _detailRow(IconData icon, String label, String value, {bool bold = false}) {
+  /// Fila etiqueta-valor de la hoja de detalle.
+  Widget _detailRow(IconData icon, String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: Colors.grey[600]),
-          const SizedBox(width: 12),
+          Container(
+            width: 32,
+            height: 32,
+            decoration: const BoxDecoration(
+              color: AppColors.acentoSuave,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 16, color: AppColors.ambar),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   label,
-                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                    color: AppColors.secundario,
+                  ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   value,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.tinta,
+                    height: 1.3,
                   ),
                 ),
               ],
@@ -200,95 +285,164 @@ class _HistoryScreenState extends State<HistoryScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                      const SizedBox(height: 16),
-                      Text(_error!, textAlign: TextAlign.center),
-                      const SizedBox(height: 16),
-                      FilledButton(onPressed: _load, child: const Text('Reintentar')),
-                    ],
-                  ),
+              ? ListView(
+                  padding: const EdgeInsets.all(24),
+                  children: [
+                    const SizedBox(height: 30),
+                    const Icon(Icons.error_outline,
+                        size: 52, color: AppColors.error),
+                    const SizedBox(height: 12),
+                    Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.secundario)),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: OutlinedButton(
+                        onPressed: _load,
+                        child: const Text('Reintentar'),
+                      ),
+                    ),
+                  ],
                 )
               : _trips.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.receipt_long, size: 64, color: Colors.grey[400]),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Aún no tienes viajes',
-                            style: TextStyle(color: Colors.grey[600]),
+                  ? ListView(
+                      padding: const EdgeInsets.all(24),
+                      children: const [
+                        SizedBox(height: 36),
+                        Icon(Icons.receipt_long,
+                            size: 56, color: AppColors.secundario),
+                        SizedBox(height: 12),
+                        Text(
+                          'Aún no tienes viajes',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.tinta,
                           ),
-                        ],
-                      ),
+                        ),
+                        SizedBox(height: 6),
+                        Text(
+                          'Cuando completes tu primer viaje lo verás aquí.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: AppColors.secundario, height: 1.4),
+                        ),
+                      ],
                     )
                   : RefreshIndicator(
                       onRefresh: _load,
-                      child: ListView.builder(
-                        padding: const EdgeInsets.all(12),
+                      child: ListView.separated(
+                        padding: const EdgeInsets.all(16),
                         itemCount: _trips.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
                           final trip = _trips[index];
                           final status = trip['status']?.toString() ?? '';
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: ListTile(
+                          final colorEstado = _statusColor(status);
+                          return Material(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(18),
+                            clipBehavior: Clip.antiAlias,
+                            child: InkWell(
                               onTap: () => _showDetail(trip),
-                              leading: CircleAvatar(
-                                backgroundColor: _statusColor(status).withValues(alpha: 0.18),
-                                child: Icon(
-                                  status == 'completed'
-                                      ? Icons.check
-                                      : status == 'cancelled' || status == 'expired'
-                                          ? Icons.close
-                                          : Icons.local_taxi,
-                                  color: _statusColor(status),
-                                  size: 20,
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: AppColors.borde),
                                 ),
-                              ),
-                              title: Text(
-                                trip['request_address']?.toString().isNotEmpty == true
-                                    ? trip['request_address']!
-                                    : 'Viaje ${trip['trip_id']}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (trip['dropoff_address']?.toString().isNotEmpty == true)
-                                    Text(
-                                      trip['dropoff_address']!,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 42,
+                                      height: 42,
+                                      decoration: BoxDecoration(
+                                        color: colorEstado
+                                            .withValues(alpha: 0.12),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        status == 'completed'
+                                            ? Icons.check_rounded
+                                            : status == 'cancelled' ||
+                                                    status == 'expired'
+                                                ? Icons.close_rounded
+                                                : Icons.local_taxi_rounded,
+                                        color: colorEstado,
+                                        size: 20,
+                                      ),
                                     ),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    children: [
-                                      Text(
-                                        _formatDate(trip['completed_at'] ?? trip['requested_at']),
-                                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  _statusLabel(status),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w700,
+                                                    color: AppColors.tinta,
+                                                  ),
+                                                ),
+                                              ),
+                                              Text(
+                                                '${(trip['total_fare'] as num?)?.toStringAsFixed(2) ?? '0.00'} '
+                                                '${trip['currency'] ?? 'CUP'}',
+                                                style: const TextStyle(
+                                                  fontSize: 12.5,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: AppColors.ambar,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          if (trip['request_address']
+                                                      ?.toString()
+                                                      .isNotEmpty ==
+                                                  true ||
+                                              trip['dropoff_address']
+                                                      ?.toString()
+                                                      .isNotEmpty ==
+                                                  true)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                  top: 2),
+                                              child: Text(
+                                                '${trip['request_address'] ?? ''}'
+                                                '${trip['request_address']?.toString().isNotEmpty == true && trip['dropoff_address']?.toString().isNotEmpty == true ? '  →  ' : ''}'
+                                                '${trip['dropoff_address'] ?? ''}',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: AppColors.secundario,
+                                                ),
+                                              ),
+                                            ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            _formatDate(trip['completed_at'] ??
+                                                trip['requested_at']),
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: AppColors.secundario,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      const Spacer(),
-                                      Text(
-                                        '${(trip['total_fare'] as num?)?.toStringAsFixed(2) ?? '0.00'} ${trip['currency'] ?? 'CUP'}',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.bold,
-                                          color: Theme.of(context).colorScheme.primary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                              trailing: Icon(
-                                Icons.chevron_right,
-                                color: Colors.grey[400],
+                                    ),
+                                    const Icon(Icons.chevron_right_rounded,
+                                        size: 20, color: AppColors.secundario),
+                                  ],
+                                ),
                               ),
                             ),
                           );

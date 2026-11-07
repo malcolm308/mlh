@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui/pill_button.dart';
 
 class FavoriteLocationsScreen extends StatefulWidget {
   final ApiService api;
@@ -195,73 +197,125 @@ class _FavoriteLocationsScreenState extends State<FavoriteLocationsScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.error_outline, size: 64, color: Colors.grey[400]),
-                      const SizedBox(height: 16),
-                      Text(_error!),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
+              ? ListView(
+                  padding: const EdgeInsets.all(24),
+                  children: [
+                    const SizedBox(height: 30),
+                    const Icon(Icons.error_outline,
+                        size: 52, color: AppColors.error),
+                    const SizedBox(height: 12),
+                    Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.secundario)),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: OutlinedButton(
                         onPressed: _loadFavorites,
                         child: const Text('Reintentar'),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 )
               : _favorites.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.star_border, size: 64, color: Colors.grey[400]),
-                          const SizedBox(height: 16),
-                          const Text('No tienes favoritos'),
-                          const SizedBox(height: 16),
-                          ElevatedButton.icon(
-                            onPressed: _showAddDialog,
-                            icon: const Icon(Icons.add),
-                            label: const Text('Añadir favorito'),
+                  ? ListView(
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                      children: [
+                        const SizedBox(height: 36),
+                        const Icon(Icons.favorite_border_rounded,
+                            size: 56, color: AppColors.secundario),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'No tienes favoritos',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.tinta,
                           ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Guarda tus direcciones de siempre (casa, trabajo...) '
+                          'para no escribirlas cada vez.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: AppColors.secundario, height: 1.4),
+                        ),
+                        const SizedBox(height: 18),
+                        Center(
+                          child: PillButton(
+                            label: 'Añadir favorito',
+                            icon: Icons.add_rounded,
+                            expand: false,
+                            onPressed: _showAddDialog,
+                          ),
+                        ),
+                      ],
                     )
-                  : ListView.builder(
+                  : ListView.separated(
                       padding: const EdgeInsets.all(16),
                       itemCount: _favorites.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         final fav = _favorites[index];
-                        return Card(
-                          child: ListTile(
-                            leading: const CircleAvatar(
-                              child: Icon(Icons.favorite, color: Colors.red),
+                        return Material(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          clipBehavior: Clip.antiAlias,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: AppColors.borde),
                             ),
-                            title: Text(fav['alias'] ?? 'Sin nombre'),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            child: Row(
                               children: [
-                                if (fav['direccion'] != null)
-                                  Text(
-                                    fav['direccion'],
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: const BoxDecoration(
+                                    color: AppColors.acentoSuave,
+                                    shape: BoxShape.circle,
                                   ),
-                                if (fav['lat'] is num && fav['lng'] is num) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Lat: ${(fav['lat'] as num).toStringAsFixed(5)}, Lng: ${(fav['lng'] as num).toStringAsFixed(5)}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[600],
-                                    ),
+                                  child: const Icon(Icons.favorite_rounded,
+                                      color: AppColors.ambar, size: 18),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        fav['alias'] ?? 'Sin nombre',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.tinta,
+                                        ),
+                                      ),
+                                      if (fav['direccion'] != null)
+                                        Text(
+                                          fav['direccion'],
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.secundario,
+                                          ),
+                                        ),
+                                    ],
                                   ),
-                                ],
+                                ),
+                                IconButton(
+                                  tooltip: 'Eliminar',
+                                  icon: const Icon(Icons.delete_outline_rounded,
+                                      color: AppColors.error, size: 20),
+                                  onPressed: () => _deleteFavorite(fav['id']),
+                                ),
                               ],
-                            ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () => _deleteFavorite(fav['id']),
                             ),
                           ),
                         );

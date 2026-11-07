@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 
 /// Muestra el Fondo del chofer y permite transferir a otro conductor.
 class DriverFondoScreen extends StatefulWidget {
@@ -94,8 +95,7 @@ class _DriverFondoScreenState extends State<DriverFondoScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       behavior: SnackBarBehavior.floating,
-      backgroundColor:
-          isError ? const Color(0xFFDC2626) : const Color(0xFF007AFF),
+      backgroundColor: isError ? AppColors.error : AppColors.tinta,
     ));
   }
 
@@ -112,12 +112,14 @@ class _DriverFondoScreenState extends State<DriverFondoScreen> {
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
+                  // Tarjeta de saldo en el tinte oscuro de marca: mantiene el
+                  // contraste alto sin meter azul de la paleta vieja.
                   gradient: const LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [Color(0xFF007AFF), Color(0xFF4DABFF)],
+                    colors: [Color(0xFF23262B), Color(0xFF45484F)],
                   ),
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(20),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -197,10 +199,10 @@ class _DriverFondoScreenState extends State<DriverFondoScreen> {
               FilledButton.icon(
                 onPressed: _sending ? null : _transfer,
                 style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                  backgroundColor: const Color(0xFF111827),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
+                  minimumSize: const Size.fromHeight(50),
+                  backgroundColor: AppColors.acento,
+                  foregroundColor: AppColors.tinta,
+                  shape: const StadiumBorder(),
                 ),
                 icon: _sending
                     ? const SizedBox(

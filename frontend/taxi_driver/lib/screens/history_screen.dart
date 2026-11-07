@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui/glass_sheet.dart';
 
 /// Registro de viajes del chofer: GET /trips/driver/{id}.
 class HistoryScreen extends StatefulWidget {
@@ -53,12 +55,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Color _statusColor(String status) => switch (status) {
-        'completed' => Colors.green.shade600,
-        'in_progress' => Colors.amber.shade700,
-        'accepted' || 'driver_arrived' => Colors.lightBlue.shade700,
-        'requested' => Colors.orange.shade700,
-        'cancelled' || 'expired' => Colors.red.shade600,
-        _ => Colors.grey.shade600,
+        'completed' => const Color(0xFF1E7A3D),
+        'in_progress' => AppColors.ambar,
+        'accepted' || 'driver_arrived' => const Color(0xFF1A73E8),
+        'requested' => AppColors.ambar,
+        'cancelled' || 'expired' => const Color(0xFFD93840),
+        _ => AppColors.secundario,
       };
 
   String _statusLabel(String status) => switch (status) {
@@ -82,41 +84,81 @@ class _HistoryScreenState extends State<HistoryScreen> {
   void _showDetail(TripOffer t) {
     showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text('Viaje ${t.tripId}',
-                    style: Theme.of(ctx).textTheme.titleMedium),
-                const Spacer(),
-                _chip(_statusLabel(t.status), _statusColor(t.status)),
-              ],
-            ),
-            const Divider(height: 20),
-            _row('Chofer', widget.fullName),
-            _row('Vehículo', t.vehicleType),
-            _row('Fecha', _fmtDate(t.requestedAt)),
-            _row('Pasajeros', '${t.numPasajes}'),
-            if (t.pickup != null)
-              _row('Recogida',
-                  '${t.pickup!.latitude.toStringAsFixed(5)}, ${t.pickup!.longitude.toStringAsFixed(5)}'),
-            if (t.dropoff != null)
-              _row('Destino',
-                  '${t.dropoff!.latitude.toStringAsFixed(5)}, ${t.dropoff!.longitude.toStringAsFixed(5)}'),
-            if (t.distanceKm != null)
-              _row('Distancia', '${t.distanceKm!.toStringAsFixed(2)} km'),
-            const Divider(height: 16),
-            _row(
-              'Precio',
-              '${(t.totalFare ?? t.precioEstimado ?? 0).toStringAsFixed(2)} ${t.currency}',
-              bold: true,
-            ),
-          ],
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: GlassSheet(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(_statusLabel(t.status),
+                        style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.tinta)),
+                  ),
+                  _chip(_statusLabel(t.status), _statusColor(t.status)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _row('Chofer', widget.fullName),
+              _row('Vehículo', t.vehicleType),
+              _row('Fecha', _fmtDate(t.requestedAt)),
+              _row('Pasajeros', '${t.numPasajes}'),
+              if (t.pickup != null)
+                _row('Recogida',
+                    '${t.pickup!.latitude.toStringAsFixed(5)}, ${t.pickup!.longitude.toStringAsFixed(5)}'),
+              if (t.dropoff != null)
+                _row('Destino',
+                    '${t.dropoff!.latitude.toStringAsFixed(5)}, ${t.dropoff!.longitude.toStringAsFixed(5)}'),
+              if (t.distanceKm != null)
+                _row('Distancia', '${t.distanceKm!.toStringAsFixed(2)} km'),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF8D6),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: const Color(0xFFF3E4A8)),
+                ),
+                child: Row(
+                  children: [
+                    const Text(
+                      'TOTAL',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.7,
+                        color: AppColors.ambar,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${(t.totalFare ?? t.precioEstimado ?? 0).toStringAsFixed(2)} ${t.currency}',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.tinta,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 2),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cerrar'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -151,7 +193,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Mi historial'),
@@ -160,63 +201,143 @@ class _HistoryScreenState extends State<HistoryScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!, textAlign: TextAlign.center),
-                      const SizedBox(height: 12),
-                      FilledButton(onPressed: _load, child: const Text('Reintentar')),
-                    ],
-                  ),
+              ? ListView(
+                  padding: const EdgeInsets.all(24),
+                  children: [
+                    const SizedBox(height: 30),
+                    const Icon(Icons.error_outline,
+                        size: 52, color: AppColors.error),
+                    const SizedBox(height: 12),
+                    Text(_error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.secundario)),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: OutlinedButton(
+                        onPressed: _load,
+                        child: const Text('Reintentar'),
+                      ),
+                    ),
+                  ],
                 )
               : RefreshIndicator(
                   onRefresh: _load,
                   child: _trips.isEmpty
                       ? ListView(
                           physics: const AlwaysScrollableScrollPhysics(),
-                          children: [
-                            const SizedBox(height: 120),
+                          padding: const EdgeInsets.all(24),
+                          children: const [
+                            SizedBox(height: 36),
                             Icon(Icons.receipt_long,
-                                size: 64, color: scheme.outlineVariant),
-                            const SizedBox(height: 12),
-                            Text('Aún no tienes viajes',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: scheme.onSurfaceVariant)),
+                                size: 56, color: AppColors.secundario),
+                            SizedBox(height: 12),
+                            Text(
+                              'Aún no tienes viajes',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.tinta,
+                              ),
+                            ),
+                            SizedBox(height: 6),
+                            Text(
+                              'Aquí aparecerán los viajes que completes.',
+                              textAlign: TextAlign.center,
+                              style:
+                                  TextStyle(color: AppColors.secundario, height: 1.4),
+                            ),
                           ],
                         )
                       : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                          padding: const EdgeInsets.all(16),
                           physics: const AlwaysScrollableScrollPhysics(),
                           itemCount: _trips.length,
-                          separatorBuilder: (context, index) => const SizedBox(height: 8),
+                          separatorBuilder: (context, index) =>
+                              const SizedBox(height: 10),
                           itemBuilder: (_, i) {
                             final t = _trips[i];
-                            return Card(
+                            final colorEstado = _statusColor(t.status);
+                            return Material(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(18),
                               clipBehavior: Clip.antiAlias,
-                              child: ListTile(
+                              child: InkWell(
                                 onTap: () => _showDetail(t),
-                                leading: CircleAvatar(
-                                  backgroundColor:
-                                      _statusColor(t.status).withValues(alpha: 0.18),
-                                  child: Icon(
-                                      t.status == 'completed'
-                                          ? Icons.check
-                                          : t.status == 'cancelled' ||
-                                                  t.status == 'expired'
-                                              ? Icons.close
-                                              : Icons.local_taxi,
-                                      color: _statusColor(t.status), size: 20),
-                                ),
-                                title: Text(
-                                    'Viaje ${t.tripId} · ${_statusLabel(t.status)}'),
-                                subtitle: Text(
-                                    '${_fmtDate(t.requestedAt)} · ${t.vehicleType}'),
-                                trailing: Text(
-                                  '${(t.totalFare ?? t.precioEstimado ?? 0).toStringAsFixed(2)} ${t.currency}',
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: scheme.primary),
+                                child: Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(color: AppColors.borde),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 42,
+                                        height: 42,
+                                        decoration: BoxDecoration(
+                                          color: colorEstado
+                                              .withValues(alpha: 0.12),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Icon(
+                                          t.status == 'completed'
+                                              ? Icons.check_rounded
+                                              : t.status == 'cancelled' ||
+                                                      t.status == 'expired'
+                                                  ? Icons.close_rounded
+                                                  : Icons.local_taxi_rounded,
+                                          color: colorEstado,
+                                          size: 20,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    _statusLabel(t.status),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontWeight: FontWeight.w700,
+                                                      color: AppColors.tinta,
+                                                    ),
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${(t.totalFare ?? t.precioEstimado ?? 0).toStringAsFixed(2)} ${t.currency}',
+                                                  style: const TextStyle(
+                                                    fontSize: 12.5,
+                                                    fontWeight: FontWeight.w800,
+                                                    color: AppColors.ambar,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${_fmtDate(t.requestedAt)} · ${t.vehicleType}',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: AppColors.secundario,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const Icon(Icons.chevron_right_rounded,
+                                          size: 20, color: AppColors.secundario),
+                                    ],
+                                  ),
                                 ),
                               ),
                             );

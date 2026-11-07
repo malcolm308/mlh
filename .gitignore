@@ -101,3 +101,5 @@ capturas/
 
 # Artefactos de Gradle dentro de android/ (los genera flutter build)
 frontend/*/android/build/
+
+tok.txt

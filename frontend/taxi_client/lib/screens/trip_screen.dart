@@ -13,6 +13,8 @@ import '../services/ws_cliente.dart';
 import '../theme/app_theme.dart';
 import '../widgets/client_map_view.dart';
 import '../widgets/ui/glass_sheet.dart';
+import '../widgets/ui/pill_button.dart';
+import '../widgets/ui/warning_box.dart';
 
 class TripScreen extends StatefulWidget {
   final ApiService api;
@@ -739,131 +741,357 @@ class _TripScreenState extends State<TripScreen> {
     final t = _trip!;
     final scheme = Theme.of(context).colorScheme;
     final steps = ['Solicitado', 'Chofer', 'Recogida', 'En curso', 'Completado'];
+    const stepIcons = [
+      Icons.access_time_rounded,
+      Icons.directions_car_outlined,
+      Icons.location_on_outlined,
+      Icons.navigation_outlined,
+      Icons.check_rounded,
+    ];
     final cancelled = t.status == 'cancelled' || t.status == 'expired';
+    final buscando = t.status == 'requested' || t.driverId == null;
+
+    // Hoja con tope de altura: el contenido completo puede crecer (radar,
+    // chofer, fichas y tarifa) y sin tope desbordaria en pantallas chicas.
+    final maxAlto = MediaQuery.of(context).size.height * 0.62;
 
     return Material(
-      color: scheme.surface,
-      elevation: 8,
+      color: Colors.white,
+      elevation: 0,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+      clipBehavior: Clip.antiAlias,
+      shadowColor: Colors.black.withValues(alpha: 0.18),
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                height: 44,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: steps.length,
-                  itemBuilder: (ctx, i) {
-                    final active = i <= _stepIndex && !cancelled;
-                    final current = i == _stepIndex && !cancelled;
-                    return Row(
-                      children: [
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            CircleAvatar(
-                              radius: 12,
-                              backgroundColor: current
-                                  ? AppColors.acento
-                                  : (active
-                                      ? Colors.green.shade600
-                                      : scheme.surfaceContainerHighest),
-                              child: current
-                                  ? const SizedBox(
-                                      width: 14,
-                                      height: 14,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: AppColors.tinta))
-                                  : Icon(
-                                      active
-                                          ? Icons.check
-                                          : Icons.circle_outlined,
-                                      size: 14,
-                                      color: active
-                                          ? Colors.white
-                                          : scheme.onSurfaceVariant,
-                                    ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(steps[i],
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    color: active
-                                        ? scheme.onSurface
-                                        : scheme.onSurfaceVariant)),
-                          ],
-                        ),
-                        if (i < steps.length - 1)
-                          SizedBox(
-                            width: 26,
-                            child: Divider(
-                                color: active ? Colors.green : scheme.outlineVariant),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-              const Divider(),
-              if (t.driverId != null) _tarjetaChofer(t),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                leading: const Icon(Icons.route),
-                title: Text(
-                    '${t.vehicleType} · ${t.currency} · ${t.requestedAt ?? ''}'),
-                subtitle: Text(
-                    'Precio estimado: ${t.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP'),
-              ),
-              if (t.status == 'completed') _buildSummary(t),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(_error!,
-                      style: TextStyle(color: scheme.error, fontSize: 12)),
-                ),
-              if (!cancelled && _stepIndex < 4)
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _cancelling ? null : _cancel,
-                    icon: _cancelling
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.close),
-                    label: const Text('Cancelar viaje'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: scheme.error,
-                      minimumSize: const Size.fromHeight(44),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxAlto),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Asa de la hoja.
+                Center(
+                  child: Container(
+                    width: 42,
+                    height: 4.5,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD2D6DB),
+                      borderRadius: BorderRadius.circular(3),
                     ),
                   ),
-                )
-              else if (_stepIndex == 4 || cancelled)
-                SizedBox(
+                ),
+                const SizedBox(height: 14),
+
+                // ---------------- STEPPER HORIZONTAL ----------------
+                Row(
+                  children: [
+                    for (var i = 0; i < steps.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 2),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Icon(
+                              stepIcons[i],
+                              size: 20,
+                              color: _stepColor(i, cancelled),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              steps[i],
+                              textAlign: TextAlign.center,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: (i == _stepIndex && !cancelled)
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                color: (i == _stepIndex && !cancelled)
+                                    ? AppColors.tinta
+                                    : AppColors.secundario,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (i < steps.length - 1)
+                        Container(
+                          height: 2,
+                          width: 10,
+                          margin: const EdgeInsets.only(bottom: 18),
+                          decoration: BoxDecoration(
+                            color: (!cancelled && i < _stepIndex)
+                                ? AppColors.acento
+                                : AppColors.borde,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 14),
+
+                // ---------------- ESTADO / CHOFER ----------------
+                if (buscando && !cancelled)
+                  _cardBuscando()
+                else if (t.driverId != null)
+                  _tarjetaChofer(t),
+                if (cancelled) ...[
+                  const WarningBox(
+                    title: 'Viaje cancelado',
+                    message:
+                        'Este viaje terminó sin completarse. Si lo cancelaste '
+                        'por error, solicita uno nuevo.',
+                    icon: Icons.info_outline_rounded,
+                  ),
+                  const SizedBox(height: 10),
+                ],
+
+                // ---------------- FICHAS DE DATOS ----------------
+                Row(
+                  children: [
+                    Expanded(
+                      child: _ficha(
+                        'CATEGORÍA',
+                        t.vehicleType,
+                        Icons.local_taxi_outlined,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _ficha(
+                        'SOLICITADO',
+                        (t.requestedAtLocal ?? t.requestedAt ?? '—')
+                            .split(',')
+                            .join(' · '),
+                        Icons.schedule_rounded,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+
+                // ---------------- TARIFA ESTIMADA ----------------
+                Container(
                   width: double.infinity,
-                  child: FilledButton.icon(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF8D6),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFFF3E4A8)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'TARIFA ESTIMADA',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.6,
+                                color: AppColors.ambar,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Al final se cobra lo recorrido, no lo estimado.',
+                              style: TextStyle(
+                                  fontSize: 11, color: AppColors.secundario),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        _precio(t),
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.tinta,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(_error!,
+                        style: TextStyle(color: scheme.error, fontSize: 12)),
+                  ),
+
+                // ---------------- CANCELAR / LISTO ----------------
+                if (!cancelled && _stepIndex < 4)
+                  _botonCancelar()
+                else if (_stepIndex == 4 || cancelled)
+                  PillButton(
+                    label: cancelled ? 'Volver al inicio' : 'Listo',
+                    icon: Icons.check_rounded,
                     onPressed: () {
-                      if (_popped) return;  // Prevent double pop
+                      if (_popped) return; // Prevent double pop
                       _popped = true;
                       // Si fue cancelado, indicar al home que resetee el estado
                       final result = cancelled ? 'cancelled' : null;
                       Navigator.of(context).pop(result);
                     },
-                    icon: const Icon(Icons.check),
-                    label: Text(cancelled ? 'Volver al inicio' : 'Listo'),
-                    style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(44)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Nombre completo del precio con la moneda del viaje.
+  String _precio(ClientTrip t) {
+    final m = t.currency.isNotEmpty ? t.currency : 'CUP';
+    final v = t.totalFare ?? t.precioEstimado;
+    return v == null ? '— $m' : '${v.toStringAsFixed(2)} $m';
+  }
+
+  /// Color del icono del stepper: el paso ACTIVO amarillo de marca, los
+  /// superados en ambar y los futuros en gris.
+  Color _stepColor(int i, bool cancelled) {
+    if (cancelled) return AppColors.deshabilitadoTexto;
+    if (i < _stepIndex) return AppColors.ambar;
+    if (i == _stepIndex) return AppColors.acento;
+    return AppColors.deshabilitadoTexto;
+  }
+
+  /// Tarjeta del radar de busqueda (estado `requested`, diseno B):
+  /// fondo ambar suave, punto pulsante y copia amable.
+  Widget _cardBuscando() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8D6),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFF3E4A8)),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.4,
+              color: AppColors.ambar,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Buscando el chófer más cercano',
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.ambar,
                   ),
                 ),
-            ],
+                SizedBox(height: 2),
+                Text(
+                  'Te avisaremos en cuanto uno acepte el viaje',
+                  style: TextStyle(fontSize: 12, color: AppColors.secundario),
+                ),
+              ],
+            ),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// Ficha de dato (Categoria / Solicitado): etiqueta gris, valor en
+  /// negrita y chip de icono a la derecha.
+  Widget _ficha(String etiqueta, String valor, IconData icono) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.campo,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.borde),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  etiqueta,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.6,
+                    color: AppColors.secundario,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  valor,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.tinta,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: const BoxDecoration(
+              color: AppColors.acentoSuave,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icono, size: 17, color: AppColors.ambar),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Boton "Cancelar viaje": fondo rojo MUY palido, texto e icono rojos.
+  Widget _botonCancelar() {
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: FilledButton.icon(
+        onPressed: _cancelling ? null : _cancel,
+        icon: _cancelling
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Color(0xFFD93840)))
+            : const Icon(Icons.close_rounded),
+        label: Text(_cancelling ? 'Cancelando...' : 'Cancelar viaje'),
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFFFBEAEA),
+          foregroundColor: const Color(0xFFD93840),
+          disabledBackgroundColor: const Color(0xFFFBEAEA),
+          disabledForegroundColor:
+              const Color(0xFFD93840).withValues(alpha: 0.5),
+          elevation: 0,
+          shape: const StadiumBorder(),
+          textStyle:
+              const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
         ),
       ),
     );
@@ -965,6 +1193,30 @@ class _TripScreenState extends State<TripScreen> {
               const SizedBox(height: 12),
               _botonesContacto(t.driverPhone!),
             ],
+            // El bloqueo tamien vive en el recibo: es donde el pasajero
+            // recuerda que no quiere volver a viajar con este chofer.
+            if (t.driverId != null) ...[
+              const SizedBox(height: 2),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _bloqueando ? null : () => _bloquearChofer(t),
+                  icon: _bloqueando
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.block_rounded, size: 16),
+                  label: const Text('Bloquear chófer'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.ambar,
+                    textStyle: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600),
+                    minimumSize: const Size(0, 34),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 28),
             FilledButton.icon(
               // Unico punto que cierra el viaje y devuelve al inicio.
@@ -993,31 +1245,6 @@ class _TripScreenState extends State<TripScreen> {
     _popped = true;
     _poll?.cancel();
     Navigator.of(context).pop('completed');
-  }
-
-  Widget _buildSummary(ClientTrip t) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 8),
-        Text('Detalles del viaje',
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
-        _row('Distancia', '${t.distanciaKm?.toStringAsFixed(2) ?? '-'} km'),
-        _row('Base', '${t.baseFare?.toStringAsFixed(2) ?? '-'} CUP'),
-        _row('Distancia', '${t.distanceFare?.toStringAsFixed(2) ?? '-'} CUP'),
-        _row('Tiempo', '${t.timeFare?.toStringAsFixed(2) ?? '-'} CUP'),
-        // El pasajero solo ve el precio final. La comision es interna y se
-        // descuenta del Fondo del chofer, nunca del precio del viaje.
-        const Divider(height: 12),
-        _row('TOTAL', '${t.totalFare?.toStringAsFixed(2) ?? '-'} CUP',
-            bold: true),
-        const SizedBox(height: 8),
-      ],
-    );
   }
 
   /// Fila etiqueta-valor del recibo.
@@ -1056,23 +1283,27 @@ class _TripScreenState extends State<TripScreen> {
     return raw.startsWith('http') ? raw : '${ApiConfig.baseUrl}$raw';
   }
 
-  /// Tarjeta del chofer asignado: foto, nombre, vehiculo y botones de
-  /// contacto. La vista del recibo (`_buildSummary`) reutiliza los botones.
+  /// Tarjeta del chofer asignado (diseno B): foto con anillo amarillo de
+  /// marca, nombre en negrita y debajo la ficha del vehiculo
+  /// (tipo • modelo • matricula), con los botones de contacto en pildora.
   Widget _tarjetaChofer(ClientTrip t) {
     final foto = _fotoChofer(t);
+    final tipo = t.vehicleType.trim();
     final modelo = t.driverVehicleModel?.trim();
     final placa = t.driverVehiclePlate?.trim();
     final detalle = [
+      if (tipo.isNotEmpty) tipo,
       if (modelo != null && modelo.isNotEmpty) modelo,
       if (placa != null && placa.isNotEmpty) 'Matrícula $placa',
-    ].join(' · ');
+    ].join(' • ');
 
     return Container(
+      width: double.infinity,
       margin: const EdgeInsets.only(top: 4, bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppColors.campo,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.borde),
       ),
       child: Column(
@@ -1080,27 +1311,46 @@ class _TripScreenState extends State<TripScreen> {
         children: [
           Row(
             children: [
-              CircleAvatar(
-                radius: 26,
-                backgroundColor: AppColors.acentoSuave,
-                foregroundImage: foto == null ? null : NetworkImage(foto),
-                onForegroundImageError: foto == null ? null : (_, _) {},
-                child: const Icon(Icons.person,
-                    size: 30, color: AppColors.ambar),
+              // Anillo amarillo de marca alrededor de la foto facial.
+              Container(
+                padding: const EdgeInsets.all(2.5),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.acento, width: 2.5),
+                ),
+                child: CircleAvatar(
+                  radius: 26,
+                  backgroundColor: AppColors.acentoSuave,
+                  foregroundImage: foto == null ? null : NetworkImage(foto),
+                  onForegroundImageError: foto == null ? null : (_, _) {},
+                  child: const Icon(Icons.person,
+                      size: 28, color: AppColors.ambar),
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const Text(
+                      'TU CHOFER',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.7,
+                        color: AppColors.secundario,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
                     Text(
                       _nombreChofer(t),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.tinta),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.tinta,
+                      ),
                     ),
                     if (detalle.isNotEmpty) ...[
                       const SizedBox(height: 2),
@@ -1109,7 +1359,9 @@ class _TripScreenState extends State<TripScreen> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontSize: 12, color: AppColors.secundario),
+                          fontSize: 12.5,
+                          color: AppColors.secundario,
+                        ),
                       ),
                     ],
                   ],
@@ -1118,10 +1370,9 @@ class _TripScreenState extends State<TripScreen> {
             ],
           ),
           if (t.driverPhone != null && t.driverPhone!.isNotEmpty) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             _botonesContacto(t.driverPhone!),
           ],
-          const SizedBox(height: 2),
           Align(
             alignment: Alignment.centerRight,
             child: TextButton.icon(
@@ -1138,7 +1389,7 @@ class _TripScreenState extends State<TripScreen> {
                 textStyle: const TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w600),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 34),
+                minimumSize: const Size(0, 30),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ),
@@ -1153,6 +1404,10 @@ class _TripScreenState extends State<TripScreen> {
   /// El bloqueo lo guarda el backend por usuario y chofer (idempotente): si ya
   /// estaba bloqueado solo se actualiza el motivo. La lista se ve luego en
   /// "Chóferes bloqueados" del menu lateral.
+  ///
+  /// El error del backend se muestra TAL CUAL en el aviso: con un mensaje
+  /// generico el pasajero no distingue un fallo de red de un rechazo del
+  /// servidor, y el bloqueo "no hace nada" sin pista de por que.
   Future<void> _bloquearChofer(ClientTrip t) async {
     final driverId = t.driverId;
     if (driverId == null || driverId.isEmpty || _bloqueando) return;
@@ -1241,7 +1496,7 @@ class _TripScreenState extends State<TripScreen> {
       _aviso_('Chófer bloqueado. No volverás a emparejarte con él.');
     } catch (e) {
       if (!mounted) return;
-      _aviso_('No se pudo bloquear al chófer. Inténtalo otra vez.');
+      _aviso_('No se pudo bloquear al chófer: $e');
     } finally {
       if (mounted) setState(() => _bloqueando = false);
     }
@@ -1298,22 +1553,52 @@ class _TripScreenState extends State<TripScreen> {
         content: Text(mensaje), behavior: SnackBarBehavior.floating));
   }
 
-  /// Botones Llamar / WhatsApp compartidos por el panel y el recibo.
+  /// Botones Llamar / WhatsApp en pildora, compartidos por el panel del viaje
+  /// y el recibo.
+  ///
+  ///  * WhatsApp: verde palido con borde verde suave (accion preferida).
+  ///  * Llamar: azul palido con borde azul suave.
   Widget _botonesContacto(String telefono) => Row(
         children: [
           Expanded(
-            child: OutlinedButton.icon(
-              onPressed: () => _comunicar(telefono, whatsapp: false),
-              icon: const Icon(Icons.call),
-              label: const Text('Llamar'),
+            child: FilledButton.icon(
+              onPressed: () => _comunicar(telefono, whatsapp: true),
+              icon: const Icon(Icons.chat_outlined, size: 18),
+              label: const Text('WhatsApp'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFE9F6EE),
+                foregroundColor: const Color(0xFF1E7A3D),
+                disabledBackgroundColor: const Color(0xFFE9F6EE),
+                elevation: 0,
+                minimumSize: const Size(0, 44),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: const StadiumBorder(
+                  side: BorderSide(color: Color(0xFFBFE3CD)),
+                ),
+                textStyle: const TextStyle(
+                    fontSize: 13.5, fontWeight: FontWeight.w700),
+              ),
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: FilledButton.icon(
-              onPressed: () => _comunicar(telefono, whatsapp: true),
-              icon: const Icon(Icons.chat),
-              label: const Text('WhatsApp'),
+              onPressed: () => _comunicar(telefono, whatsapp: false),
+              icon: const Icon(Icons.phone_rounded, size: 18),
+              label: const Text('Llamar'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFEAF2FE),
+                foregroundColor: const Color(0xFF1A73E8),
+                disabledBackgroundColor: const Color(0xFFEAF2FE),
+                elevation: 0,
+                minimumSize: const Size(0, 44),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: const StadiumBorder(
+                  side: BorderSide(color: Color(0xFFBBD3F5)),
+                ),
+                textStyle: const TextStyle(
+                    fontSize: 13.5, fontWeight: FontWeight.w700),
+              ),
             ),
           ),
         ],

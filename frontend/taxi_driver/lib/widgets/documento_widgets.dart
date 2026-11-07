@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../theme/app_theme.dart';
+
 /// Los 10 documentos que debe subir el chofer para que el administrador lo apruebe.
 class DocumentoRequerido {
   const DocumentoRequerido(this.campo, this.etiqueta, this.icono, {this.ayuda});
@@ -195,15 +197,18 @@ class _BotonFoto extends StatelessWidget {
         width: 68,
         padding: const EdgeInsets.symmetric(vertical: 6),
         decoration: BoxDecoration(
-          color: const Color(0xFF007AFF).withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(8),
+          color: AppColors.acentoSuave,
+          borderRadius: BorderRadius.circular(10),
         ),
         child: Column(
           children: [
-            Icon(icono, size: 18, color: const Color(0xFF007AFF)),
+            Icon(icono, size: 18, color: AppColors.ambar),
             const SizedBox(height: 2),
             Text(etiqueta,
-                style: const TextStyle(fontSize: 10, color: Color(0xFF007AFF))),
+                style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.ambar)),
           ],
         ),
       ),

@@ -2500,19 +2500,19 @@ final pts = await widget.api.getTripRoute(trip.tripId);
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(
-              color: const Color(0xFF007AFF).withValues(alpha: 0.10),
+              color: AppColors.ambar.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Icon(Icons.timer_outlined,
-                    size: 14, color: Color(0xFF007AFF)),
+                    size: 14, color: AppColors.ambar),
                 const SizedBox(width: 4),
                 Text(
                   'Acepta en: $_offerCountdown s',
                   style: const TextStyle(
-                      color: Color(0xFF007AFF),
+                      color: AppColors.ambar,
                       fontSize: 12,
                       fontWeight: FontWeight.bold),
                 ),
@@ -2718,7 +2718,7 @@ Widget _buildRouteCard(TripOffer o) {
               child: Column(
 children: [
                   const Icon(Icons.person,
-                      size: 18, color: Color(0xFF007AFF)),
+                      size: 18, color: AppColors.ambar),
                   Expanded(
                     child: Container(
                         width: 2, color: const Color(0xFFD1D5DB)),

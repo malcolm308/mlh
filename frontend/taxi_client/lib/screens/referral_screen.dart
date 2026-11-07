@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../api_config.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 
 /// Pantalla de referidos: muestra el código personal, permite compartirlo
 /// y ver cuántos descuentos tiene disponibles.
@@ -137,11 +138,21 @@ class _ReferralScreenState extends State<ReferralScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                      const SizedBox(height: 30),
+                      const Icon(Icons.error_outline,
+                          size: 52, color: AppColors.error),
+                      const SizedBox(height: 12),
+                      Text(_error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: AppColors.secundario, height: 1.4)),
                       const SizedBox(height: 16),
-                      Text(_error!),
-                      const SizedBox(height: 16),
-                      FilledButton(onPressed: _loadAll, child: const Text('Reintentar')),
+                      Center(
+                        child: OutlinedButton(
+                          onPressed: _loadAll,
+                          child: const Text('Reintentar'),
+                        ),
+                      ),
                     ],
                   ),
                 )
@@ -197,9 +208,9 @@ class _ReferralScreenState extends State<ReferralScreen> {
                           child: Row(
                             children: [
                               Icon(
-                                Icons.discount,
-                                size: 40,
-                                color: scheme.primary,
+                                Icons.discount_rounded,
+                                size: 34,
+                                color: AppColors.ambar,
                               ),
                               const SizedBox(width: 16),
                               Expanded(
@@ -325,15 +336,60 @@ class _ReferralScreenState extends State<ReferralScreen> {
                               ),
                         ),
                         const SizedBox(height: 8),
-                        ..._referred.map((r) => Card(
-                              child: ListTile(
-                                leading: CircleAvatar(
-                                  child: Text(
-                                    (r['full_name']?.toString() ?? '?')[0].toUpperCase(),
-                                  ),
+                        ..._referred.map((r) => Material(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              clipBehavior: Clip.antiAlias,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: AppColors.borde),
                                 ),
-                                title: Text(r['full_name']?.toString() ?? 'Usuario'),
-                                subtitle: Text(r['email']?.toString() ?? ''),
+                                child: Row(
+                                  children: [
+                                    CircleAvatar(
+                                      backgroundColor: AppColors.acentoSuave,
+                                      child: Text(
+                                        ((r['full_name']?.toString() ?? '?')[0])
+                                            .toUpperCase(),
+                                        style: const TextStyle(
+                                          color: AppColors.ambar,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            r['full_name']?.toString() ??
+                                                'Usuario',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.tinta,
+                                            ),
+                                          ),
+                                          Text(
+                                            r['email']?.toString() ?? '',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: AppColors.secundario,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             )),
                       ],
@@ -352,16 +408,16 @@ class _ReferralScreenState extends State<ReferralScreen> {
           Container(
             width: 24,
             height: 24,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary,
+            decoration: const BoxDecoration(
+              color: AppColors.acento,
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
             child: Text(
               num,
               style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+                color: AppColors.tinta,
+                fontWeight: FontWeight.w800,
                 fontSize: 12,
               ),
             ),

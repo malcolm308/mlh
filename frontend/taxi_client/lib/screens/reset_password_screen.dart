@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 
 /// Paso 2 de la recuperacion: codigo recibido por correo + contrasena nueva.
 class ResetPasswordScreen extends StatefulWidget {
@@ -90,21 +91,22 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.password, size: 64, color: Color(0xFF007AFF)),
+                const Icon(Icons.password, size: 64, color: AppColors.ambar),
                 const SizedBox(height: 12),
                 Text(
                   'Código enviado a\n${widget.email}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                       fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF333333)),
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.tinta),
                 ),
                 const SizedBox(height: 8),
                 const Text(
                   'Escribe el código de 6 dígitos del correo y tu contraseña nueva.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Color(0xFF888888)),
+                  style:
+                      TextStyle(color: AppColors.secundario, height: 1.4),
                 ),
                 const SizedBox(height: 24),
                 TextFormField(
@@ -119,7 +121,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   decoration: const InputDecoration(
                     labelText: 'Código de 6 dígitos',
                     prefixIcon: Icon(Icons.pin_outlined),
-                    border: OutlineInputBorder(),
                     counterText: '',
                   ),
                   validator: (v) {
@@ -137,7 +138,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   decoration: const InputDecoration(
                     labelText: 'Contraseña nueva',
                     prefixIcon: Icon(Icons.lock_outline),
-                    border: OutlineInputBorder(),
                   ),
                   validator: (v) => (v == null || v.length < 4)
                       ? 'Mínimo 4 caracteres'
@@ -150,7 +150,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   decoration: const InputDecoration(
                     labelText: 'Confirmar contraseña nueva',
                     prefixIcon: Icon(Icons.lock_outline),
-                    border: OutlineInputBorder(),
                   ),
                   validator: (v) => (v == null || v.isEmpty)
                       ? 'Confirma tu contraseña'
@@ -174,8 +173,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       : const Icon(Icons.check),
                   label: Text(_loading ? 'Guardando...' : 'Cambiar contraseña'),
                   style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
-                    backgroundColor: const Color(0xFF007AFF),
+                    minimumSize: const Size.fromHeight(52),
                   ),
                 ),
                 const SizedBox(height: 12),
