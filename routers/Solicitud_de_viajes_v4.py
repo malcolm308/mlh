@@ -3534,6 +3534,53 @@ async def api_get_trip_history(client_id: str, limit: int = Query(50, le=200)):
     return resultado
 
 
+@router.get("/trips/client/{client_id}/resumen")
+async def api_resumen_viajes_cliente(client_id: str):
+    """Conteos por estado de los viajes del cliente, para su Perfil.
+
+    No viaja la lista completa: son los NUMEROS que ve el pasajero en
+    "Mi perfil" (pedidos, realizados, cancelados y lo gastado). Con un solo
+    GROUP BY basta; pedir `/trips/history` solo para contar seria pesado.
+
+    `pedidos` = todos los registros (incluidos los que no se aceptaron),
+    `realizados` = status `completed`, y el resto de estados sale crudo para
+    que la app no dependa de nombres que pueden variar.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT status, COUNT(*)::int AS cantidad
+            FROM trips WHERE client_id = %s GROUP BY status;
+            """,
+            (client_id,),
+        )
+        conteos = {r["status"]: int(r["cantidad"]) for r in cur.fetchall()}
+        cur.execute(
+            """
+            SELECT
+                COUNT(*)::int AS realizados,
+                COALESCE(SUM(distance_km), 0)::float8 AS kilometros,
+                COALESCE(SUM(total_fare), 0)::float8 AS gastado
+            FROM trips
+            WHERE client_id = %s AND status = 'completed';
+            """,
+            (client_id,),
+        )
+        fila = cur.fetchone() or {}
+        cur.close()
+    total = sum(conteos.values())
+    return {
+        "client_id": client_id,
+        "pedidos": total,
+        "realizados": int(fila.get("realizados") or 0),
+        "cancelados": conteos.get("cancelled", 0),
+        "por_estado": conteos,
+        "kilometros": float(fila.get("kilometros") or 0),
+        "total_gastado": float(fila.get("gastado") or 0),
+    }
+
+
 @router.get("/trips/driver/{driver_id}")
 async def api_get_trips_by_driver(driver_id: str, limit: int = Query(50, le=200)):
     viajes = get_trips_by_driver(driver_id, limit)

@@ -592,6 +592,35 @@ async def obtener_promocion(admin: dict = Depends(require_admin)):
     return _a_json(promo)
 
 
+@router.get("/vigente")
+async def promocion_vigente():
+    """Promociones y bonificaciones VIGENTES para las apps (sin auth).
+
+    Es la misma fila del panel (`promociones`, id=1), palabra por palabra, solo
+    con los campos de cara al usuario: descuento del cliente, bono del chofer,
+    programa de referidos y vigencia. Sin precios internos ni coordenadas.
+
+    La app muestra esto en el menu: si `descuento_aplicando` es False no hay
+    promocion para clientes, y si `bono_chofer_activo` es False (o ya expiro)
+    no hay bonificacion para choferes.
+    """
+    promo = leer_promocion()
+    return {
+        "descuento_cliente_activo": promo["descuento_cliente_activo"],
+        "descuento_cliente_porcentaje": float(promo["descuento_cliente_porcentaje"]),
+        "descuento_cliente_porcentaje_texto":
+            _porcentaje(promo["descuento_cliente_porcentaje"]),
+        "descuento_aplicando": promo["descuento_aplicando"],
+        "referidos_activos": bool(promo.get("referidos_activos", True)),
+        "bono_chofer_activo": promo["bono_chofer_activo"],
+        "bono_chofer_monto": float(promo["bono_chofer_monto"]),
+        "bono_chofer_viajes_requeridos": promo["bono_chofer_viajes_requeridos"],
+        "expirada": promo["expirada"],
+        "fecha_expiracion": (promo["fecha_expiracion"].isoformat()
+                             if promo["fecha_expiracion"] else None),
+    }
+
+
 @router.post("")
 async def guardar_promocion(datos: PromoIn, admin: dict = Depends(require_admin)):
     limpio = _validar(datos)

@@ -55,6 +55,13 @@ class BloqueoCreate(BaseModel):
     trip_id: str
     motivo: str
 
+
+class PasajeroBloqueoCreate(BaseModel):
+    """El chofer bloquea a un PASAJERO: simetrico a [BloqueoCreate]."""
+    passenger_id: str
+    trip_id: str
+    motivo: str
+
 @router.post("/bloquear-chofer", status_code=201)
 async def bloquear_chofer(body: BloqueoCreate, user: dict = Depends(get_current_user)):
     """Bloquea a un chofer para el usuario actual.
@@ -77,6 +84,33 @@ async def bloquear_chofer(body: BloqueoCreate, user: dict = Depends(get_current_
     result = incidencias_coleccion.insert_one(incidencia)
     return {"message": "Chofer bloqueado e incidencia creada", "incidencia_id": str(result.inserted_id)}
 
+
+@router.post("/bloquear-pasajero", status_code=201)
+async def bloquear_pasajero(body: PasajeroBloqueoCreate,
+                            user: dict = Depends(get_current_user)):
+    """Bloquea a un PASAJERO para el chofer actual.
+
+    Mismo contrato y misma coleccion que `/bloquear-chofer`: identico por
+    (usuario, pasajero), guarda `passenger_id` en vez de `driver_id` y opne la
+    incidencia `bloqueo_pasajero`.
+    """
+    ahora = datetime.utcnow()
+    resultado = bloqueos_coleccion.update_one(
+        {"user_id": user["id"], "passenger_id": body.passenger_id},
+        {"$set": {"trip_id": body.trip_id, "motivo": body.motivo, "fecha": ahora}},
+        upsert=True,
+    )
+    if resultado.upserted_id is None:
+        return {"message": "Pasajero ya estaba bloqueado; se actualizo el motivo",
+                "incidencia_id": None}
+    incidencia = {"trip_id": body.trip_id, "user_id": user["id"],
+                  "passenger_id": body.passenger_id,
+                  "tipo": "bloqueo_pasajero", "motivo": body.motivo,
+                  "estado": "pendiente", "fecha": ahora}
+    result = incidencias_coleccion.insert_one(incidencia)
+    return {"message": "Pasajero bloqueado e incidencia creada",
+            "incidencia_id": str(result.inserted_id)}
+
 @router.get("/bloqueos")
 async def listar_bloqueos(user: dict = Depends(get_current_user)):
     """Bloqueos del usuario actual, con el nombre del chofer si existe."""
@@ -84,38 +118,52 @@ async def listar_bloqueos(user: dict = Depends(get_current_user)):
     for b in bloqueos:
         b["id"] = str(b["_id"])
         del b["_id"]
+        # Resuelve el nombre de la persona bloqueada segun el lado: el
+        # pasajero bloquea CHOFERES (driver_id) y el chofer bloquea
+        # PASAJEROS (passenger_id). Pueden convivir en la misma lista.
         driver_id = b.get("driver_id")
-        nombre = None
         if driver_id and ObjectId.is_valid(str(driver_id)):
             chofer = chofer_db.users.find_one(
                 {"_id": ObjectId(str(driver_id))},
                 {"Nombre": 1, "Apellidos": 1})
             if chofer:
-                nombre = " ".join(filter(None, [
+                b["driver_name"] = " ".join(filter(None, [
                     chofer.get("Nombre"), chofer.get("Apellidos")])).strip() or None
-        b["driver_name"] = nombre
+        passenger_id = b.get("passenger_id")
+        if passenger_id and ObjectId.is_valid(str(passenger_id)):
+            pasajero = cliente_db.users.find_one(
+                {"_id": ObjectId(str(passenger_id))},
+                {"Nombre": 1, "Apellidos": 1})
+            if pasajero:
+                b["passenger_name"] = " ".join(filter(None, [
+                    pasajero.get("Nombre"), pasajero.get("Apellidos")])).strip() or None
     return bloqueos
 
 
-@router.delete("/bloqueos/{driver_id}")
-async def desbloquear_chofer(driver_id: str, user: dict = Depends(get_current_user)):
-    """Desbloquea un chofer para el usuario actual.
+@router.delete("/bloqueos/{bloqueado_id}")
+async def desbloquear(bloqueado_id: str, user: dict = Depends(get_current_user)):
+    """Desbloquea un chofer o un pasajero para el usuario actual.
 
-    Borra el bloqueo (sea cual de las formas guardadas sea el `driver_id`) y
-    deja `resuelta` la incidencia de bloqueo que lo originó. 404 si ese chofer
-    no estaba bloqueado por este usuario.
+    El id puede ser el `driver_id` o el `passenger_id` del bloqueo. Borra el
+    documento y deja `resuelta` la incidencia que lo origen. 404 si no estaba
+    bloqueado por este usuario.
     """
-    criterios = [driver_id]
-    if ObjectId.is_valid(driver_id):
-        criterios.append(str(ObjectId(driver_id)))
+    criterios = [bloqueado_id]
+    if ObjectId.is_valid(bloqueado_id):
+        criterios.append(str(ObjectId(bloqueado_id)))
     resultado = bloqueos_coleccion.delete_one(
-        {"user_id": user["id"], "driver_id": {"$in": criterios}})
+        {"user_id": user["id"],
+         "$or": [{"driver_id": {"$in": criterios}},
+                 {"passenger_id": {"$in": criterios}}]})
     if resultado.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Ese chofer no está bloqueado")
+        raise HTTPException(status_code=404, detail="Esa persona no está bloqueada")
     # La incidencia ya no representa un bloqueo vivo: se cierra para que no
-    # quede "pendiente" en la cola del administrador para siempre.
+    # quede "pendiente" en la cola del administrador para siempre. Matchea el
+    # lado que corresponda: chofer bloqueado (driver_id) o pasajero.
     incidencias_coleccion.update_many(
-        {"user_id": user["id"], "driver_id": {"$in": criterios},
-         "tipo": "bloqueo_chofer", "estado": "pendiente"},
+        {"user_id": user["id"],
+         "$or": [{"driver_id": {"$in": criterios}},
+                 {"passenger_id": {"$in": criterios}}],
+         "estado": "pendiente"},
         {"$set": {"estado": "resuelta", "fecha_resolucion": datetime.utcnow()}})
-    return {"message": "Chofer desbloqueado"}
+    return {"message": "Desbloqueado"}
