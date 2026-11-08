@@ -8,6 +8,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api_config.dart';
 import '../models/models.dart';
+import '../services/api_client.dart';
 import '../services/api_service.dart';
 import '../services/cancellation_service.dart';
 import '../widgets/menu_lateral_chofer.dart';
@@ -22,6 +23,7 @@ import '../services/route_recalculation_service.dart';
 import '../services/trip_notification_service.dart';
 import '../services/update_service.dart';
 import '../services/ofertas_background_service.dart';
+import '../services/token_store.dart';
 import '../services/asistente_ruta.dart';
 import '../services/filtro_gps.dart';
 import '../services/ws_chofer.dart';
@@ -356,6 +358,9 @@ double? _rumboParaFlecha() {
   @override
   void initState() {
     super.initState();
+
+    // Si el refresh token caduca, ApiClient limpia la sesion y avisa aqui.
+    ApiClient.alExpirarSesion = _sesionExpirada;
 
     // Traza de navegacion a fichero. Se abre aqui y no mas tarde porque el
     // problema que se diagnostica (rumbo, rotacion de camara) aparece en los
@@ -2247,6 +2252,18 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     );
   }
 
+  /// El access y el refresh ya no sirven: se apaga el servicio y se vuelve al
+  /// Login. Los tokens los borra `ApiClient` antes de llamar aqui.
+  void _sesionExpirada() {
+    if (!mounted) return;
+    if (_online) {
+      unawaited(WakelockPlus.disable());
+      unawaited(_bg.detener());
+      _ws.detener();
+    }
+    Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false);
+  }
+
   Future<void> _logout() async {
     // Salir deja de custodiar nada: sin wakelock (la pantalla puede apagarse)
     // y sin servicio en primer plano (la notificacion "Buscando viajes..."
@@ -2262,8 +2279,9 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     }
     await _limpiarMarcadorViaje();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('driver_token');
+    await TokenStore.instance.limpiar();
     await prefs.remove('driver_id');
+    widget.api.token = null;
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false);
   }

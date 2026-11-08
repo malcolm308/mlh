@@ -1,19 +1,20 @@
-from datetime import datetime, timedelta
-from jose import JWTError, jwt
+"""JWT del chofer. La logica vive en `db/tokens.py`."""
 
-SECRET_KEY = "TaxiRapid_SecretKey_2026"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+from db.tokens import (ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY,
+                       create_access_token as _create_access,
+                       create_refresh_token as _create_refresh,
+                       verify_token as _verify_token)
 
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+APP = "driver"
+
+
+def create_access_token(data: dict) -> str:
+    return _create_access(data, app=APP)
+
+
+def create_refresh_token(data: dict) -> str:
+    return _create_refresh(data, app=APP)
+
 
 def verify_token(token: str):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
-        return None
+    return _verify_token(token)

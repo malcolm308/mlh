@@ -10,8 +10,13 @@ import 'package:flutter_patcher/flutter_patcher.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show MapLibreMap;
 
 import 'services/ofertas_background_service.dart';
+import 'services/api_client.dart';
 import 'screens/login_screen.dart';
 import 'theme/app_theme.dart';
+
+/// Permite navegar al Login desde `ApiClient` cuando el refresh caduca, sin
+/// acoplar el transporte HTTP a una pantalla concreta.
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   // El canal de notificacion del SERVICIO debe existir desde la primera
@@ -39,6 +44,11 @@ Future<void> main() async {
   } catch (_) {}
 
   MapLibreMap.useHybridComposition = true;
+  // Red de seguridad: si la sesion caduca en una pantalla que no sea el home,
+  // se vuelve al Login. El home instala su propio aviso para apagar el servicio.
+  ApiClient.alExpirarSesion = () {
+    navigatorKey.currentState?.pushNamedAndRemoveUntil('/', (r) => false);
+  };
   try {
     await crearCanalServicio();
   } catch (_) {
@@ -56,6 +66,7 @@ class TaxiDriverApp extends StatelessWidget {
     return MaterialApp(
         title: 'RapiTaxi Chofer',
       debugShowCheckedModeBanner: false,
+      navigatorKey: navigatorKey,
       routes: {'/': (_) => const LoginScreen()},
       theme: AppTheme.light(),
     );

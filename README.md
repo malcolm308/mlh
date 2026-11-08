@@ -76,6 +76,46 @@ flutter build apk --release `
 En produccion los valores llegan por variables de entorno; no se escriben
 credenciales ni URLs privadas en el repositorio.
 
+## Sesion: access + refresh token
+
+El login (`POST /login`) devuelve dos JWT:
+
+| Token | Vida | Para que |
+|---|---|---|
+| `access_token` | 2 h | Va en `Authorization: Bearer` de cada peticion |
+| `refresh_token` | 30 dias | Solo para `POST /auth/refresh` |
+
+Cuando una peticion devuelve `401`, la app pide un access nuevo a
+`/auth/refresh` y **repite la peticion original**; el usuario no ve nada. Varias
+peticiones que fallan a la vez comparten un unico refresh (single-flight). Si el
+refresh tambien caduca o el backend lo rechaza, se borran los tokens y se vuelve
+al Login. Si el fallo es de red, la sesion **no** se borra: se reintenta luego.
+
+Flutter guarda el access y el refresh en el almacenamiento seguro del sistema
+(`flutter_secure_storage`), y mantiene una copia del access en
+`SharedPreferences` (`client_token` / `driver_token`) para el resto de la app y
+para el servicio de ofertas del chofer. Esa copia en claro es del access (2 h),
+nunca del refresh.
+
+Variables opcionales en Render:
+
+| Variable | Default | Efecto |
+|---|---|---|
+| `JWT_SECRET_KEY` | valor historico | Cambiarla invalida todas las sesiones |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `120` | Vida del access |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | Vida del refresh |
+
+`/healthz`, `/readyz` y `/app/version` siguen **sin autenticacion**: la app
+puede comprobar actualizaciones aunque la sesion haya caducado.
+
+Los tokens emitidos antes de este cambio no tienen refresh ni el claim `type`;
+siguen valiendo como access hasta que caduquen. Al desplegar, esos usuarios
+tendran que iniciar sesion una vez para recibir el par nuevo.
+
+> **Ojo con OTA:** `flutter_secure_storage` es un plugin nativo. La version que
+> lo introduce (1.0.4) debe publicarse como **APK completo**, no como parche
+> Dart.
+
 ## Recuperacion de contrasena por correo (SMTP)
 
 Los endpoints `POST /auth/forgot-password` y `POST /auth/reset-password`

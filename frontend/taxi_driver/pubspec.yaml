@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.3+4
+version: 1.0.4+5
 
 environment:
   sdk: ^3.11.5
@@ -69,6 +69,7 @@ dependencies:
   # Aplica el parche en el siguiente arranque en frio; nunca en caliente.
   flutter_patcher: 0.1.4
   package_info_plus: ^10.2.2
+  flutter_secure_storage: ^11.2.0
 
 # app_badge_plus 1.4.0 rompe el build de Android (usa `kotlin()` en su
 # build.gradle, metodo que no existe con el plugin Android de este proyecto).

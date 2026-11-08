@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import '../api_config.dart';
+import 'token_store.dart';
 
 /// Error de red o de respuesta HTTP, con mensaje legible para el usuario.
 class ApiException implements Exception {
@@ -40,7 +44,11 @@ class ApiClient {
   /// conexiones ociosas (`HttpClient.maxConnectionsPerHost` y el pool nativo
   /// se encargan) y manda `Accept-Encoding: gzip` de serie, de modo que
   /// cuando el backend responde comprimido se descomprime solo.
-  static final http.Client _cliente = http.Client();
+  static http.Client _cliente = http.Client();
+
+  /// Permite inyectar un cliente falso en las pruebas.
+  @visibleForTesting
+  static set clienteDePruebas(http.Client cliente) => _cliente = cliente;
 
   /// Caché de lecturas GET por prefijo de URL con su TTL.
   ///
@@ -73,6 +81,114 @@ class ApiClient {
 
   /// Token JWT que se manda como `Authorization: Bearer <token>`.
   static String? token;
+
+  // ---------------- SESION / REFRESH ----------------
+  //
+  // Ganchos sobreescribibles para las pruebas. En produccion apuntan a
+  // [TokenStore]; asi el test del interceptor no necesita el plugin nativo.
+
+  static Future<String?> Function() leerRefreshToken =
+      () => TokenStore.instance.leerRefresh();
+  static Future<void> Function(String) guardarAccessToken =
+      (t) => TokenStore.instance.guardarAccess(t);
+  static Future<void> Function() limpiarSesion =
+      () => TokenStore.instance.limpiar();
+
+  /// Se invoca UNA vez cuando el refresh es rechazado (sesion caducada).
+  static void Function()? alExpirarSesion;
+
+  static Future<bool>? _refreshEnCurso;
+  static bool _sesionCerrada = false;
+
+  /// La llama el login tras guardar tokens: reactiva el aviso de expiracion.
+  static void marcarSesionActiva() {
+    _sesionCerrada = false;
+  }
+
+  /// `/login` y `/auth/refresh` pueden devolver 401 de forma legitima (datos
+  /// incorrectos); nunca deben disparar otro refresh ni cerrar la sesion.
+  static bool _esRutaSinRefresh(String url) {
+    final ruta = Uri.parse(url).path;
+    return ruta.endsWith('/login') || ruta.endsWith('/auth/refresh');
+  }
+
+  /// Ejecuta la peticion y, si responde 401, refresca el access y la repite
+  /// UNA vez. Si el refresh falla, devuelve el 401 original para que quien
+  /// llama muestre el error de siempre.
+  static Future<http.Response> _ejecutarConAuth(
+    Future<http.Response> Function() accion, {
+    required String url,
+    Duration? timeout,
+  }) async {
+    final r = await _ejecutar(accion, timeout: timeout);
+    if (r.statusCode != 401 || _esRutaSinRefresh(url)) return r;
+    if (!await _renovarAccess()) return r;
+    return _ejecutar(accion, timeout: timeout);
+  }
+
+  /// Single-flight: varias peticiones que fallan a la vez comparten el mismo
+  /// refresh en lugar de lanzar uno cada una.
+  static Future<bool> _renovarAccess() {
+    final enCurso = _refreshEnCurso;
+    if (enCurso != null) return enCurso;
+    final futuro = _hacerRefresh();
+    _refreshEnCurso = futuro;
+    return futuro.whenComplete(() {
+      if (identical(_refreshEnCurso, futuro)) _refreshEnCurso = null;
+    });
+  }
+
+  static Future<bool> _hacerRefresh() async {
+    final refresh = await leerRefreshToken();
+    if (refresh == null || refresh.isEmpty) {
+      // Sesion vieja (sin refresh) o login fallido: si habia un access, la
+      // sesion ya no sirve; si no, el 401 es del propio /login y se respeta.
+      if (token != null && token!.isNotEmpty) await _cerrarSesion();
+      return false;
+    }
+
+    http.Response r;
+    try {
+      r = await _cliente
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/auth/refresh'),
+            headers: const {'Content-Type': 'application/json; charset=utf-8'},
+            body: jsonEncode({'refresh_token': refresh}),
+          )
+          .timeout(_timeout);
+    } catch (_) {
+      // Fallo de red: NO se borra la sesion. Se reintentara en otra peticion.
+      return false;
+    }
+
+    if (r.statusCode == 401 || r.statusCode == 403) {
+      await _cerrarSesion();
+      return false;
+    }
+    if (r.statusCode < 200 || r.statusCode >= 300) return false;
+
+    try {
+      final j = jsonDecode(utf8.decode(r.bodyBytes));
+      final nuevo = j is Map ? j['access_token']?.toString() : null;
+      if (nuevo == null || nuevo.isEmpty) return false;
+      token = nuevo;
+      await guardarAccessToken(nuevo);
+      _sesionCerrada = false;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> _cerrarSesion() async {
+    if (_sesionCerrada) return;
+    _sesionCerrada = true;
+    token = null;
+    try {
+      await limpiarSesion();
+    } catch (_) {}
+    alExpirarSesion?.call();
+  }
 
   static Map<String, String> _headers(Map<String, String>? extra) => {
         'Content-Type': 'application/json; charset=utf-8',
@@ -141,8 +257,9 @@ class ApiClient {
         return r.$2;
       }
     }
-    final datos = await _ejecutar(
+    final datos = await _ejecutarConAuth(
       () => _cliente.get(Uri.parse(url), headers: _headers(headers)),
+      url: url,
       timeout: timeout,
     );
     if (datos.statusCode >= 200 && datos.statusCode < 300) {
@@ -164,7 +281,7 @@ class ApiClient {
     Duration? timeout,
   }) async {
     if (method == 'GET') return _getConCache(url, headers, timeout);
-    final r = await _ejecutar(() {
+    final r = await _ejecutarConAuth(() {
       final uri = Uri.parse(url);
       switch (method) {
         case 'POST':
@@ -184,7 +301,7 @@ class ApiClient {
         default:
           throw ApiException('Método HTTP no soportado: $method');
       }
-    }, timeout: timeout);
+    }, url: url, timeout: timeout);
     if (r.statusCode >= 200 && r.statusCode < 300) return _descodificar(r);
     throw ApiException(
       '${_errorLegible(r)} (HTTP ${r.statusCode})',
@@ -231,11 +348,14 @@ class ApiClient {
     required Map<String, dynamic> body,
     Map<String, String>? headers,
   }) async {
-    final r = await _ejecutar(() => _cliente.post(
-          Uri.parse(url),
-          headers: _headers(headers),
-          body: jsonEncode(body),
-        ));
+    final r = await _ejecutarConAuth(
+      () => _cliente.post(
+        Uri.parse(url),
+        headers: _headers(headers),
+        body: jsonEncode(body),
+      ),
+      url: url,
+    );
     final decoded = r.body.trim().isEmpty
         ? <String, dynamic>{}
         : jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
@@ -244,31 +364,39 @@ class ApiClient {
   }
 
   /// Multipart (registro con fotos): sube [fields] y los [files] (campo →
-  /// ruta local). No reintenta automáticamente: releer los ficheros en cada
-  /// reintento solo duplica el tiempo de un fallo de red.
+  /// ruta local). No reintenta fallos de red automáticamente: releer los
+  /// ficheros en cada reintento solo duplica el tiempo. Sí reintenta UNA vez
+  /// tras refrescar el access si el servidor responde 401.
   static Future<dynamic> multipart(
     String url,
     Map<String, String> fields, {
     Map<String, String>? files,
     Map<String, String>? headers,
   }) async {
-    final req = http.MultipartRequest('POST', Uri.parse(url));
-    req.fields.addAll(fields);
-    files?.forEach((campo, ruta) {
-      final f = File(ruta);
-      req.files.add(http.MultipartFile.fromBytes(
-        'doc_$campo',
-        f.readAsBytesSync(),
-        filename: f.uri.pathSegments.last,
-      ));
-    });
-    if (token != null && token!.isNotEmpty) {
-      req.headers['Authorization'] = 'Bearer $token';
-    }
-    if (headers != null) req.headers.addAll(headers);
-    try {
+    Future<http.Response> enviar() async {
+      final req = http.MultipartRequest('POST', Uri.parse(url));
+      req.fields.addAll(fields);
+      files?.forEach((campo, ruta) {
+        final f = File(ruta);
+        req.files.add(http.MultipartFile.fromBytes(
+          'doc_$campo',
+          f.readAsBytesSync(),
+          filename: f.uri.pathSegments.last,
+        ));
+      });
+      if (token != null && token!.isNotEmpty) {
+        req.headers['Authorization'] = 'Bearer $token';
+      }
+      if (headers != null) req.headers.addAll(headers);
       final streamed = await _cliente.send(req).timeout(_timeout);
-      final r = await http.Response.fromStream(streamed);
+      return http.Response.fromStream(streamed);
+    }
+
+    try {
+      var r = await enviar();
+      if (r.statusCode == 401 && !_esRutaSinRefresh(url)) {
+        if (await _renovarAccess()) r = await enviar();
+      }
       if (r.statusCode >= 200 && r.statusCode < 300) return _descodificar(r);
       throw ApiException(
         '${_errorLegible(r)} (HTTP ${r.statusCode})',

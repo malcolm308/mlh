@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/token_store.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
 import 'driver_home_screen.dart';
@@ -54,7 +55,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _restore() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('driver_token');
+    // Access y refresh viven en el almacenamiento seguro; el access se
+    // conserva ademas en SharedPreferences para el servicio de ofertas.
+    final token = await TokenStore.instance.leerAccess();
     final id = prefs.getString('driver_id');
     if (token != null && id != null) {
       final api = ApiService();
@@ -94,7 +97,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('driver_token', token);
+      // `api.login` ya guardo access + refresh en TokenStore.
       await prefs.setString('driver_id', id);
       // Se guarda el E.164 completo: es el mismo formato en que se registró.
       await prefs.setString('driver_telefono', telefono.trim());

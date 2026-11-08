@@ -82,7 +82,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final profile = await api.getCliente(id);
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('client_token', token);
+      // `api.login` ya guardo access + refresh en TokenStore.
       await prefs.setString('client_id', id);
       await prefs.setString('client_email', _email.text.trim());
 

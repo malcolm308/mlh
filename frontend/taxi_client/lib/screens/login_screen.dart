@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api_config.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/token_store.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
 import 'client_home_screen.dart';
@@ -52,7 +53,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _restore() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('client_token');
+    // Access y refresh viven en el almacenamiento seguro; el access se
+    // conserva ademas en SharedPreferences para el resto de la app.
+    final token = await TokenStore.instance.leerAccess();
     final id = prefs.getString('client_id');
     if (token != null && id != null) {
       final api = ApiService();
@@ -94,7 +97,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('client_token', token);
+      // `api.login` ya guardo access + refresh en TokenStore.
       await prefs.setString('client_id', id);
       // El email real sale del perfil del backend (el login fue por teléfono,
       // el campo `profile.email` es el fiable para los flujos que lo usan).

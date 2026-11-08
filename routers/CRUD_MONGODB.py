@@ -11,11 +11,11 @@ from datetime import datetime
 
 from db.Chofer.connection import chofer_db
 from db.Chofer.models import CHOFER
-from db.Chofer.auth import create_access_token as create_access_token_chofer, verify_token as verify_token_chofer
+from db.Chofer.auth import create_access_token as create_access_token_chofer, create_refresh_token as create_refresh_token_chofer, verify_token as verify_token_chofer
 
 from db.Cliente.connection import cliente_db
 from db.Cliente.models import CLIENTE
-from db.Cliente.auth import create_access_token as create_access_token_cliente, verify_token as verify_token_cliente
+from db.Cliente.auth import create_access_token as create_access_token_cliente, create_refresh_token as create_refresh_token_cliente, verify_token as verify_token_cliente
 
 from services.telefono import buscar_por_telefono, es_telefono_valido, normalizar_telefono
 from services.tipo_vehiculo import (normalizar_tipo_vehiculo,
@@ -24,7 +24,8 @@ from services.codigos_referido import asegurar_codigo, generar_codigo
 
 from db.Administración.connection import admin_db
 from db.Administración.models import ADMINISTRADOR
-from db.Administración.auth import create_access_token as create_access_token_admin, verify_token as verify_token_admin
+from db.Administración.auth import create_access_token as create_access_token_admin, create_refresh_token as create_refresh_token_admin, verify_token as verify_token_admin
+from db.tokens import ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter()
 
@@ -63,8 +64,17 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
+    """Respuesta del login.
+
+    `refresh_token` se guarda en el movil y solo se usa contra
+    `/auth/refresh` para pedir un access nuevo sin volver a teclear la
+    contrasena. `expires_in` son los segundos de vida del access (2 h).
+    """
+
     access_token: str
+    refresh_token: str
     token_type: str
+    expires_in: int = ACCESS_TOKEN_EXPIRE_MINUTES * 60
 
 class ChoferResponse(BaseModel):
     id: str = Field(alias="_id") 
@@ -208,6 +218,16 @@ def _rechazar_telefono_repetido(coleccion, telefono: str, otro_coleccion=None):
             status_code=409,
             detail="El número de teléfono ya está asociado a otra cuenta.")
 
+def _respuesta_tokens(token_data: dict, crear_access, crear_refresh) -> dict:
+    """Arma la respuesta del login con access y refresh del perfil correcto."""
+    return {
+        "access_token": crear_access(token_data),
+        "refresh_token": crear_refresh(token_data),
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest):
     identificador = request.identificador
@@ -246,21 +266,21 @@ async def login(request: LoginRequest):
             raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
         if bcrypt.checkpw(request.password.encode('utf-8'), chofer.get("password", "").encode('utf-8')):
             token_data = {"sub": chofer["email"], "id": str(chofer["_id"])}
-            access_token = create_access_token_chofer(token_data)
-            return {"access_token": access_token, "token_type": "bearer"}
+            return _respuesta_tokens(
+                token_data, create_access_token_chofer, create_refresh_token_chofer)
 
     cliente = cliente or cliente_coleccion.find_one({"email": identificador.lower()})
     if cliente:
         if bcrypt.checkpw(request.password.encode('utf-8'), cliente.get("password", "").encode('utf-8')):
             token_data = {"sub": cliente["email"], "id": str(cliente["_id"])}
-            access_token = create_access_token_cliente(token_data)
-            return {"access_token": access_token, "token_type": "bearer"}
+            return _respuesta_tokens(
+                token_data, create_access_token_cliente, create_refresh_token_cliente)
     admin = admin_coleccion.find_one({"email": identificador.lower()})
     if admin:
             if bcrypt.checkpw(request.password.encode('utf-8'), admin.get("password", "").encode('utf-8')):
                 token_data = {"sub": admin["email"], "id": str(admin["_id"])}
-                access_token = create_access_token_cliente(token_data)
-                return {"access_token": access_token, "token_type": "bearer"}
+                return _respuesta_tokens(
+                    token_data, create_access_token_admin, create_refresh_token_admin)
 
     raise HTTPException(
         status_code=401,

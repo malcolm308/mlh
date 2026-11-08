@@ -10,10 +10,12 @@ import '../api_config.dart';
 import '../models/models.dart';
 import '../models/tariff.dart';
 import '../services/address_service.dart';
+import '../services/api_client.dart';
 import '../services/api_service.dart';
 import '../services/geocode_service.dart';
 import '../services/location_service.dart';
 import '../services/osrm_service.dart';
+import '../services/token_store.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/client_map_view.dart';
@@ -244,6 +246,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   @override
   void initState() {
     super.initState();
+    // Si el refresh token caduca, ApiClient limpia la sesion y avisa aqui.
+    ApiClient.alExpirarSesion = _sesionExpirada;
     WidgetsBinding.instance.addObserver(this);
     _pickup = _myLoc;
     _searchFocus.addListener(() {
@@ -1095,10 +1099,19 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     await update.mostrarSiHaceFalta(context);
   }
 
+  /// El access y el refresh ya no sirven: se vuelve al Login sin dialogo.
+  ///
+  /// Los tokens los borra `ApiClient` antes de llamar aqui.
+  void _sesionExpirada() {
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false);
+  }
+
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('client_token');
+    await TokenStore.instance.limpiar();
     await prefs.remove('client_id');
+    widget.api.token = null;
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false);
   }

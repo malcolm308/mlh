@@ -31,6 +31,7 @@ from routers import soporte
 from routers import referidos
 from routers import users
 from routers import auth_reset
+from routers import auth_refresh
 from routers import app_init
 from routers import app_updates
 from routers import tiempo_real
@@ -146,6 +147,7 @@ app.include_router(soporte.router)
 app.include_router(referidos.router)
 app.include_router(users.router)
 app.include_router(auth_reset.router)
+app.include_router(auth_refresh.router)
 app.include_router(app_init.router)
 # OTA: /healthz, /readyz y /app/version. Va antes de cualquier router con
 # parametros de ruta para que /app/version nunca se confunda con otra ruta.

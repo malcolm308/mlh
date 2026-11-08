@@ -6,6 +6,7 @@ import '../api_config.dart';
 import '../models/models.dart';
 import '../models/tariff.dart';
 import 'api_client.dart';
+import 'token_store.dart';
 
 export 'api_client.dart' show ApiException;
 
@@ -55,7 +56,16 @@ class ApiService {
         body: {'email': email, 'password': password});
     final t = j['access_token']?.toString();
     if (t == null || t.isEmpty) throw ApiException('Respuesta de login invalida');
+    final refresh = j['refresh_token']?.toString();
     token = t;
+    if (refresh != null && refresh.isNotEmpty) {
+      await TokenStore.instance
+          .guardarSesion(accessToken: t, refreshToken: refresh);
+    } else {
+      // Backend viejo o instalacion a medias: al menos guarda el access.
+      await TokenStore.instance.guardarAccess(t);
+    }
+    ApiClient.marcarSesionActiva();
     return t;
   }
 
