@@ -382,6 +382,18 @@ async def registro_con_fotos(
     codigo_invitacion = (codigo_referido or "").strip().upper()
     referidor_doc = None
     if codigo_invitacion:
+        # Casado con el panel: si la administracion apago el programa de
+        # referidos, el registro de choferes tambien desconoce los codigos.
+        try:
+            from routers.promociones import leer_promocion
+            if not bool(leer_promocion().get("referidos_activos", True)):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El sistema de referidos está desactivado.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # sin panel no se frena el alta: conservador arriba ya valido
         referidor_doc = chofer_coleccion.find_one(
             {"codigo_referido": codigo_invitacion})
         if not referidor_doc:
