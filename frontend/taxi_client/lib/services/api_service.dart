@@ -320,6 +320,15 @@ class ApiService {
     return list.whereType<Map<String, dynamic>>().toList();
   }
 
+  /// Quita un chofer de la lista de bloqueados del pasajero.
+  ///
+  /// `driverId` es el `driver_id` que devolvio `getBloqueos`: nunca se toca
+  /// ninguna coleccion ajena, el backend matchea USER + chofer.
+  Future<void> desbloquearChofer(String driverId) async {
+    final id = Uri.encodeComponent(driverId);
+    await _send('DELETE', '/incidencias/bloqueos/$id');
+  }
+
   // ---------------- SOPORTE ----------------
 
   Future<Map<String, dynamic>> createSupportTicket({

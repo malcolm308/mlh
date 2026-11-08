@@ -6,10 +6,31 @@
     "apk": "app_latest.apk"
   },
   "releases": [
-    { "version": "1.0.4", "version_code": 2005 },
-    { "version": "1.0.3", "version_code": 2004 },
-    { "version": "1.0.2", "version_code": 2003 },
-    { "version": "1.0.0", "version_code": 1 }
+    {
+      "version": "1.0.4",
+      "version_code": 2005
+    },
+    {
+      "version": "1.0.3",
+      "version_code": 2004
+    },
+    {
+      "version": "1.0.2",
+      "version_code": 2003
+    },
+    {
+      "version": "1.0.0",
+      "version_code": 1
+    }
   ],
-  "patches": []
+  "patches": [
+    {
+      "version": "1.0.4-p1",
+      "target_version_code": 2005,
+      "file": "patch_latest.zip",
+      "md5": "7fb1cee105c369d991e825a78e3e48cf",
+      "published_at": "2026-11-08T12:21:06+00:00"
+    }
+  ],
+  "updated_at": "2026-11-08T12:21:06+00:00"
 }

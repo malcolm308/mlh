@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
@@ -22,6 +24,9 @@ class _BlockedDriversScreenState extends State<BlockedDriversScreen> {
   List<Map<String, dynamic>> _bloqueos = [];
   bool _loading = true;
   String? _error;
+
+  /// Un desbloqueo a la vez: el icono se desactiva mientras viaja la peticion.
+  bool _desbloqueando = false;
 
   @override
   void initState() {
@@ -194,11 +199,75 @@ class _BlockedDriversScreenState extends State<BlockedDriversScreen> {
                   ),
                 ),
               ),
+              // Desbloqueo: el pasajero puede cambiar de opinion sin pasar
+              // por soporte.
+              IconButton(
+                tooltip: 'Desbloquear',
+                onPressed: _desbloqueando
+                    ? null
+                    : () => unawaited(_confirmarDesbloqueo(b)),
+                icon: const Icon(
+                  Icons.lock_open_rounded,
+                  size: 20,
+                  color: AppColors.secundario,
+                ),
+              ),
             ],
           ),
         );
       },
     );
+  }
+
+  Future<void> _confirmarDesbloqueo(Map<String, dynamic> b) async {
+    final nombre = (b['driver_name'] ?? '').toString().trim();
+    final etiqueta = nombre.isNotEmpty ? nombre : 'a este chófer';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Desbloquear?'),
+        content: Text(
+          'Volverías a poder viajar con $etiqueta y recibirá tus '
+          'solicitudes como siempre.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Desbloquear'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await _desbloquear(b);
+  }
+
+  Future<void> _desbloquear(Map<String, dynamic> b) async {
+    final driverId = (b['driver_id'] ?? '').toString();
+    if (driverId.isEmpty) return;
+    setState(() => _desbloqueando = true);
+    try {
+      await widget.api.desbloquearChofer(driverId);
+      if (!mounted) return;
+      setState(() {
+        _bloqueos.remove(b);
+        _desbloqueando = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text('Chofer desbloqueado'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _desbloqueando = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text('$e'),
+      ));
+    }
   }
 
   /// ISO de Mongo -> `dd/mm/aaaa` corto; vacio si la fecha no es legible.
