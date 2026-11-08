@@ -99,56 +99,22 @@ async def obtener_relativos(user: dict = Depends(get_current_user)):
 
 @router.post("/validar-codigo")
 async def validar_codigo_referido(datos: CodigoIn, user: dict = Depends(get_current_user)):
-    if not _referidos_activos():
-        return {"valido": False, "mensaje": "El sistema de referidos está desactivado"}
-    codigo = (datos.codigo or "").strip().upper()
-    referidor = users_coleccion.find_one({"codigo_referido": codigo})
-    if not referidor:
-        return {"valido": False, "mensaje": "Código inválido"}
-    if str(referidor["_id"]) == user["id"]:
-        return {"valido": False, "mensaje": "No puedes referirte a ti mismo"}
-    return {"valido": True, "referidor_nombre": _nombre(referidor)}
+    """DESUSADO (410): el codigo de referido solo se acepta AL REGISTRARSE.
+
+    Antes estos endpoints permitian aplicar el codigo desde la pantalla de
+    referidos ya con sesion abierta, que abre la puerta a pedir codigos a
+    personas que no invitaron. El alta de la cuenta los procesa.
+    """
+    return {
+        "valido": False,
+        "error": "gone",
+        "mensaje": "Los códigos de invitación solo se aceptan al registrarse",
+    }
 
 
 @router.post("/canjear-codigo")
 async def canjear_codigo_referido(datos: CodigoIn, user: dict = Depends(get_current_user)):
-    """Vincula la cuenta con quien lo invitó y le da su descuento de bienvenida.
-
-    Solo se puede usar una vez y antes de completar el primer viaje.
-    """
-    codigo = (datos.codigo or "").strip().upper()
-    if not codigo:
-        raise HTTPException(status_code=400, detail="Escribe un código")
-    if not _referidos_activos():
-        raise HTTPException(status_code=400, detail="El sistema de referidos está desactivado")
-
-    yo = users_coleccion.find_one({"_id": ObjectId(user["id"])})
-    if not yo:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    if yo.get("referido_por"):
-        raise HTTPException(status_code=400, detail="Ya usaste un código de referido")
-    if int(yo.get("viajes_completados") or 0) > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Solo puedes usar un código antes de tu primer viaje")
-
-    referidor = users_coleccion.find_one({"codigo_referido": codigo})
-    if not referidor:
-        raise HTTPException(status_code=404, detail="Código inválido")
-    if str(referidor["_id"]) == user["id"]:
-        raise HTTPException(status_code=400, detail="No puedes usar tu propio código")
-
-    users_coleccion.update_one(
-        {"_id": ObjectId(user["id"])},
-        {
-            "$set": {"referido_por": str(referidor["_id"])},
-            "$inc": {"descuentos_disponibles": 1},
-        },
-    )
-    descuentos = int(yo.get("descuentos_disponibles") or 0) + 1
-    return {
-        "ok": True,
-        "mensaje": "¡Código aplicado! Tienes 10% de descuento en tu primer viaje.",
-        "descuentos_disponibles": descuentos,
-        "referidor_nombre": _nombre(referidor),
-    }
+    """DESUSADO (410): el codigo de referido solo se acepta AL REGISTRARSE."""
+    raise HTTPException(
+        status_code=410,
+        detail="Los códigos de invitación solo se aceptan al registrarse")
