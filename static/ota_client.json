@@ -1,11 +1,15 @@
 {
   "app": "client",
   "latest": {
-    "version": "1.0.5",
-    "version_code": 2006,
+    "version": "1.0.6",
+    "version_code": 2007,
     "apk": "app_latest.apk"
   },
   "releases": [
+    {
+      "version": "1.0.6",
+      "version_code": 2007
+    },
     {
       "version": "1.0.5",
       "version_code": 2006
@@ -21,13 +25,16 @@
     {
       "version": "1.0.2",
       "version_code": 2003
-    },
-    {
-      "version": "1.0.0",
-      "version_code": 1
     }
   ],
   "patches": [
+    {
+      "version": "1.0.6-p1",
+      "target_version_code": 2006,
+      "file": "patch_latest.zip",
+      "md5": "166f47a0d58b6e0ff14bd1ad95ca5c32",
+      "published_at": "2026-11-08T13:20:05+00:00"
+    },
     {
       "version": "1.0.5-p1",
       "target_version_code": 2005,
@@ -36,5 +43,5 @@
       "published_at": "2026-11-08T12:57:52+00:00"
     }
   ],
-  "updated_at": "2026-11-08T12:57:52+00:00"
+  "updated_at": "2026-11-08T13:20:05+00:00"
 }

@@ -372,13 +372,9 @@ class ApiService {
     return list.whereType<Map<String, dynamic>>().toList();
   }
 
-  Future<Map<String, dynamic>> validateReferralCode(String code) async {
-    return _map('POST', '/referidos/validar-codigo', body: {'codigo': code});
-  }
-
-  Future<Map<String, dynamic>> redeemReferralCode(String code) async {
-    return _map('POST', '/referidos/canjear-codigo', body: {'codigo': code});
-  }
+  // Los codigos de referido SOLO se aceptan al registrarse: el endpoint
+  // `/referidos/canjear-codigo` devuelve 410 y no hay metodo que lo llame a
+  // proposito (se cerro para que nadie aplique codigos con sesion abierta).
 
   Future<Map<String, dynamic>> applyTripDiscount(String tripId) async {
     return _map('POST', '/referidos/aplicar-descuento', body: {'trip_id': tripId});
