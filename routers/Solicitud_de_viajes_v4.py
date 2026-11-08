@@ -506,6 +506,10 @@ def init_db():
             num_pasajes INTEGER DEFAULT 1,
             vehicle_type VARCHAR(20) DEFAULT 'basico',
             precio_estimado NUMERIC(10,2),
+            -- TRUE cuando el cron ya aviso de este viaje huerfano por Telegram.
+            -- Se pone FALSE al crear el viaje; asi el mismo viaje no se repite
+            -- en cada pasada del cron.
+            alerta_enviada BOOLEAN NOT NULL DEFAULT FALSE,
             request_address TEXT,
             dropoff_address TEXT
         );
@@ -533,7 +537,9 @@ def init_db():
             -- administrador puede haber cambiado los tramos entre la estimacion
             -- y el cobro, y sin guardar el valor la reclamacion no se puede
             -- responder. NULL en los viajes anteriores a esta columna.
-            ADD COLUMN IF NOT EXISTS coeficiente_aplicado NUMERIC(6,4);
+            ADD COLUMN IF NOT EXISTS coeficiente_aplicado NUMERIC(6,4),
+            -- Marca de la alerta de viaje huerfano enviada al grupo de Telegram.
+            ADD COLUMN IF NOT EXISTS alerta_enviada BOOLEAN NOT NULL DEFAULT FALSE;
     """
 
     create_transactions_table = """
@@ -615,6 +621,11 @@ def init_db():
         ON trips (client_id, requested_at DESC);
     CREATE INDEX IF NOT EXISTS idx_trips_status_requested
         ON trips (status, requested_at);
+    -- El cron de huerfanos busca exactamente este subconjunto cada minuto.
+    CREATE INDEX IF NOT EXISTS idx_trips_huerfanos
+        ON trips (requested_at)
+        WHERE status = 'requested' AND driver_id IS NULL
+          AND alerta_enviada = FALSE;
     CREATE INDEX IF NOT EXISTS idx_transactions_trip_id
         ON transactions (trip_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_user

@@ -257,10 +257,19 @@ def inyectar_css() -> None:
             border: 1px solid #ff5555;
             border-left: 8px solid #ff2d2d;
             color: #ffe8e8;
-            padding: 14px 18px;
+            padding: 16px 20px;
             border-radius: 10px;
-            font-weight: 600;
+            font-weight: 700;
+            font-size: 1.35rem;
+            line-height: 1.35;
             margin: 4px 0 14px;
+        }
+        .alerta-critica small {
+            display: inline-block;
+            margin-top: 6px;
+            color: #ffc9c9;
+            font-weight: 400;
+            font-size: 0.95rem;
         }
         .alerta-critica small { color: #ffc9c9; font-weight: 400; }
         .nota-suave { color: #9fb3c8; font-size: 0.88rem; }

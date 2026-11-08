@@ -1,8 +1,18 @@
 """Viajes criticos: huerfanos (sin chofer) y control manual de los activos.
 
-Es la pestana que justifica el panel web. El auto-refresco de 10 s lo dispara
-`app.py`; aqui solo se leen los datos frescos, sin cache, porque un viaje sin
-chofer es exactamente lo que no puede esperar.
+El auto-refresco lo hace un `st.fragment(run_every=...)`: cada 10 s se vuelve a
+pedir SOLO esta pestana, no el panel entero. Antes se usaba `st_autorefresh`,
+que provocaba un rerun completo y seis peticiones al backend cada 10 s.
+
+Flujo del viaje huerfano:
+
+1. El cron llama a `POST /admin/trips/check-orphaned` y publica el viaje en el
+   grupo de Telegram con el enlace wa.me del administrador.
+2. El chofer escribe al administrador por WhatsApp; el administrador ve su
+   numero.
+3. El administrador escribe ese numero en la tarjeta del viaje y pulsa
+   «Asignar». El backend busca al chofer por telefono, lo valida y notifica al
+   cliente.
 """
 
 from __future__ import annotations
@@ -18,6 +28,7 @@ from components import (
     limpiar_alerta,
     pitido_si_cambia,
 )
+from config import AUTO_REFRESH_SECS
 
 
 def _fila_huerfano(v: dict) -> dict:
@@ -30,8 +41,142 @@ def _fila_huerfano(v: dict) -> dict:
         "Tipo": ui.tipo_vehiculo(v.get("vehicle_type")),
         "Km": ui.numero(v.get("distance_km")),
         "Estimado": ui.dinero(v.get("precio_estimado")),
+        "Aviso Telegram": "Enviado" if v.get("alerta_enviada") else "—",
         "Solicitado": ui.fecha_hora(v.get("requested_at")),
     }
+
+
+def _es_huerfano(v: dict, umbral: int) -> bool:
+    """El backend manda `es_huerfano`; si es un backend viejo, se calcula.
+
+    El umbral (50 % de OFFER_TTL_SECS) lo decide el servidor para que el panel
+    y el cron usen exactamente el mismo criterio.
+    """
+    if "es_huerfano" in v:
+        return bool(v.get("es_huerfano"))
+    espera = v.get("espera_segundos")
+    try:
+        return espera is not None and int(espera) > umbral
+    except (TypeError, ValueError):
+        return False
+
+
+def _tarjeta_asignacion(api, viaje: dict) -> None:
+    """Un campo de telefono y un boton «Asignar» por cada viaje pendiente."""
+    trip_id = str(viaje.get("trip_id") or "")
+    if not trip_id:
+        return
+
+    with st.container(border=True):
+        datos, accion = st.columns([2.4, 1.3])
+
+        with datos:
+            st.markdown(
+                "**%s → %s**" % (
+                    viaje.get("request_address") or "Origen sin dirección",
+                    viaje.get("dropoff_address") or "Destino sin dirección",
+                )
+            )
+            st.caption(
+                "Pasajero: %s · Tel: %s · Espera: %s · Estimado: %s · Tipo: %s"
+                % (
+                    viaje.get("client_name") or "—",
+                    viaje.get("client_phone") or "—",
+                    ui.espera(viaje.get("espera_segundos")),
+                    ui.dinero(viaje.get("precio_estimado")),
+                    ui.tipo_vehiculo(viaje.get("vehicle_type")),
+                )
+            )
+            if viaje.get("alerta_enviada"):
+                st.caption("📨 Aviso publicado en el grupo de Telegram.")
+
+        with accion:
+            telefono = st.text_input(
+                "Teléfono del chófer",
+                placeholder="+53 5 123 4567",
+                key="tel_%s" % trip_id,
+            )
+            if st.button("Asignar", key="asignar_%s" % trip_id,
+                         type="primary"):
+                if not telefono.strip():
+                    st.warning("Escribe el teléfono que te llegó por WhatsApp.")
+                else:
+                    try:
+                        resultado = api.asignar_viaje(trip_id, telefono)
+                    except ApiError as exc:
+                        st.error(explicar_error(exc))
+                    else:
+                        ui.flash(
+                            "success",
+                            resultado.get("message")
+                            or "Viaje asignado al chófer.",
+                        )
+                        ui.invalidar("criticos")
+                        st.rerun()
+
+
+@st.fragment(run_every=AUTO_REFRESH_SECS)
+def _viajes_en_cola(api) -> None:
+    """Tabla + asignacion. Es lo unico que se refresca cada 10 s."""
+    columna_sonido, columna_refresco, columna_nota = st.columns([1.1, 1, 2.4])
+    with columna_sonido:
+        sonido = boton_sonido()
+    with columna_refresco:
+        if st.button("🔄 Actualizar ahora", key="refrescar_criticos"):
+            ui.invalidar("criticos")
+            st.rerun()
+    with columna_nota:
+        st.caption(
+            "Refresco automático cada %d s. Sonido %s. Solo suena cuando "
+            "aparece o cambia un viaje sin chófer."
+            % (AUTO_REFRESH_SECS, "activado" if sonido else "silenciado")
+        )
+
+    # Sin cache: un viaje sin chofer es justo lo que no puede esperar 30 s.
+    datos = api.viajes_criticos()
+    viajes = datos.get("viajes") or []
+    # 30 s = 50 % del OFFER_TTL_SECS por defecto. Solo se usa si el backend es
+    # anterior a este cambio y no manda el umbral.
+    umbral = int(datos.get("umbral_huerfano_segundos") or 30)
+    huerfanos = [v for v in viajes if _es_huerfano(v, umbral)]
+
+    if huerfanos:
+        st.error("¡ATENCIÓN: Hay viajes esperando asignación!")
+        alerta_critica(
+            "%d viaje%s pasó el 50 %% del tiempo de espera."
+            % (len(huerfanos), "" if len(huerfanos) == 1 else "s"),
+            "El más antiguo lleva esperando %s. Asígnalo con el teléfono que "
+            "te llegó por WhatsApp."
+            % ui.espera(huerfanos[0].get("espera_segundos")),
+        )
+        pitido_si_cambia([v.get("trip_id") for v in huerfanos])
+    elif viajes:
+        limpiar_alerta()
+        st.warning(
+            "Hay %d viaje%s en cola, pero todavía no pasó el 50 %% del tiempo "
+            "de espera." % (len(viajes), "" if len(viajes) == 1 else "s")
+        )
+    else:
+        limpiar_alerta()
+        st.success("No hay viajes esperando chófer ahora mismo.")
+
+    if not viajes:
+        return
+
+    st.dataframe(
+        pd.DataFrame([_fila_huerfano(v) for v in viajes]),
+        hide_index=True,
+        height=min(430, 40 + 35 * max(1, len(viajes))),
+    )
+
+    st.markdown("#### Asignar por teléfono")
+    st.caption(
+        "Pega el número del chófer que te escribió por WhatsApp. El backend "
+        "comprueba que esté aprobado, sin otro viaje activo y con el tipo de "
+        "vehículo que pidió el pasajero."
+    )
+    for viaje in viajes:
+        _tarjeta_asignacion(api, viaje)
 
 
 def _opciones(viajes: list[dict]) -> dict[str, dict]:
@@ -42,37 +187,9 @@ def _opciones(viajes: list[dict]) -> dict[str, dict]:
     return salida
 
 
-def _asignar(api, viaje: dict) -> None:
-    with st.container(border=True):
-        st.markdown("#### Asignar este viaje a un chófer")
-        st.caption(
-            "Escribe el teléfono del chófer. El backend comprueba que esté "
-            "aprobado, sin otro viaje activo y con el tipo de vehículo que "
-            "pidió el pasajero."
-        )
-        with st.form("form_asignar_viaje"):
-            telefono = st.text_input(
-                "Teléfono del chófer",
-                placeholder="+53 5 123 4567",
-                key="asignar_telefono",
-            )
-            enviado = st.form_submit_button("Asignar viaje", type="primary")
-        if not enviado:
-            return
-        if not telefono.strip():
-            st.warning("Escribe el teléfono del chófer antes de asignar.")
-            return
-        try:
-            resultado = api.asignar_viaje(viaje["trip_id"], telefono)
-        except ApiError as exc:
-            st.error(explicar_error(exc))
-            return
-        ui.flash("success", resultado.get("message") or "Viaje asignado.")
-        ui.invalidar("criticos")
-        st.rerun()
-
-
 def _control_manual(api) -> None:
+    # Fuera del fragment: no tiene sentido repedir los viajes activos cada 10 s
+    # solo porque la pestana de criticos este abierta.
     with st.expander("🛠️ Control manual de viajes en curso", expanded=False):
         st.caption(
             "Para cuando el chófer se queda sin conexión a mitad de viaje. "
@@ -148,47 +265,9 @@ def render(api) -> None:
     st.subheader("🚨 Viajes críticos")
     st.caption(
         "Viajes que siguen en cola y no tienen chófer. El primero es el "
-        "pasajero que más lleva esperando."
+        "pasajero que más lleva esperando. El aviso de Telegram sale cuando "
+        "el viaje pasa el 50 % del tiempo de espera."
     )
 
-    columna_sonido, columna_refresco, columna_nota = st.columns([1.1, 1, 2.4])
-    with columna_sonido:
-        sonido = boton_sonido()
-    with columna_refresco:
-        if st.button("🔄 Actualizar ahora", key="refrescar_criticos"):
-            ui.invalidar("criticos")
-            st.rerun()
-    with columna_nota:
-        estado = "activado" if sonido else "silenciado"
-        st.caption(
-            "Refresco automático cada 10 s. Sonido %s. Solo suena cuando "
-            "aparece o cambia un viaje sin chófer." % estado
-        )
-
-    datos = api.viajes_criticos()
-    viajes = datos.get("viajes") or []
-
-    if viajes:
-        alerta_critica(
-            "%d viaje%s sin chófer asignado." % (
-                len(viajes), "" if len(viajes) == 1 else "s"),
-            "El más antiguo lleva esperando %s. Asigna uno o revisa el control manual."
-            % ui.espera(viajes[0].get("espera_segundos")),
-        )
-        pitido_si_cambia([v.get("trip_id") for v in viajes])
-    else:
-        limpiar_alerta()
-        st.success("No hay viajes huérfanos ahora mismo.")
-
-    if viajes:
-        st.dataframe(
-            pd.DataFrame([_fila_huerfano(v) for v in viajes]),
-            hide_index=True,
-            height=min(430, 40 + 35 * max(1, len(viajes))),
-        )
-        opciones = _opciones(viajes)
-        elegido = st.selectbox("Viaje huérfano", list(opciones),
-                               key="huerfano_elegido")
-        _asignar(api, opciones[elegido])
-
+    _viajes_en_cola(api)
     _control_manual(api)

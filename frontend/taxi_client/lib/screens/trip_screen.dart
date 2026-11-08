@@ -737,6 +737,7 @@ class _TripScreenState extends State<TripScreen> {
       Icons.check_rounded,
     ];
     final cancelled = t.status == 'cancelled' || t.status == 'expired';
+    final expirado = t.status == 'expired';
     final buscando = t.status == 'requested' || t.driverId == null;
 
     // Hoja con tope de altura: el contenido completo puede crecer (radar,
@@ -827,13 +828,22 @@ class _TripScreenState extends State<TripScreen> {
                 else if (t.driverId != null)
                   _tarjetaChofer(t),
                 if (cancelled) ...[
-                  const WarningBox(
-                    title: 'Viaje cancelado',
-                    message:
-                        'Este viaje terminó sin completarse. Si lo cancelaste '
-                        'por error, solicita uno nuevo.',
-                    icon: Icons.info_outline_rounded,
-                  ),
+                  if (expirado)
+                    const WarningBox(
+                      title: 'No encontramos chóferes disponibles',
+                      message:
+                          'Ningún chófer tomó el viaje a tiempo. Vuelve a '
+                          'pedirlo: estás a un toque.',
+                      icon: Icons.search_off_rounded,
+                    )
+                  else
+                    const WarningBox(
+                      title: 'Viaje cancelado',
+                      message:
+                          'Este viaje terminó sin completarse. Si lo cancelaste '
+                          'por error, solicita uno nuevo.',
+                      icon: Icons.info_outline_rounded,
+                    ),
                   const SizedBox(height: 10),
                 ],
 
@@ -920,8 +930,10 @@ class _TripScreenState extends State<TripScreen> {
                   _botonCancelar()
                 else if (_stepIndex == 4 || cancelled)
                   PillButton(
-                    label: cancelled ? 'Volver al inicio' : 'Listo',
-                    icon: Icons.check_rounded,
+                    label: cancelled ? 'Volver a pedir viaje' : 'Listo',
+                    icon: cancelled
+                        ? Icons.refresh_rounded
+                        : Icons.check_rounded,
                     onPressed: () {
                       if (_popped) return; // Prevent double pop
                       _popped = true;

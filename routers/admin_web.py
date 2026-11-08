@@ -16,24 +16,32 @@ El panel de escritorio hablaba con `/admin/trips/active`, `/admin/vehicles` y
         panel web. El PUT reutiliza la validacion de `promociones.guardar_promocion`
         (incluye comision, bono, descuento, referidos, coeficientes y espera).
 
+    POST /admin/trips/check-orphaned
+        Lo llama un cron job (Render) cada minuto: publica en el grupo de
+        Telegram los viajes que siguen en `requested` pasado el 50 % del tiempo
+        de espera. Se autentica con API Key, no con JWT de administrador.
+
 Nada de esto se conecta a Mongo/Postgres desde el navegador: el panel web es
 solo un cliente HTTP y toda la escritura sigue pasando por la API.
 """
 
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 
 import psycopg2.extras
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from db.Chofer.connection import chofer_db
 from db.Cliente.connection import cliente_db
 from routers.Solicitud_de_viajes_v4 import (
+    OFFER_TTL_SECS,
     _driver_vehicle_type,
     _normalize_vehicle_type,
     get_connection,
@@ -49,6 +57,13 @@ from routers.promociones import (
     obtener_tarifas_espera,
 )
 from services.telefono import buscar_por_telefono, normalizar_telefono
+from services.telegram_huerfanos import (
+    TelegramError,
+    configuracion as telegram_config,
+    enviar_mensaje,
+    faltantes as telegram_faltantes,
+    mensaje_huerfano,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +74,40 @@ cliente_coleccion = cliente_db.users
 
 ESTADO_APROBADO = "aprobado"
 ESTADOS_ACTIVOS = ("requested", "accepted", "driver_arrived")
+
+# Un viaje es huerfano cuando ha consumido mas de la mitad del tiempo que la
+# oferta permanece viva (OFFER_TTL_SECS, 60 s por defecto). El 100 % es el
+# momento en que el viaje expira; el 50 % deja margen para que un chofer que lo
+# vio en Telegram llegue a tiempo.
+UMBRAL_HUERFANO_SECS = max(1, int(OFFER_TTL_SECS * 0.5))
+
+
+def require_api_key(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_cron_key: Optional[str] = Header(None, alias="X-Cron-Key"),
+) -> dict:
+    """Autenticacion del cron job por API Key estatica.
+
+    Acepta `X-API-Key` y, por compatibilidad con los cron jobs que ya usan
+    `X-Cron-Key`, la misma cabecera alternativa. La clave se toma de
+    `ORPHANED_API_KEY` o, si no existe, de `CRON_API_KEY`.
+
+    Si no hay clave configurada en el servidor se responde 503: es preferible
+    que el cron falle de forma visible a dejar el endpoint abierto.
+    """
+    esperada = (os.getenv("ORPHANED_API_KEY")
+                or os.getenv("CRON_API_KEY") or "").strip()
+    if not esperada:
+        raise HTTPException(
+            status_code=503,
+            detail="Falta configurar ORPHANED_API_KEY (o CRON_API_KEY) en "
+                   "el servidor.")
+    recibida = (x_api_key or x_cron_key or "").strip()
+    if not recibida or not hmac.compare_digest(recibida, esperada):
+        raise HTTPException(
+            status_code=401,
+            detail="API Key inválida o ausente. Usa la cabecera X-API-Key.")
+    return {"source": "api-key"}
 
 
 # ===================== HELPERS =====================
@@ -115,6 +164,7 @@ async def alertas_pendientes(admin: dict = Depends(require_admin)):
     sql = """
         SELECT trip_id, client_id, status, request_address, dropoff_address,
                vehicle_type, distance_km, precio_estimado, requested_at,
+               alerta_enviada,
                ST_Y(request_location::geometry) AS request_lat,
                ST_X(request_location::geometry) AS request_lng
           FROM trips
@@ -133,11 +183,15 @@ async def alertas_pendientes(admin: dict = Depends(require_admin)):
     for r in rows:
         item = _json_trip(r)
         nombre, telefono = _contacto_cliente(r.get("client_id"))
+        espera = _espera_segundos(r.get("requested_at"))
         item.update({
             "client_name": nombre or _nombre_de(cliente_coleccion, r.get("client_id")),
             "client_phone": telefono,
             "driver_name": None,
-            "espera_segundos": _espera_segundos(r.get("requested_at")),
+            "espera_segundos": espera,
+            "es_huerfano": bool(espera is not None
+                                and espera > UMBRAL_HUERFANO_SECS),
+            "alerta_enviada": bool(r.get("alerta_enviada")),
             "distance_km": (round(float(r["distance_km"]), 2)
                             if r.get("distance_km") is not None else None),
             "precio_estimado": (float(r["precio_estimado"])
@@ -145,16 +199,154 @@ async def alertas_pendientes(admin: dict = Depends(require_admin)):
         })
         viajes.append(item)
 
-    return {"total": len(viajes), "viajes": viajes}
+    return {
+        "total": len(viajes),
+        "umbral_huerfano_segundos": UMBRAL_HUERFANO_SECS,
+        "viajes": viajes,
+    }
+
+
+# ===================== CRON: AVISO DE HUERFANOS A TELEGRAM =====================
+
+@router.post("/trips/check-orphaned")
+async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
+    """Publica en el grupo de Telegram los viajes que ya son huerfanos.
+
+    Lo llama un cron job externo cada minuto (Render Cron Job, cron-job.org,
+    etc.). No espera JWT: usa `X-API-Key` contra `ORPHANED_API_KEY` (o
+    `CRON_API_KEY`).
+
+    La marca `alerta_enviada` se pone ANTES de hablar con Telegram y se revierte
+    si el envio falla. Con dos instancias del cron solapadas, solo una consigue
+    el UPDATE ... RETURNING y no se duplica el mensaje; si Telegram falla, el
+    viaje queda otra vez pendiente para la siguiente pasada.
+    """
+    cfg = telegram_config()
+    faltan = telegram_faltantes(cfg)
+    if faltan:
+        raise HTTPException(
+            status_code=503,
+            detail="Faltan variables de entorno para Telegram: %s"
+                   % ", ".join(faltan))
+
+    sql = """
+        SELECT trip_id, request_address, dropoff_address, precio_estimado,
+               requested_at
+          FROM trips
+         WHERE status = 'requested'
+           AND driver_id IS NULL
+           AND alerta_enviada = FALSE
+           AND requested_at < NOW() - make_interval(secs => %s)
+         ORDER BY requested_at ASC
+         LIMIT 50
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.execute(sql, (UMBRAL_HUERFANO_SECS,))
+            candidatos = [dict(r) for r in cur.fetchall()]
+        finally:
+            cur.close()
+
+    enviados = 0
+    fallidos = 0
+    reclamados = 0
+    errores = []
+    detalle = []
+
+    for viaje in candidatos:
+        trip_id = str(viaje["trip_id"])
+
+        # Reclamo atomico: si otra pasada del cron ya lo tomo, este UPDATE no
+        # devuelve fila y se salta el envio.
+        with get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    UPDATE trips
+                       SET alerta_enviada = TRUE
+                     WHERE trip_id = %s
+                       AND alerta_enviada = FALSE
+                       AND status = 'requested'
+                       AND driver_id IS NULL
+                    RETURNING trip_id
+                    """,
+                    (trip_id,),
+                )
+                reclamado = cur.fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cur.close()
+
+        if not reclamado:
+            continue
+        reclamados += 1
+
+        texto = mensaje_huerfano(
+            trip_id=trip_id,
+            origen=viaje.get("request_address"),
+            destino=viaje.get("dropoff_address"),
+            precio=viaje.get("precio_estimado"),
+            numero_whatsapp=cfg["whatsapp"],
+        )
+        try:
+            await enviar_mensaje(cfg["token"], cfg["grupo"], texto)
+        except TelegramError as exc:
+            fallidos += 1
+            errores.append({"trip_id": trip_id, "error": str(exc)})
+            logger.warning("check-orphaned: Telegram fallo para %s: %s",
+                           trip_id, exc)
+            with get_connection() as conn:
+                cur = conn.cursor()
+                try:
+                    cur.execute(
+                        "UPDATE trips SET alerta_enviada = FALSE "
+                        "WHERE trip_id = %s",
+                        (trip_id,),
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    logger.exception(
+                        "check-orphaned: no se pudo revertir alerta_enviada "
+                        "del viaje %s", trip_id)
+                finally:
+                    cur.close()
+            continue
+
+        enviados += 1
+        detalle.append({"trip_id": trip_id, "enviado": True})
+
+    return {
+        "ok": True,
+        "umbral_huerfano_segundos": UMBRAL_HUERFANO_SECS,
+        "candidatos": len(candidatos),
+        "reclamados": reclamados,
+        "enviados": enviados,
+        "fallidos": fallidos,
+        "errores": errores[:10],
+        "viajes": detalle,
+    }
 
 
 # ===================== ASIGNACION FORZADA =====================
 
 class ForzarAsignacionIn(BaseModel):
-    """El panel web asigna por telefono; `driver_id` queda como alternativa."""
+    """El panel web asigna por telefono; `driver_id` queda como alternativa.
 
+    `driver_phone` es el nombre que usa el flujo de Telegram/WhatsApp: el
+    administrador ve el numero en WhatsApp y lo pega tal cual. `telefono` se
+    mantiene para no romper llamadas antiguas del panel.
+    """
+
+    driver_phone: Optional[str] = Field(
+        None, description="Numero que escribio el chofer por WhatsApp.")
     telefono: Optional[str] = Field(
-        None, description="Numero del chofer, con o sin +53. Es lo que usa el panel.")
+        None, description="Alias de driver_phone (compatibilidad).")
     driver_id: Optional[str] = Field(None, description="Alternativa al telefono.")
 
 
@@ -167,11 +359,12 @@ def _buscar_chofer_para_asignar(datos: ForzarAsignacionIn) -> dict:
             raise HTTPException(status_code=404, detail="Chofer no encontrado")
         return doc
 
-    telefono = (datos.telefono or "").strip()
+    telefono = (datos.driver_phone or datos.telefono or "").strip()
     if not telefono:
         raise HTTPException(
             status_code=400,
-            detail="Escribe el número de teléfono del chofer o su id.")
+            detail="Escribe el número de teléfono del chofer (driver_phone) "
+                   "o su id.")
 
     coincidencias = buscar_por_telefono(chofer_coleccion, telefono)
     if not coincidencias:
@@ -285,7 +478,8 @@ async def forzar_asignacion(
                 """
                 UPDATE trips
                    SET driver_id = %s,
-                       status = 'accepted'
+                       status = 'accepted',
+                       alerta_enviada = TRUE
                  WHERE trip_id = %s
                    AND driver_id IS NULL
                    AND status IN ('requested', 'accepted', 'driver_arrived')

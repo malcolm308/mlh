@@ -26,14 +26,9 @@ import streamlit as st
 
 import ui
 from api_client import ApiClient, ApiError, SesionExpirada, explicar_error
-from config import AUTO_REFRESH_MS, get_api_base_url
+from config import get_api_base_url
 from tabs import billetera, choferes, configuracion, vehiculos, viajes
 from tabs import viajes_criticos
-
-try:
-    from streamlit_autorefresh import st_autorefresh
-except ImportError:  # pragma: no cover - solo si faltan dependencias
-    st_autorefresh = None
 
 
 st.set_page_config(
@@ -162,10 +157,9 @@ def _sidebar(api: ApiClient) -> None:
             ui.invalidar()
             st.rerun()
 
-        st.toggle("Auto-refresco (10 s)", value=True, key="auto_refresco")
         st.caption(
-            "El auto-refresco mantiene al día Viajes críticos. Las demás "
-            "pestañas usan caché para no saturar el backend."
+            "Viajes críticos se actualiza solo cada 10 s. Las demás pestañas "
+            "usan caché para no saturar el backend."
         )
         st.divider()
 
@@ -176,15 +170,6 @@ def _sidebar(api: ApiClient) -> None:
 
 def _panel(api: ApiClient) -> None:
     _sidebar(api)
-
-    if st.session_state.get("auto_refresco", True):
-        if st_autorefresh is not None:
-            st_autorefresh(interval=AUTO_REFRESH_MS, key="auto_refresco_critico")
-        else:
-            st.caption(
-                "Falta `streamlit-autorefresh`. Instala las dependencias de "
-                "`requirements.txt` para que la tabla se refresque sola."
-            )
 
     try:
         _cabecera(api)

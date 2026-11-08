@@ -18,8 +18,10 @@ DEFAULT_API_BASE_URL = "https://rapitaxi-api-fws6.onrender.com"
 CONNECT_TIMEOUT = int(os.getenv("API_CONNECT_TIMEOUT", "15"))
 READ_TIMEOUT = int(os.getenv("API_READ_TIMEOUT", "90"))
 
-# Intervalo del auto-refresco de Viajes Criticos.
+# Intervalo del auto-refresco de Viajes Criticos. `st.fragment` acepta
+# segundos; el panel lo usa con run_every=AUTO_REFRESH_SECS.
 AUTO_REFRESH_MS = int(os.getenv("AUTO_REFRESH_MS", "10000"))
+AUTO_REFRESH_SECS = max(1, AUTO_REFRESH_MS // 1000)
 
 
 def _desde_secrets(nombre: str) -> str | None:

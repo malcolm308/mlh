@@ -44,21 +44,46 @@ No hace falta configurar Mongo ni Postgres en este servicio.
 | Pestaña | Qué hace | Endpoints |
 | --- | --- | --- |
 | Viajes críticos | Viajes en cola sin chófer, alerta roja, pitido y asignación por teléfono. Control manual de inicio/fin. | `GET /admin/alerts/pending`, `POST /admin/trips/{id}/force-assign`, `GET /admin/trips/active`, `POST /admin/trips/{id}/force-start`, `POST /admin/trips/{id}/force-complete` |
+| Cron de huérfanos | Publica en Telegram los viajes que pasan el 50 % del tiempo de espera. | `POST /admin/trips/check-orphaned` |
 | Vehículos | Revisión de fotos y aprobación/rechazo del garaje. | `GET /admin/vehicles`, `PUT /admin/vehicles/{id}/approve`, `GET /garaje/imagen/{archivo}` |
 | Promociones y tarifas | Comisión, bono, descuento, referidos, caducidad, coeficientes por distancia y espera de cortesía. | `GET/PUT /admin/configuracion` |
 | Chóferes | Habilitar o rechazar cuentas y ver documentos faltantes. | `GET /admin/choferes`, `POST /admin/choferes/{id}/estado` |
 | Billetera | Saldo, recargas, descuentos y movimientos. | `GET /billetera/choferes`, `GET /billetera/saldo/{id}`, `POST /billetera/recarga`, `POST /billetera/descargo`, `GET /billetera/movimientos` |
 | Viajes | Totales del día, evolución y detalle. | `GET /admin/trips/resumen`, `GET /admin/trips/diarios`, `GET /admin/trips/dia` |
 
-`GET/PUT /admin/configuracion`, `GET /admin/alerts/pending` y
-`POST /admin/trips/{id}/force-assign` viven en `routers/admin_web.py` y
-reutilizan la lógica ya existente del backend.
+`GET/PUT /admin/configuracion`, `GET /admin/alerts/pending`,
+`POST /admin/trips/{id}/force-assign` y `POST /admin/trips/check-orphaned`
+viven en `routers/admin_web.py` y reutilizan la lógica ya existente del
+backend.
+
+## Viajes huérfanos y Telegram
+
+El cron llama cada minuto a:
+
+```bash
+curl -X POST "https://rapitaxi-api-fws6.onrender.com/admin/trips/check-orphaned" \
+  -H "X-API-Key: $ORPHANED_API_KEY"
+```
+
+Variables de entorno del **backend** (servicio del API, no del panel):
+
+| Variable | Ejemplo | Para qué |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | `123456:ABC...` | Ya lo usa el bot existente. |
+| `TELEGRAM_GROUP_ID` | `-1001234567890` | Grupo donde se publican los huérfanos. Los grupos empiezan por `-`. |
+| `ADMIN_WHATSAPP_NUMBER` | `5359295207` | Número del enlace `wa.me`. Si falta, usa ese por defecto. |
+| `ORPHANED_API_KEY` | cadena larga aleatoria | API Key del cron. Si falta, se acepta `CRON_API_KEY`. |
+
+El mensaje incluye ID, origen, destino, precio y el enlace
+`https://wa.me/<ADMIN_WHATSAPP_NUMBER>?text=Hola,%20quiero%20el%20viaje%20<ID>`.
+Cuando el chófer escribe por WhatsApp, el administrador pega su número en la
+tarjeta del viaje y pulsa **Asignar**.
 
 ## Comportamiento
 
-- **Auto-refresco:** cada 10 s (`st_autorefresh`). Solo la pestaña de viajes
-  críticos consulta sin caché; el resto usa caché por sesión con TTL para no
-  saturar el backend gratuito de Render.
+- **Auto-refresco:** `@st.fragment(run_every=10)` en Viajes críticos. Solo esa
+  pestaña se vuelve a ejecutar cada 10 s y consulta sin caché; el resto usa
+  caché por sesión con TTL para no saturar el backend gratuito de Render.
 - **Sesión:** el login usa `POST /login` y comprueba con `ping()` que la cuenta
   sea de administrador. Cuando el access token caduca se renueva solo con
   `POST /auth/refresh`; si el refresh falla, vuelve al login.

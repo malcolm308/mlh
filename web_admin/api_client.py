@@ -234,7 +234,7 @@ class ApiClient:
     def asignar_viaje(self, trip_id: str, telefono: str) -> dict:
         return self._json(
             "POST", "/admin/trips/%s/force-assign" % quote(trip_id, safe=""),
-            json={"telefono": telefono.strip()})
+            json={"driver_phone": telefono.strip()})
 
     def forzar_inicio(self, trip_id: str) -> dict:
         return self._json(
