@@ -4,7 +4,7 @@ Bloqueos de choferes e incidencias de viajes.
 import logging
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from bson import ObjectId
 
@@ -20,7 +20,15 @@ router = APIRouter(prefix="/incidencias", tags=["Incidencias y Bloqueos"])
 bloqueos_coleccion = admin_db["bloqueos"]
 incidencias_coleccion = admin_db["incidencias"]
 
-def get_current_user(authorization: Optional[str] = None) -> dict:
+def get_current_user(authorization: Optional[str] = Header(default=None,
+                                                            alias="Authorization")) -> dict:
+    """Lee `Authorization: Bearer <token>` de la cabecera.
+
+    Antes el parametro se declaraba sin `Header`, y FastAPI lo tomaba como
+    PARAMETRO DE QUERY (`?authorization=...`). Las apps mandan el token en la
+    cabecera, asi que `/incidencias/bloqueos` y `/incidencias/bloquear-chofer`
+    respondian 401 "Token requerido" SIEMPRE, aunque la sesion fuera valida.
+    """
     if not authorization:
         raise HTTPException(status_code=401, detail="Token requerido")
     if not authorization.lower().startswith("bearer "):
