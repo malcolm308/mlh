@@ -21,8 +21,16 @@ class ApiConfig {
     defaultValue: 'https://mlh-tdyg.onrender.com',
   );
 
+  /// Backend SOLO para el sistema OTA. Vacio = usa [baseUrl].
+  ///
+  /// Sirve para probar parches contra un FastAPI local (`--dart-define=
+  /// OTA_BASE_URL=http://192.168.1.10:8010`) sin mover el login ni los viajes,
+  /// que siguen yendo a Render. En produccion se deja vacio.
+  static const String otaBaseUrl = String.fromEnvironment('OTA_BASE_URL');
+
   /// APK publicado por el backend en `/static` y que se comparte por WhatsApp.
-  static const String appDownloadUrl = '$baseUrl/static/app-release.apk';
+  /// Es el `arm64-v8a` de `--split-per-abi` (el que usa casi todo telefono).
+  static const String appDownloadUrl = '$baseUrl/static/app_latest.apk';
 
   /// URL del estilo de MapLibre, servido por Martin desde el MBTiles.
   /// Se sirve de [martinUrl] y no admite override aparte.
@@ -53,6 +61,12 @@ class ApiConfig {
 
   /// Health check del backend.
   static String health() => '$baseUrl/health';
+
+  /// Endpoint OTA: decide si toca parche, APK completo o nada.
+  ///
+  /// Usa [otaBaseUrl] si esta definido (pruebas contra un servidor local).
+  static String appVersion() =>
+      '${otaBaseUrl.isEmpty ? baseUrl : otaBaseUrl}/app/version';
 
   /// Todas las tarifas configuradas (GET /api/tariffs del backend).
   static Uri tariffs() => Uri.parse('$baseUrl/api/tariffs');

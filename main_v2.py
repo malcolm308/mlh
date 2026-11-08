@@ -32,6 +32,7 @@ from routers import referidos
 from routers import users
 from routers import auth_reset
 from routers import app_init
+from routers import app_updates
 from routers import tiempo_real
 from routers import app_init
 from services import indices
@@ -146,6 +147,9 @@ app.include_router(referidos.router)
 app.include_router(users.router)
 app.include_router(auth_reset.router)
 app.include_router(app_init.router)
+# OTA: /healthz, /readyz y /app/version. Va antes de cualquier router con
+# parametros de ruta para que /app/version nunca se confunda con otra ruta.
+app.include_router(app_updates.router)
 app.include_router(tiempo_real.router)
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la

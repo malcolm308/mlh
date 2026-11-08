@@ -20,6 +20,7 @@ import '../services/osrm_service.dart';
 import '../models/geo_fix.dart';
 import '../services/route_recalculation_service.dart';
 import '../services/trip_notification_service.dart';
+import '../services/update_service.dart';
 import '../services/ofertas_background_service.dart';
 import '../services/asistente_ruta.dart';
 import '../services/filtro_gps.dart';
@@ -429,6 +430,11 @@ double? _rumboParaFlecha() {
     // Viaje en curso a mitad de carrera: si la app se reinicia con uno vivo
     // en el backend, se recupera aqui para que el panel vuelva a aparecer.
     _restaurarViajeActivo();
+
+    // OTA: consulta inicial. Si `_restaurarViajeActivo` levanta un viaje, el
+    // `build` marca `viajeActivo` y el aviso obligatorio no lo interrumpe.
+    UpdateService.instance.viajeActivo = _activeTrip != null;
+    unawaited(_revisarActualizacion());
   }
 
   /// Viaje ficticio con el que se previsualiza el panel de viaje en curso.
@@ -619,6 +625,21 @@ double? _rumboParaFlecha() {
     // quedaron viejas: se resincroniza y se repinta la tarjeta.
     unawaited(widget.api.sincronizarReloj());
     _loadTodayEarnings();
+    // Tambien pudo publicarse una version nueva mientras estaba fuera.
+    unawaited(_revisarActualizacion());
+  }
+
+  /// Consulta la version al backend y, si toca, muestra el aviso bloqueante.
+  ///
+  /// Un parche se descarga solo (efecto al reabrir). El dialogo de APK solo
+  /// aparece si NO hay viaje activo; con viaje en curso queda pendiente y se
+  /// evalua de nuevo al pasar a `completed`/`cancelled`/`expired`.
+  Future<void> _revisarActualizacion() async {
+    final update = UpdateService.instance;
+    update.viajeActivo = _activeTrip != null;
+    await update.revisar();
+    if (!mounted) return;
+    await update.mostrarSiHaceFalta(context);
   }
 
   @override
@@ -1987,6 +2008,11 @@ final updated = await widget.api.getTrip(trip.tripId);
     // Sin viaje en curso ya no hace falta el marcador de antigüedad.
     await _limpiarMarcadorViaje();
 
+    // El viaje termino (completed/cancelled/expired): recien ahora se puede
+    // mostrar el aviso de actualizacion obligatoria si estaba pendiente.
+    UpdateService.instance.viajeActivo = false;
+    unawaited(_revisarActualizacion());
+
     // El chofer vuelve a estar disponible para recibir ofertas. Si esto fallara
     // no se interrumpe la limpieza: es peor quedar con un viaje fantasma que no
     // poder trabajar, y el siguiente `setDriverStatus` lo corrige.
@@ -2265,6 +2291,10 @@ final pts = await widget.api.getTripRoute(trip.tripId);
 
   @override
   Widget build(BuildContext context) {
+    // Fuente de verdad del viaje activo para el sistema OTA. Se refresca en
+    // cada build porque `_activeTrip` cambia desde muchos sitios (aceptar
+    // oferta, restaurar, completar, cancelar...).
+    UpdateService.instance.viajeActivo = _activeTrip != null;
     return Scaffold(
       key: _scaffoldKey,
       drawer: _buildDrawer(),

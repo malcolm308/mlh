@@ -245,25 +245,89 @@ Vive en los documentos de la coleccion Mongo **`Chofer.users`** (no en
 El campo esta declarado en `ChoferResponse`
 (`routers/CRUD_MONGODB.py`) como `Optional[int]`, asi que aparece en la API sin
 romper a los choferes que no lo tienen.
-## APK dentro del backend (`/static`)
 
-El APK que se comparte desde "Compartir App" en las dos apps se sirve desde la
-carpeta `static/` del repositorio:
+## APK y actualizaciones OTA (`/static` + `/app/version`)
 
-- URL publica: `https://rapitaxi-api-fws6.onrender.com/static/app-release.apk`
-- `main_v2.py` monta `static/` en `/static` al arrancar y crea la carpeta si no
-  existe, para que el servicio no falle en un clon nuevo.
+Las apps se reparten desde la carpeta `static/` del repositorio y se
+actualizan solas contra el backend:
 
-Despues de compilar el cliente, este es el comando exacto para publicar el APK
-nuevo (PowerShell, desde la raiz del repositorio):
+- `static/app_latest.apk` — APK del cliente (`arm64-v8a`).
+- `static/app_chofer_latest.apk` — APK del chofer (`arm64-v8a`).
+- `static/patch_latest.zip` / `static/patch_chofer_latest.zip` — parche ligero.
+- `static/ota_client.json` / `static/ota_driver.json` — manifiestos que dicen
+  cual es la ultima version, el historial de releases y los parches.
+- Endpoints: `GET /healthz` (liveness), `GET /readyz` (Postgres responde) y
+  `GET /app/version?version_actual=1.0.1&version_codigo=2002&app=client`.
+
+Regla de decision (`routers/app_updates.py`):
+
+- Al dia -> `tipo_actualizacion: "none"`.
+- Exactamente un salto y hay parche para **ese** `versionCode` -> `"patch"`.
+- Un salto sin parche, o dos o mas saltos -> `"apk"` (aviso bloqueante en la
+  app). El APK se ignora mientras haya un viaje activo y se reevalua al
+  terminar.
+
+Un parche solo sirve para el APK base con el que se compilo
+(`--target-version-code`), asi que las instalaciones anteriores al sistema OTA
+siempre reciben el APK completo.
+
+### Compilar
 
 ```powershell
-Copy-Item E:\Taxi_Rapid\frontend\taxi_client\build\app\outputs\flutter-apk\app-release.apk E:\Taxi_Rapid\static\app-release.apk -Force
-git add static/app-release.apk
-git commit -m "chore: actualizar APK de descarga"
+cd E:\Taxi_Rapid\frontend\taxi_client   # o taxi_driver
+flutter build apk --split-per-abi
+# -> build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
+Ojo: `--split-per-abi` desplaza el `versionCode` por ABI: `armeabi-v7a`
+suma 1000 y `arm64-v8a` suma 2000, y encima va el build number. El `arm64-v8a`
+de `1.0.2+3` reporta **2003**. Ese es el numero que va en `--version-code`; el
+del APK base 1.0.1+2 es **2002** y va en `--target-version-code`.
+
+### Publicar un APK nuevo
+
+```powershell
+cd E:\Taxi_Rapid
+python scripts/publicar_ota.py --app client --version 1.0.2 --version-code 2003 `
+  --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+git add static/ota_client.json static/app_latest.apk
+git commit -m "chore: publicar APK 1.0.2"
 git push origin main
 ```
 
-Render redepliega al recibir el push y el enlace queda disponible en uno o dos
-minutos. El archivo pesa ~82 MB, asi que se sube aparte del codigo: no hace
-falta recompilar el backend.
+### Publicar un parche ligero (mismo APK, sin reinstalar)
+
+El parche se genera **con el mismo Flutter** y desde el APK ya compilado de la
+version nueva:
+
+```powershell
+cd E:\Taxi_Rapid\frontend\taxi_client
+dart run flutter_patcher:pack `
+  --apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
+  --version 1.0.2-p1 --target-version-code 2002 --abi arm64-v8a --out dist
+# imprime el md5 del zip
+
+cd E:\Taxi_Rapid
+python scripts/publicar_ota.py --app client --version 1.0.2 --version-code 2003 `
+  --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
+  --patch frontend/taxi_client/dist/patch.zip `
+  --patch-version 1.0.2-p1 --target-version-code 2002
+```
+
+El parche se aplica en el **siguiente arranque en frio**, nunca en caliente, y
+se revierte solo si la app no arranca.
+
+### Probar OTA contra un servidor local
+
+```powershell
+python scripts/servidor_ota_local.py --port 8010
+adb reverse tcp:8010 tcp:8010
+flutter build apk --split-per-abi `
+  --dart-define=OTA_BASE_URL=http://127.0.0.1:8010
+```
+
+`OTA_BASE_URL` solo cambia el endpoint OTA; login y viajes siguen yendo a
+Render. Para probar por HTTP local el build de prueba necesita
+`android:usesCleartextTraffic="true"` en el manifiesto (no debe ir en la release
+final). En produccion el define se omite.
+

@@ -1,0 +1,13 @@
+{
+  "app": "driver",
+  "latest": {
+    "version": "1.0.2",
+    "version_code": 2003,
+    "apk": "app_chofer_latest.apk"
+  },
+  "releases": [
+    { "version": "1.0.2", "version_code": 2003 },
+    { "version": "1.0.0", "version_code": 1 }
+  ],
+  "patches": []
+}

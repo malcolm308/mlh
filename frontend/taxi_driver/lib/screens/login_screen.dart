@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
@@ -5,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/update_service.dart';
 import '../theme/app_theme.dart';
 import 'driver_home_screen.dart';
 import 'forgot_password_screen.dart';
@@ -34,6 +37,19 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _restore();
+    // OTA: se consulta al abrir la app, antes incluso de iniciar sesion. Un
+    // parche se baja solo; si la version ya no es compatible, el aviso
+    // bloqueante sale aqui. No hay viaje posible en esta pantalla.
+    unawaited(_revisarActualizacion());
+  }
+
+  /// Consulta la version al backend y muestra el aviso si es obligatorio.
+  Future<void> _revisarActualizacion() async {
+    final update = UpdateService.instance;
+    update.viajeActivo = false;
+    await update.revisar();
+    if (!mounted) return;
+    await update.mostrarSiHaceFalta(context);
   }
 
   Future<void> _restore() async {

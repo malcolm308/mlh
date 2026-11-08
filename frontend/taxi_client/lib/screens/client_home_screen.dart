@@ -14,6 +14,7 @@ import '../services/api_service.dart';
 import '../services/geocode_service.dart';
 import '../services/location_service.dart';
 import '../services/osrm_service.dart';
+import '../services/update_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/client_map_view.dart';
 import '../widgets/menu_lateral_cliente.dart';
@@ -71,6 +72,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
 
   // Estado del flujo controlado por enum
   ClientState _currentState = ClientState.selectingRoute;
+
+  /// Hay una pantalla de viaje (TripScreen) abierta. Mientras sea true el
+  /// aviso de actualizacion obligatoria NO puede tapar la pantalla.
+  bool _viajeEnPantalla = false;
 
   // Variables de datos del viaje
   String _vehicleType = '';
@@ -247,6 +252,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     _resolveDefaultAddress();
     _initGps();
     _loadTarifas();
+    // OTA: al abrir (o al recuperar la sesion y llegar aqui) se consulta la
+    // version. Un parche se descarga solo; un APK obligatorio abre el dialogo.
+    unawaited(_revisarActualizacion());
     // Dirección del centro nada más abrir, sin esperar a que el pasajero mueva.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_geocodificarCentro());
@@ -271,6 +279,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_reanudarGps());
+      // Al volver del segundo plano pudo publicarse una version nueva.
+      unawaited(_revisarActualizacion());
     }
   }
 
@@ -1039,6 +1049,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       final tripId = (res['trip_id'] ?? '').toString();
       if (tripId.isEmpty) throw ApiException('No se recibió el trip_id');
       if (!mounted) return;
+      // Mientras TripScreen este abierta hay viaje activo: la actualizacion
+      // obligatoria no puede interrumpirlo.
+      _viajeEnPantalla = true;
+      UpdateService.instance.viajeActivo = true;
       // Navegar a TripScreen
       final result = await Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => TripScreen(
@@ -1048,17 +1062,37 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
           initialEstimate: (res['precio_estimado'] ?? 0).toDouble(),
         ),
       ));
+      _viajeEnPantalla = false;
+      UpdateService.instance.viajeActivo = false;
       // Si el pasajero cerro el recibo (o el viaje fue cancelado), volver al
       // paso 1. En `completed` el reset ocurre SOLO aqui: la pantalla del
       // recibo se queda abierta hasta que el usuario pulse "Finalizar".
       if ((result == 'cancelled' || result == 'completed') && mounted) {
         _resetTripState();
       }
+      // El viaje termino: si habia un APK obligatorio pendiente, se avisa
+      // ahora (nunca durante el viaje).
+      if (mounted) unawaited(_revisarActualizacion());
     } catch (e) {
+      _viajeEnPantalla = false;
+      UpdateService.instance.viajeActivo = false;
       if (!mounted) return;
       _showError('$e');
       _resetTripState();
+      unawaited(_revisarActualizacion());
     }
+  }
+
+  /// Consulta la version al backend y, si toca, muestra el aviso bloqueante.
+  ///
+  /// Un parche se descarga en segundo plano. El dialogo de APK solo aparece
+  /// si NO hay viaje activo; si lo hay, queda pendiente para el final.
+  Future<void> _revisarActualizacion() async {
+    final update = UpdateService.instance;
+    update.viajeActivo = _viajeEnPantalla;
+    await update.revisar();
+    if (!mounted) return;
+    await update.mostrarSiHaceFalta(context);
   }
 
   Future<void> _logout() async {

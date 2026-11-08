@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_patcher/flutter_patcher.dart';
 
 // El mapa va en TextureView y NO en Virtual Display: mismo motivo que la app
 // de cliente. El camino Virtual Display del motor tiene el bug abierto
@@ -29,6 +30,14 @@ Future<void> main() async {
   // encuentra el canal. Defensa extra: onStartOfertas tambien lo crea por si
   // el isolate del servicio corre primero.
   WidgetsFlutterBinding.ensureInitialized();
+
+  // OTA: instala el cargador del parche ANTES de crear la app. Si no hay
+  // parche (o no es Android) es una operacion nula. Cualquier fallo aqui no
+  // puede impedir abrir la app ni el servicio de ofertas.
+  try {
+    await FlutterPatcher.init();
+  } catch (_) {}
+
   MapLibreMap.useHybridComposition = true;
   try {
     await crearCanalServicio();
