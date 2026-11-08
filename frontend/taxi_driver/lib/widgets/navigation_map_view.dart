@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -125,6 +126,42 @@ class _NavigationMapViewState extends State<NavigationMapView> {
 
   /// `true` cuando el estilo ya cargo y se pueden tocar sources y layers.
   bool _estiloListo = false;
+
+  /// Reintentos de carga del mapa.
+  ///
+  /// Render duerme el servidor de tiles cuando no hay trafico y el primer
+  /// arranque puede tardar mas de 30 s. MapLibre no reintenta solo: si el
+  /// estilo no llega, el mapa se queda en blanco hasta reabrir la app. Aqui se
+  /// recrea el mapa cada [ _esperaMapa ] mientras el estilo no este listo.
+  int _intentoMapa = 0;
+  Timer? _temporizadorMapa;
+
+  static const int _maxIntentosMapa = 4;
+  static const Duration _esperaMapa = Duration(seconds: 25);
+
+  void _programarReintentoMapa() {
+    _temporizadorMapa?.cancel();
+    _temporizadorMapa = Timer(_esperaMapa, () {
+      if (!mounted || _estiloListo || _intentoMapa >= _maxIntentosMapa) {
+        return;
+      }
+      debugPrint('[Mapa] el estilo no cargo: reintento ${_intentoMapa + 1}');
+      setState(() => _intentoMapa++);
+      _programarReintentoMapa();
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _programarReintentoMapa();
+  }
+
+  @override
+  void dispose() {
+    _temporizadorMapa?.cancel();
+    super.dispose();
+  }
 
   /// Ultima geometria enviada, para no reenviarla si no cambia.
   ///
@@ -369,6 +406,7 @@ static Map<String, dynamic> _flechaGeoJson(
     if (ctl == null) return;
 
     _estiloListo = true;
+    _temporizadorMapa?.cancel();
 
     try {
       // Capa de la ruta.
@@ -629,7 +667,11 @@ static const String _idFlecha = 'taxi-flecha';
     // llegue el primer fix del GPS.
     final centro = widget.center ?? const LatLng(23.1136, -82.3666);
 
-    return MapLibreMap(
+    // Cada reintento usa una `key` distinta para obligar a MapLibre a montar
+    // un mapa nuevo: si la carga del estilo fallo, el motor no reintenta solo.
+    final intento = _intentoMapa;
+    final mapa = MapLibreMap(
+      key: ValueKey<int>(intento),
       // Estilo servido por Martin desde el MBTiles local. En el telefono
       // `127.0.0.1` es el propio movil, de ahi el `adb reverse tcp:8010`.
       styleString: ApiConfig.mapStyleUrl,
@@ -640,6 +682,7 @@ static const String _idFlecha = 'taxi-flecha';
         bearing: widget.bearing,
       ),
       onMapCreated: (ctl) {
+        if (intento != _intentoMapa) return;
         _controlador = ctl;
         // Se entrega para los movimientos puntuales de camara de la pantalla.
         widget.onControlador?.call(ctl);
@@ -648,7 +691,10 @@ static const String _idFlecha = 'taxi-flecha';
         // anadirian y el mapa se quedaria sin ruta ni marcador.
         if (_estiloListo) _aplicarCamara();
       },
-onStyleLoadedCallback: _onStyleLoaded,
+      onStyleLoadedCallback: () {
+        if (intento != _intentoMapa) return;
+        unawaited(_onStyleLoaded());
+      },
       // Limite de zoom acorde a lo que hay en el MBTiles (z8-z16).
       //
       // Sin esto MapLibre usa `MinMaxZoomPreference.unbounded`, o sea de z0 a
@@ -671,6 +717,41 @@ onStyleLoadedCallback: _onStyleLoaded,
       // automatico del motor lo pelea, porque el servicio tambien decide cuando
       // volver al norte arriba.
       trackCameraPosition: false,
+    );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        mapa,
+        // Aviso mientras el estilo viaja: sin el, el primer arranque contra un
+        // Render dormido parece un fallo de la app.
+        if (!_estiloListo)
+          const IgnorePointer(
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color(0xE6FFFFFF),
+                  borderRadius: BorderRadius.all(Radius.circular(20)),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 10),
+                      Text('Cargando mapa...'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

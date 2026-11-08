@@ -40,7 +40,10 @@ class ApiConfig {
 
   /// URL del estilo de MapLibre, servido por Martin desde el MBTiles.
   /// Se sirve de [martinUrl] y no admite override aparte.
-  static String get mapStyleUrl => '$martinUrl/styles/taxi';
+  ///
+  /// Es `/style/taxi` (singular): `/styles/taxi` responde un 301 que MapLibre
+  /// no siempre sigue, y el mapa se quedaba en blanco.
+  static String get mapStyleUrl => '$martinUrl/style/taxi';
 
   // ---------------- Endpoints del backend ----------------
 

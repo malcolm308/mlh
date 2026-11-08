@@ -312,6 +312,30 @@ class _ClientMapViewState extends State<ClientMapView> {
 
   bool _estiloListo = false;
 
+  /// Reintentos de carga del mapa.
+  ///
+  /// Render duerme el servidor de tiles cuando no hay trafico y el primer
+  /// arranque puede tardar mas de 30 s. MapLibre no reintenta solo: si el
+  /// estilo no llega, el mapa se queda en blanco hasta reabrir la app. Aqui se
+  /// recrea el mapa cada [ _esperaMapa ] mientras el estilo no este listo.
+  int _intentoMapa = 0;
+  Timer? _temporizadorMapa;
+
+  static const int _maxIntentosMapa = 4;
+  static const Duration _esperaMapa = Duration(seconds: 25);
+
+  void _programarReintentoMapa() {
+    _temporizadorMapa?.cancel();
+    _temporizadorMapa = Timer(_esperaMapa, () {
+      if (!mounted || _estiloListo || _intentoMapa >= _maxIntentosMapa) {
+        return;
+      }
+      debugPrint('[Mapa] el estilo no cargo: reintento ${_intentoMapa + 1}');
+      setState(() => _intentoMapa++);
+      _programarReintentoMapa();
+    });
+  }
+
   /// La imagen del rayo ya se registro en el estilo del mapa.
   bool _rayoImagenLista = false;
 
@@ -322,6 +346,7 @@ class _ClientMapViewState extends State<ClientMapView> {
   void initState() {
     super.initState();
     widget.controller._ctl = null;
+    _programarReintentoMapa();
   }
 
   @override
@@ -335,6 +360,7 @@ class _ClientMapViewState extends State<ClientMapView> {
 
   @override
   void dispose() {
+    _temporizadorMapa?.cancel();
     widget.controller.dispose();
     super.dispose();
   }
@@ -419,6 +445,7 @@ class _ClientMapViewState extends State<ClientMapView> {
   /// Se invoca cuando el estilo finishes de cargar. MapLibre lo llama sin
   /// argumentos, asi que el controlador se toma del que guardo `onMapCreated`.
   Future<void> _onStyleLoaded() async {
+    _temporizadorMapa?.cancel();
     _estiloListo = true;
     _rayoImagenLista = false;
     _rayosCreados = false;
@@ -601,13 +628,18 @@ class _ClientMapViewState extends State<ClientMapView> {
 
   @override
   Widget build(BuildContext context) {
-    return mlib.MapLibreMap(
+    // Cada reintento usa una `key` distinta para obligar a MapLibre a montar
+    // un mapa nuevo: si la carga del estilo fallo, el motor no reintenta solo.
+    final intento = _intentoMapa;
+    final mapa = mlib.MapLibreMap(
+      key: ValueKey<int>(intento),
       styleString: ApiConfig.mapStyleUrl,
       initialCameraPosition: mlib.CameraPosition(
         target: ClientMapController._ml(widget.initialCenter),
         zoom: widget.initialZoom,
       ),
       onMapCreated: (ctl) {
+        if (intento != _intentoMapa) return;
         widget.controller._ctl = ctl;
         // Centro inicial conocido desde el primer frame: sin esto la pantalla
         // no puede geocodificar hasta que el usuario mueva el mapa.
@@ -627,7 +659,10 @@ class _ClientMapViewState extends State<ClientMapView> {
           unawaited(_pintarRayos(crearCapas: true));
         }
       },
-      onStyleLoadedCallback: () => unawaited(_onStyleLoaded()),
+      onStyleLoadedCallback: () {
+        if (intento != _intentoMapa) return;
+        unawaited(_onStyleLoaded());
+      },
       onCameraMove: (cam) {
         widget.controller._anotarCamara(cam);
         // Un arrastre del usuario llega aqui sin que la pantalla haya pedido
@@ -656,6 +691,41 @@ class _ClientMapViewState extends State<ClientMapView> {
       // el centro inicial) y el destino acababa siendo el mismo punto que la
       // recogida (ruta de 0.0 km).
       trackCameraPosition: true,
+    );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        mapa,
+        // Aviso mientras el estilo viaja: sin el, el primer arranque contra un
+        // Render dormido parece un fallo de la app.
+        if (!_estiloListo)
+          const IgnorePointer(
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color(0xE6FFFFFF),
+                  borderRadius: BorderRadius.all(Radius.circular(20)),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 10),
+                      Text('Cargando mapa...'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
