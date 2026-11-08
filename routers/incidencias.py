@@ -95,3 +95,27 @@ async def listar_bloqueos(user: dict = Depends(get_current_user)):
                     chofer.get("Nombre"), chofer.get("Apellidos")])).strip() or None
         b["driver_name"] = nombre
     return bloqueos
+
+
+@router.delete("/bloqueos/{driver_id}")
+async def desbloquear_chofer(driver_id: str, user: dict = Depends(get_current_user)):
+    """Desbloquea un chofer para el usuario actual.
+
+    Borra el bloqueo (sea cual de las formas guardadas sea el `driver_id`) y
+    deja `resuelta` la incidencia de bloqueo que lo originó. 404 si ese chofer
+    no estaba bloqueado por este usuario.
+    """
+    criterios = [driver_id]
+    if ObjectId.is_valid(driver_id):
+        criterios.append(str(ObjectId(driver_id)))
+    resultado = bloqueos_coleccion.delete_one(
+        {"user_id": user["id"], "driver_id": {"$in": criterios}})
+    if resultado.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Ese chofer no está bloqueado")
+    # La incidencia ya no representa un bloqueo vivo: se cierra para que no
+    # quede "pendiente" en la cola del administrador para siempre.
+    incidencias_coleccion.update_many(
+        {"user_id": user["id"], "driver_id": {"$in": criterios},
+         "tipo": "bloqueo_chofer", "estado": "pendiente"},
+        {"$set": {"estado": "resuelta", "fecha_resolucion": datetime.utcnow()}})
+    return {"message": "Chofer desbloqueado"}
