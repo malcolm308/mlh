@@ -6,10 +6,31 @@
     "apk": "app_chofer_latest.apk"
   },
   "releases": [
-    { "version": "1.0.4", "version_code": 2005 },
-    { "version": "1.0.3", "version_code": 2004 },
-    { "version": "1.0.2", "version_code": 2003 },
-    { "version": "1.0.0", "version_code": 1 }
+    {
+      "version": "1.0.4",
+      "version_code": 2005
+    },
+    {
+      "version": "1.0.3",
+      "version_code": 2004
+    },
+    {
+      "version": "1.0.2",
+      "version_code": 2003
+    },
+    {
+      "version": "1.0.0",
+      "version_code": 1
+    }
   ],
-  "patches": []
+  "patches": [
+    {
+      "version": "1.0.4-p1",
+      "target_version_code": 2005,
+      "file": "patch_chofer_latest.zip",
+      "md5": "458f6bdd38907b986c7204b6751caa37",
+      "published_at": "2026-11-08T12:43:08+00:00"
+    }
+  ],
+  "updated_at": "2026-11-08T12:43:08+00:00"
 }

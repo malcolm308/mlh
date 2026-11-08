@@ -34,6 +34,8 @@ class MenuLateralChofer extends StatelessWidget {
   final VoidCallback onSoporte;
   final VoidCallback onCompartir;
   final VoidCallback onLogout;
+  final VoidCallback onBloqueados;
+  final VoidCallback onBonificaciones;
 
   const MenuLateralChofer({
     super.key,
@@ -50,6 +52,8 @@ class MenuLateralChofer extends StatelessWidget {
     required this.onSoporte,
     required this.onCompartir,
     required this.onLogout,
+    required this.onBloqueados,
+    required this.onBonificaciones,
   });
 
   @override
@@ -100,6 +104,16 @@ class MenuLateralChofer extends StatelessWidget {
                         icono: Icons.account_balance_wallet_outlined,
                         texto: 'Fondo y transferencias',
                         onTap: onFondo,
+                      ),
+                      PilulaMenu(
+                        icono: Icons.emoji_events_outlined,
+                        texto: 'Bonificaciones',
+                        onTap: onBonificaciones,
+                      ),
+                      PilulaMenu(
+                        icono: Icons.block_outlined,
+                        texto: 'Pasajeros bloqueados',
+                        onTap: onBloqueados,
                       ),
                       PilulaMenu(
                         icono: Icons.settings_outlined,

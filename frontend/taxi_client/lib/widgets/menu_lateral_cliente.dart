@@ -28,6 +28,8 @@ const BoxShadow kSombraPildora = BoxShadow(
 /// mezclan con las del chofer.
 class MenuLateralCliente extends StatelessWidget {
   final ClientProfile profile;
+  final VoidCallback onPerfil;
+  final VoidCallback onPromociones;
   final VoidCallback onHistorial;
   final VoidCallback onFavoritas;
   final VoidCallback onBloqueados;
@@ -39,6 +41,8 @@ class MenuLateralCliente extends StatelessWidget {
   const MenuLateralCliente({
     super.key,
     required this.profile,
+    required this.onPerfil,
+    required this.onPromociones,
     required this.onHistorial,
     required this.onFavoritas,
     required this.onBloqueados,
@@ -76,6 +80,16 @@ class MenuLateralCliente extends StatelessWidget {
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
                     children: [
+                      PilulaMenu(
+                        icono: Icons.person_outline,
+                        texto: 'Mi perfil',
+                        onTap: onPerfil,
+                      ),
+                      PilulaMenu(
+                        icono: Icons.local_offer_outlined,
+                        texto: 'Promociones',
+                        onTap: onPromociones,
+                      ),
                       PilulaMenu(
                         icono: Icons.history,
                         texto: 'Historial de viajes',

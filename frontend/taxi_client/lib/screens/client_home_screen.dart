@@ -26,6 +26,8 @@ import '../widgets/vehicle_selector_sheet.dart';
 import 'blocked_drivers_screen.dart';
 import 'favorite_locations_screen.dart';
 import 'history_screen.dart';
+import 'perfil_screen.dart';
+import 'promociones_screen.dart';
 import 'support_screen.dart';
 import 'trip_screen.dart';
 
@@ -1849,6 +1851,22 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   Widget _buildDrawer() {
     return MenuLateralCliente(
       profile: widget.profile,
+      onPerfil: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => PerfilScreen(
+            api: widget.api,
+            profile: widget.profile,
+            clientId: widget.clientId,
+          ),
+        ));
+      },
+      onPromociones: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => PromocionesScreen(api: widget.api),
+        ));
+      },
       onHistorial: () {
         Navigator.of(context).pop();
         Navigator.of(context).push(MaterialPageRoute(

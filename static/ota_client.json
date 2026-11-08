@@ -25,12 +25,12 @@
   ],
   "patches": [
     {
-      "version": "1.0.4-p1",
+      "version": "1.0.4-p2",
       "target_version_code": 2005,
       "file": "patch_latest.zip",
-      "md5": "7fb1cee105c369d991e825a78e3e48cf",
-      "published_at": "2026-11-08T12:21:06+00:00"
+      "md5": "86706b0df0a481922127fdb258bde06b",
+      "published_at": "2026-11-08T12:40:33+00:00"
     }
   ],
-  "updated_at": "2026-11-08T12:21:06+00:00"
+  "updated_at": "2026-11-08T12:40:33+00:00"
 }

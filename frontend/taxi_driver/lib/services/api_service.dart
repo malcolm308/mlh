@@ -233,6 +233,40 @@ class ApiService {
         });
   }
 
+  // ------------------- BLOQUEOS Y PROMOCIONES -------------------
+
+  /// Bloqueos del chofer (la misma coleccion que usa el pasajero): aqui
+  /// miramos los que van a PASAJEROS con `passenger_id`, y `passenger_name`
+  /// llega ya resuelto desde el backend.
+  Future<List<Map<String, dynamic>>> getBloqueos() async {
+    final list = await _list('GET', '/incidencias/bloqueos');
+    return list.whereType<Map<String, dynamic>>().toList();
+  }
+
+  /// Bloquea a un pasajero desde el panel del viaje aceptado/cancelado.
+  Future<void> bloquearPasajero({
+    required String passengerId,
+    required String tripId,
+    required String motivo,
+  }) async {
+    await _map('POST', '/incidencias/bloquear-pasajero', body: {
+      'passenger_id': passengerId,
+      'trip_id': tripId,
+      'motivo': motivo,
+    });
+  }
+
+  /// Quita un pasajero de la lista de bloqueados del chofer.
+  Future<void> desbloquearPasajero(String passengerId) async {
+    final id = Uri.encodeComponent(passengerId);
+    await _send('DELETE', '/incidencias/bloqueos/$id');
+  }
+
+  /// Promociones y bonificaciones vigentes (el mismo estado que ve el panel).
+  Future<Map<String, dynamic>> promocionVigente() async {
+    return _map('GET', '/admin/promociones/vigente');
+  }
+
   // ------------------- FONDO / TRANSFERENCIAS -------------------
 
   Future<Map<String, dynamic>> getDriverFondo(String driverId) async {

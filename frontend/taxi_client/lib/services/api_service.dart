@@ -320,6 +320,16 @@ class ApiService {
     return list.whereType<Map<String, dynamic>>().toList();
   }
 
+  /// Resumen STATISTICO de viaje del pasajero para su Perfil.
+  Future<Map<String, dynamic>> resumenViajes(String clientId) async {
+    return _map('GET', '/trips/client/$clientId/resumen');
+  }
+
+  /// Promocion vigente PUBLICA (singles del panel de administracion).
+  Future<Map<String, dynamic>> promocionVigente() async {
+    return _map('GET', '/admin/promociones/vigente');
+  }
+
   /// Quita un chofer de la lista de bloqueados del pasajero.
   ///
   /// `driverId` es el `driver_id` que devolvio `getBloqueos`: nunca se toca

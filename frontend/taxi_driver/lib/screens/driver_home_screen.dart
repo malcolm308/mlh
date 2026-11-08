@@ -37,6 +37,8 @@ import '../widgets/cancel_trip_dialog.dart';
 import '../widgets/trip_info_panel.dart';
 import '../widgets/ui/glass_sheet.dart';
 import '../widgets/ui/warning_box.dart';
+import 'blocked_passengers_screen.dart';
+import 'bonificaciones_screen.dart';
 import 'driver_profile_screen.dart';
 import 'driver_settings_screen.dart';
 import 'driver_fondo_screen.dart';
@@ -2144,11 +2146,17 @@ void _startTripPoller() {
       if (!mounted) return;
 
       if (!estadosViajeVivos.contains(actual.status)) {
+        final canceladoPorPasajero =
+            actual.status == 'cancelled' &&
+                (trip.clientId?.isNotEmpty ?? false);
         await _alPerderElViaje(
           actual.status == 'cancelled'
               ? 'El pasajero canceló el viaje'
               : 'El viaje ya no está activo',
         );
+        if (canceladoPorPasajero) {
+          unawaited(_ofrecerBloqueoPasajero(trip: trip));
+        }
         return;
       }
 
@@ -2172,6 +2180,68 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   }
 
   // ---------------- DIÁLOGOS ----------------
+
+  /// El pasajero canceló un viaje YA aceptado: se permite bloquearlo para no
+  /// volver a emparejarse con el. El motivo es opcional.
+  Future<void> _ofrecerBloqueoPasajero({required TripOffer trip}) async {
+    final pasajero = trip.clientName ?? 'el pasajero';
+    final motivoCtrl = TextEditingController();
+    final bloquear = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Bloquear pasajero?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '"$pasajero" canceló el viaje cuando ya lo habías aceptado. '
+              'Si lo bloqueas, no volverás a recibir sus solicitudes. '
+              'Puedes desbloquearlo desde el menú.',
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: motivoCtrl,
+              maxLines: 1,
+              maxLength: 120,
+              decoration: const InputDecoration(
+                hintText: 'Motivo (opcional)',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Ahora no'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Bloquear'),
+          ),
+        ],
+      ),
+    );
+    final motivo = motivoCtrl.text.trim().isNotEmpty
+        ? motivoCtrl.text.trim()
+        : 'Pasajero canceló el viaje ya aceptado';
+    motivoCtrl.dispose();
+    if (bloquear != true) return;
+    try {
+      await widget.api.bloquearPasajero(
+        passengerId: trip.clientId!,
+        tripId: trip.tripId,
+        motivo: motivo,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text('Pasajero bloqueado'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      _showError('$e');
+    }
+  }
 
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -3803,6 +3873,18 @@ String _fmtCoord(LatLng p) =>
         Navigator.of(context).pop();
         Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => const SupportScreen(),
+        ));
+      },
+      onBloqueados: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => BlockedPassengersScreen(api: widget.api),
+        ));
+      },
+      onBonificaciones: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => BonificacionesScreen(api: widget.api),
         ));
       },
       onCompartir: _shareApp,
