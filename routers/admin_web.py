@@ -27,6 +27,7 @@ solo un cliente HTTP y toda la escritura sigue pasando por la API.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
@@ -60,8 +61,10 @@ from services.telefono import buscar_por_telefono, normalizar_telefono
 from services.telegram_huerfanos import (
     TelegramError,
     configuracion as telegram_config,
+    enlace_whatsapp,
     enviar_mensaje,
     faltantes as telegram_faltantes,
+    llamar_api,
     mensaje_huerfano,
 )
 
@@ -108,6 +111,32 @@ def require_api_key(
             status_code=401,
             detail="API Key inválida o ausente. Usa la cabecera X-API-Key.")
     return {"source": "api-key"}
+
+
+# El endpoint de prueba del grupo se puede llamar con la API Key normal o con
+# un token derivado del TELEGRAM_BOT_TOKEN. Asi se puede comprobar el grupo
+# desde una maquina que tiene el token del bot pero no la API Key del cron.
+_SAL_TEST_GRUPO = b"rapitaxi:telegram:test-group:v1"
+
+
+def _token_prueba_grupo() -> str:
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return ""
+    return hmac.new(token.encode("utf-8"), _SAL_TEST_GRUPO, hashlib.sha256).hexdigest()
+
+
+def require_api_key_or_test_token(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_cron_key: Optional[str] = Header(None, alias="X-Cron-Key"),
+    x_test_token: Optional[str] = Header(None, alias="X-Test-Token"),
+) -> dict:
+    """API Key del cron o token derivado del bot para la prueba del grupo."""
+    esperado = _token_prueba_grupo()
+    recibido = (x_test_token or "").strip()
+    if esperado and recibido and hmac.compare_digest(recibido, esperado):
+        return {"source": "test-token"}
+    return require_api_key(x_api_key=x_api_key, x_cron_key=x_cron_key)
 
 
 # ===================== HELPERS =====================
@@ -330,6 +359,67 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
         "fallidos": fallidos,
         "errores": errores[:10],
         "viajes": detalle,
+    }
+
+
+@router.post("/telegram/test-group")
+async def probar_grupo_telegram(
+    _: dict = Depends(require_api_key_or_test_token),
+):
+    """Envia un viaje huerfano de prueba al grupo de Telegram configurado.
+
+    Devuelve el status code y el cuerpo JSON EXACTO de Telegram para `getChat`
+    y `sendMessage`, de modo que se distinga un chat_id equivocado (400), un bot
+    sin permisos (403), etc. No toca la base de datos.
+    """
+    cfg = telegram_config()
+    faltan = telegram_faltantes(cfg)
+    if faltan:
+        raise HTTPException(
+            status_code=503,
+            detail="Faltan variables de entorno para Telegram: %s"
+                   % ", ".join(faltan))
+
+    chat_status, chat_cuerpo = await llamar_api(
+        "getChat", cfg["token"], chat_id=cfg["grupo"])
+    chat = chat_cuerpo.get("result") or {}
+
+    enlace = enlace_whatsapp(cfg["whatsapp"], "TEST-123")
+    texto = (
+        "🧪 PRUEBA DE SISTEMA\n"
+        "\n"
+        "🚕 VIAJE SIN CHOFER (ID: TEST-123)\n"
+        "\n"
+        "📍 Recogida: Calle Falsa 123\n"
+        "🏁 Destino: Avenida Siempre Viva 742\n"
+        "💰 Precio: 1500 CUP\n"
+        "\n"
+        "👉 Si deseas este viaje, haz clic aquí para escribirme: %s"
+        % enlace
+    )
+    envio_status, envio_cuerpo = await llamar_api(
+        "sendMessage", cfg["token"],
+        chat_id=cfg["grupo"],
+        text=texto,
+        disable_web_page_preview=True,
+    )
+
+    return {
+        "ok": bool(envio_status == 200 and envio_cuerpo.get("ok")),
+        "chat_id_configurado": cfg["grupo"],
+        "whatsapp": cfg["whatsapp"],
+        "get_chat": {
+            "status": chat_status,
+            "ok": bool(chat_cuerpo.get("ok")),
+            "descripcion": chat_cuerpo.get("description"),
+            "titulo": chat.get("title"),
+            "tipo": chat.get("type"),
+            "username": chat.get("username"),
+        },
+        "send_message": {
+            "status": envio_status,
+            "body": envio_cuerpo,
+        },
     }
 
 

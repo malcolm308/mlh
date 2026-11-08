@@ -79,6 +79,17 @@ El mensaje incluye ID, origen, destino, precio y el enlace
 Cuando el chófer escribe por WhatsApp, el administrador pega su número en la
 tarjeta del viaje y pulsa **Asignar**.
 
+Para comprobar el grupo sin esperar a que exista un viaje huérfano:
+
+```bash
+curl -X POST "https://rapitaxi-api-fws6.onrender.com/admin/telegram/test-group" \
+  -H "X-API-Key: $ORPHANED_API_KEY"
+```
+
+Envía un mensaje `TEST-123` y devuelve el status code y el JSON exacto de
+`getChat` y `sendMessage` (200 = enviado, 400 = `chat_id` incorrecto o bot
+fuera del grupo, 403 = el bot no es administrador).
+
 ## Comportamiento
 
 - **Auto-refresco:** `@st.fragment(run_every=10)` en Viajes críticos. Solo esa

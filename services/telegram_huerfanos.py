@@ -104,6 +104,29 @@ def mensaje_huerfano(trip_id: str, origen: Any, destino: Any, precio: Any,
     )
 
 
+async def llamar_api(metodo: str, token: str, **params) -> tuple:
+    """Llama a cualquier metodo de la Bot API y devuelve (status, json).
+
+    A diferencia de `enviar_mensaje`, no lanza: devuelve el cuerpo tal cual lo
+    mando Telegram. Lo usa el endpoint de prueba para poder mostrar el status
+    code y el JSON exacto (400 = chat_id mal, 403 = faltan permisos...).
+    """
+    import httpx
+
+    url = "%s/bot%s/%s" % (API_TELEGRAM, token, metodo)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cliente:
+            respuesta = await cliente.post(url, json=params)
+    except Exception as exc:  # red, DNS, timeout
+        return None, {"ok": False, "error": str(exc)}
+
+    try:
+        cuerpo = respuesta.json()
+    except Exception:
+        cuerpo = {"ok": False, "raw": (respuesta.text or "")[:500]}
+    return respuesta.status_code, cuerpo
+
+
 async def enviar_mensaje(token: str, chat_id: str, texto: str) -> None:
     """POST a `sendMessage`. Lanza TelegramError con el motivo exacto."""
     import httpx
