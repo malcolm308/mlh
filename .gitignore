@@ -39,6 +39,9 @@ tileserver/*.exe
 # versionan. Los ficheros siguen en el disco para el desarrollo local.
 uploads/
 
+# Secretos locales del panel web (nunca se versionan)
+web_admin/.streamlit/secrets.toml
+
 # Logs de ejecuciones locales
 *.log
 data/*.log

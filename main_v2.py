@@ -15,6 +15,7 @@ from routers import billetera
 from routers import CRUD_MONGODB
 from routers import Solicitud_de_viajes_v4
 from routers import admin_panel
+from routers import admin_web
 from routers import promociones
 from routers import documentos
 from routers import pois
@@ -124,6 +125,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # El panel de administracion va antes que CRUD_MONGODB: si no, el GET /admin/{id}
 # se traga las rutas /admin/choferes, /admin/trips, etc.
 app.include_router(admin_panel.router)
+# Endpoints del panel web (alertas, asignacion forzada y configuracion
+# agregada). Van antes del CRUD por el mismo motivo que los anteriores.
+app.include_router(admin_web.router)
 # Promociones antes que CRUD_MONGODB: ese router tiene un `GET /admin/{id}` que
 # se tragaria `/admin/promociones`.
 app.include_router(promociones.router)

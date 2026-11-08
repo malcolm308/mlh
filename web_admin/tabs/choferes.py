@@ -1,0 +1,167 @@
+"""Habilitacion de choferes: aprobar o rechazar cuentas."""
+
+from __future__ import annotations
+
+import pandas as pd
+import streamlit as st
+
+import ui
+from api_client import ApiError, explicar_error
+
+FILTROS = {
+    "Solo pendientes": "pendiente",
+    "Solo aprobados": "aprobado",
+    "Solo rechazados": "rechazado",
+    "Todos": "",
+}
+
+
+def _fila(c: dict) -> dict:
+    docs = c.get("documentos") or {}
+    return {
+        "Chófer": c.get("nombre") or "—",
+        "Teléfono": c.get("telefono") or "—",
+        "Correo": c.get("email") or "—",
+        "Estado": ui.estado_cuenta(c.get("estado")),
+        "Vehículo": c.get("vehiculo") or "—",
+        "Matrícula": c.get("matricula") or "—",
+        "Fondo": ui.dinero(c.get("fondo")),
+        "Documentos": "%s/%s" % (docs.get("subidos", 0),
+                                 docs.get("total", 0)),
+        "Creado": ui.fecha_hora(c.get("creado")),
+    }
+
+
+def _etiqueta(c: dict) -> str:
+    nombre = c.get("nombre") or "Chófer sin nombre"
+    telefono = c.get("telefono") or c.get("email") or "sin contacto"
+    return "%s · %s · %s" % (nombre, telefono,
+                             ui.estado_cuenta(c.get("estado")))
+
+
+def _detalle(api, chofer: dict) -> None:
+    docs = chofer.get("documentos") or {}
+    with st.container(border=True):
+        st.markdown("#### %s" % (chofer.get("nombre") or "Chófer"))
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Estado", ui.estado_cuenta(chofer.get("estado")))
+        c2.metric("Fondo", ui.dinero(chofer.get("fondo")))
+        c3.metric("Documentos", "%s/%s" % (docs.get("subidos", 0),
+                                           docs.get("total", 0)))
+        c4.metric("Calificación", ui.numero(chofer.get("rating"), 1))
+
+        st.write(
+            "**Teléfono:** %s  ·  **Correo:** %s  ·  **Vehículo:** %s  ·  "
+            "**Matrícula:** %s  ·  **Servicio:** %s"
+            % (
+                chofer.get("telefono") or "—",
+                chofer.get("email") or "—",
+                chofer.get("vehiculo") or "—",
+                chofer.get("matricula") or "—",
+                ui.tipo_vehiculo(chofer.get("servicio")),
+            )
+        )
+
+        if docs.get("completo"):
+            st.success("Documentos completos (%s de %s)."
+                       % (docs.get("subidos", 0), docs.get("total", 0)))
+        else:
+            st.warning("Faltan documentos: %s"
+                       % (", ".join(docs.get("faltan") or []) or "—"))
+
+        if chofer.get("motivo"):
+            st.info("Motivo del último rechazo: %s" % chofer["motivo"])
+        if chofer.get("revisado_por"):
+            st.caption("Revisado por %s el %s"
+                       % (chofer.get("revisado_por"),
+                          ui.fecha_hora(chofer.get("revisado_at"))))
+
+        with st.form("decision_chofer"):
+            st.caption(
+                "Aprobar habilita la cuenta para entrar a la app. Rechazar "
+                "la bloquea; el motivo lo ve el chófer."
+            )
+            confirmo = st.checkbox(
+                "Revisé los documentos y confirmo la decisión",
+                key="chofer_confirmo",
+            )
+            motivo = st.text_input(
+                "Motivo del rechazo (obligatorio para rechazar)",
+                key="chofer_motivo",
+            )
+            b1, b2 = st.columns(2)
+            aprobar = b1.form_submit_button(
+                "✅ Aprobar chófer", type="primary",
+                disabled=not docs.get("completo"),
+            )
+            rechazar = b2.form_submit_button("❌ Rechazar chófer")
+
+        if not aprobar and not rechazar:
+            return
+        if not confirmo:
+            st.warning("Marca la casilla de confirmación antes de decidir.")
+            return
+        if rechazar and not motivo.strip():
+            st.warning("Escribe el motivo del rechazo.")
+            return
+
+        estado = "aprobado" if aprobar else "rechazado"
+        try:
+            resultado = api.cambiar_estado_chofer(
+                chofer["driver_id"], estado, motivo)
+        except ApiError as exc:
+            st.error(explicar_error(exc))
+            return
+        ui.flash("success", resultado.get("message")
+                 or "Estado del chófer actualizado.")
+        ui.invalidar("choferes", "vehiculos", "billetera")
+        st.rerun()
+
+
+def render(api) -> None:
+    st.subheader("🧑‍✈️ Habilitación de chóferes")
+    st.caption(
+        "El administrador decide quién puede entrar a la app del chófer. "
+        "Para aprobar, la cuenta debe tener los documentos completos."
+    )
+
+    filtro = st.radio("Filtro", list(FILTROS), horizontal=True,
+                      key="filtro_choferes")
+
+    with st.form("buscar_chofer"):
+        busqueda = st.text_input("Buscar por nombre, correo o teléfono",
+                                 placeholder="Ej.: Carlos o 59295207")
+        buscar = st.form_submit_button("Buscar")
+    estado = FILTROS[filtro]
+    clave = "choferes:%s:%s" % (estado, busqueda.strip().lower())
+
+    try:
+        datos = ui.cargar(
+            clave, 60,
+            lambda: api.choferes(estado or None, busqueda.strip() or None),
+        )
+    except ApiError as exc:
+        st.error(explicar_error(exc))
+        return
+
+    choferes = datos.get("choferes") or []
+    st.caption(
+        "Total: %d · Pendientes: %d · Aprobados: %d · Rechazados: %d"
+        % (datos.get("total", len(choferes)),
+           datos.get("pendientes", 0),
+           datos.get("aprobados", 0),
+           datos.get("rechazados", 0))
+    )
+
+    if not choferes:
+        st.info("No hay chóferes con ese filtro.")
+        return
+
+    st.dataframe(pd.DataFrame([_fila(c) for c in choferes]),
+                 hide_index=True)
+
+    opciones = {"%d. %s" % (i, _etiqueta(c)): c
+                for i, c in enumerate(choferes, start=1)}
+    elegido = st.selectbox("Chófer a revisar", list(opciones),
+                           key="chofer_elegido")
+    _detalle(api, opciones[elegido])

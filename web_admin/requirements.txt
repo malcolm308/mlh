@@ -1,0 +1,9 @@
+# Panel de administración web (Streamlit) de Rapitaxi.
+# El panel es solo un cliente HTTP de la API FastAPI: no necesita pymongo ni
+# psycopg2.
+streamlit>=1.39,<2
+streamlit-autorefresh>=1.0.1,<2
+requests>=2.31,<3
+pandas>=2.1,<3
+Pillow>=10.2,<13
+pillow-heif>=0.16,<2
