@@ -404,17 +404,108 @@ class _GarageScreenState extends State<GarageScreen> {
       );
     }
 
-    final hayAprobado =
-        _vehiculos.any((v) => v.esAprobado);
-    return RefreshIndicator(
-      onRefresh: () => _cargar(mostrarCarga: false),
-      child: ListView.builder(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
-        itemCount: _vehiculos.length,
-        itemBuilder: (context, i) => _tarjeta(_vehiculos[i], hayAprobado),
-      ),
+    final hayAprobado = _vehiculos.any((v) => v.esAprobado);
+    final aprobados = _vehiculos.where((v) => v.esAprobado).toList();
+    DriverVehicle? activo;
+    for (final v in _vehiculos) {
+      if (v.esAprobado && v.esActivo) {
+        activo = v;
+        break;
+      }
+    }
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Vehículo para trabajar',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  if (aprobados.isEmpty)
+                    const Text(
+                      'Aún no tienes vehículos aprobados. Cuando el '
+                      'administrador los apruebe, aparecerán aquí para '
+                      'elegirlos.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                    )
+                  else
+                    InputDecorator(
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: activo?.id,
+                          isExpanded: true,
+                          hint: const Text('Elige el vehículo'),
+                          items: [
+                            for (final v in aprobados)
+                              DropdownMenuItem(
+                                value: v.id,
+                                child: Text(
+                                  '${_nombreVehiculo(v)}'
+                                  '${v.esActivo ? ' · en uso' : ''}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                          ],
+                          onChanged: _seleccionandoId != null
+                              ? null
+                              : (id) {
+                                  if (id == null || id == activo?.id) return;
+                                  for (final v in aprobados) {
+                                    if (v.id == id) {
+                                      _usarVehiculo(v);
+                                      break;
+                                    }
+                                  }
+                                },
+                        ),
+                      ),
+                    ),
+                  if (activo != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'En uso ahora: ${_nombreVehiculo(activo)}',
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF2E7D32)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () => _cargar(mostrarCarga: false),
+            child: ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
+              itemCount: _vehiculos.length,
+              itemBuilder: (context, i) =>
+                  _tarjeta(_vehiculos[i], hayAprobado),
+            ),
+          ),
+        ),
+      ],
     );
+  }
+
+  String _nombreVehiculo(DriverVehicle v) {
+    final nombre = '${v.marca ?? ''} ${v.modelo ?? ''}'.trim();
+    final matricula = (v.matricula ?? '').trim();
+    if (nombre.isEmpty) return matricula.isEmpty ? 'Vehículo' : matricula;
+    return matricula.isEmpty ? nombre : '$nombre · $matricula';
   }
 
   /// Estado de las 5 fotos del registro: chip verde (aprobada), ámbar
