@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import Optional
 
 import bcrypt
+import re
 import psycopg2
 import psycopg2.extras
 from bson import ObjectId
@@ -83,10 +84,19 @@ def require_admin(authorization: Optional[str] = Header(None)) -> dict:
         raise HTTPException(status_code=401, detail="Token invalido o expirado")
 
     email = payload.get("sub")
-    admin = admin_coleccion.find_one({"email": email}) if email else None
+    admin = (admin_coleccion.find_one({"email": email}) if email else None)
+    if not admin and email:
+        # Casi sin caso (mayusculas en el registro): comparacion sin case,
+        # para que un token valido no quede "huerfano" por el formato.
+        seguro = email.strip().lower()
+        admin = admin_coleccion.find_one(
+            {"email": {"$regex": "^%s$" % re.escape(seguro), "$options": "i"}})
     if not admin:
-        raise HTTPException(status_code=403, detail="La cuenta no es de administrador")
-    return {"id": str(admin["_id"]), "email": email, "rol": admin.get("rol")}
+        raise HTTPException(
+            status_code=403,
+            detail="No existe un administrador con el correo del token "
+                   "(%s). Cierra sesion y entra de nuevo." % (email or "?"))
+    return {"id": str(admin["_id"]), "email": admin.get("email"), "rol": admin.get("rol")}
 
 
 # ===================== HELPERS =====================

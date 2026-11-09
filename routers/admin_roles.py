@@ -62,14 +62,20 @@ def _admin_doc_por_email(email: Optional[str]) -> Optional[dict]:
 
 
 def _token_admin(authorization: Optional[str]) -> dict:
-    """Valida el header y devuelve el payload; 401 si no es admin valido."""
+    """Valida el header y devuelve el payload; 401/403 con causa concreta."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Token requerido")
     payload = verify_token(authorization.split(" ", 1)[1].strip())
     if not payload:
-        raise HTTPException(status_code=401, detail="Token invalido o expirado")
+        raise HTTPException(status_code=401,
+                            detail="Token invalido o expirado. Cierra sesion "
+                                   "y vuelve a iniciar sesion.")
     if payload.get("app") != "admin":
-        raise HTTPException(status_code=403, detail="La cuenta no es de administrador")
+        # Diagnostico concreto: el token DEL PANEL debe ser de la app admin.
+        raise HTTPException(
+            status_code=403,
+            detail="Tu token no es de administrador (app=%s). Cierra sesion y "
+                   "vuelve a iniciar sesion." % (payload.get("app") or "sin-app"))
     return payload
 
 
@@ -89,7 +95,10 @@ def require_rol(*roles_validos: str):
         email = payload.get("sub")
         admin = _admin_doc_por_email(email)
         if not admin:
-            raise HTTPException(status_code=403, detail="La cuenta no es de administrador")
+            raise HTTPException(
+                status_code=403,
+                detail="No existe un administrador con el correo del token "
+                       "(%s). Cierra sesion y entra de nuevo." % (email or "?"))
         rol = (admin.get("rol") or "").strip().lower()
         # Latido del super: si su cuenta aun no tiene el rol (base vieja) se
         # arregla en el momento, sin depender de que el admin entre al panel.
