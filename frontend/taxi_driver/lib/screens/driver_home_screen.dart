@@ -3422,6 +3422,11 @@ String _fmtCoord(LatLng p) =>
       _showError('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
     }
   }
+
+  /// Llamada REAL de telefono con `url_launcher` (el chat de WhatsApp ya lo
+  /// hace [WhatsAppService]). El numero se deja tal cual lo trae el backend
+  /// (con prefijo), se quitan separadores.
+  Future<void> _llamarCliente(String telefono) async {
     final limpio = telefono.replaceAll(RegExp(r'[\s\-()]'), '');
     if (limpio.isEmpty) {
       _showError('No hay un número de teléfono del pasajero para este viaje.');
