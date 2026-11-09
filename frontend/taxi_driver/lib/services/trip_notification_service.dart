@@ -421,11 +421,49 @@ class PlatformNotificationPort extends NotificationPort {
   /// Se inyecta desde el servicio para no tener un global en el plugin.
   static NotificationTapCallback? onTap;
 
+  /// Se toca una notificacion de VIAJE ASIGNADO (no de oferta).
+  ///
+  /// El payload de esas notificaciones viaja como `force:<trip_id>` para no
+  /// confundirlas con las ofertas, que usan el `trip_id` a secas.
+  static NotificationTapCallback? onForceAssigned;
+
+  /// Viaje asignado que llego con la app CERRADA (arranque en frio desde la
+  /// notificacion). La pantalla principal lo consume cuando ya tiene sesion y
+  /// sus callbacks montados.
+  static String? pendingForceTripId;
+
   static bool _initialized = false;
 
   /// Id numerico de la notificacion. Android no admite cadenas como id, asi que
   /// se deriva del `trip_id` de forma estable entre arranques.
   static int idOf(String tripId) => tripId.hashCode & 0x7fffffff;
+
+  /// Id de la notificacion de viaje asignado, en un espacio aparte para que
+  /// no colisione con el aviso de la misma oferta.
+  static int forceIdOf(String tripId) =>
+      ('force_$tripId').hashCode & 0x7fffffff;
+
+  /// Retira el aviso de "Viaje Asignado" cuando la UI ya monto el viaje.
+  static Future<void> cancelForceAssigned(String tripId) async {
+    try {
+      await _ensureInitialized();
+      await _plugin.cancel(forceIdOf(tripId));
+    } catch (_) {
+      // El aviso se ira solo al tocarlo; no es bloqueante.
+    }
+  }
+
+  static void _procesarPayload(String? payload) {
+    if (payload == null || payload.isEmpty) return;
+    if (payload.startsWith('force:')) {
+      final tripId = payload.substring(6);
+      if (tripId.isEmpty) return;
+      pendingForceTripId = tripId;
+      onForceAssigned?.call(tripId);
+      return;
+    }
+    onTap?.call(payload);
+  }
 
   static Future<void> _ensureInitialized() async {
     if (_initialized) return;
@@ -436,10 +474,22 @@ class PlatformNotificationPort extends NotificationPort {
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
       onDidReceiveNotificationResponse: (resp) {
-        final id = resp.payload;
-        if (id != null && id.isNotEmpty) onTap?.call(id);
+        _procesarPayload(resp.payload);
       },
     );
+
+    // Arranque en frio desde una notificacion. `onDidReceiveNotificationResponse`
+    // NO se dispara en este caso: el payload solo esta en los detalles de
+    // lanzamiento y hay que leerlo a mano.
+    try {
+      final lanzamiento = await _plugin.getNotificationAppLaunchDetails();
+      if (lanzamiento?.didNotificationLaunchApp == true) {
+        _procesarPayload(lanzamiento?.notificationResponse?.payload);
+      }
+    } catch (_) {
+      // En algunas versiones de Android el dato no esta disponible; no es
+      // bloqueante: al abrir la app se recupera el viaje activo por HTTP.
+    }
 
     // El canal es lo que fija el sonido y la vibrate en Android 8+. Se crea con
     // `RawResourceAndroidNotificationSound` para que suene el `spacebell` de

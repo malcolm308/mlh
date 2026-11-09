@@ -189,6 +189,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// viaje que acababa de ganar el propio chofer.
   String? _aceptandoTripId;
 
+  /// Viaje asignado por el administrador que se esta montando.
+  ///
+  /// Evita que el evento WS y el respaldo por HTTP monten el mismo viaje dos
+  /// veces (doble peticion, doble asistente y doble SnackBar).
+  String? _forzandoTripId;
+
   /// Bloqueo del boton "Aceptar".
   ///
   /// Se activa en el mismo instante en que el chofer toca y no se suelta hasta
@@ -397,12 +403,22 @@ double? _rumboParaFlecha() {
         const Duration(seconds: 60), (_) => _loadTodayEarnings());
     _initGps();
     _initNotificaciones();
+    // Flag para el servicio en segundo plano: con la app visible no debe
+    // duplicar con una notificacion el viaje que ya se pinta aqui.
+    unawaited(OfertasBackgroundService.marcarPrimerPlano(true));
     _bg.configurar();
     _tipoVehiculoActivo = widget.profile.tipoVehiculo;
     // Oferta empujada por el despacho: la app re-polling al instante para
     // levantar la tarjeta con TODOS sus filtros (tipo, rechazados, plazo).
     _ws.onDatos = (canal, datos) {
-      if ((datos['event'] ?? '') == 'trip_offer') unawaited(_tick());
+      final evento = (datos['event'] ?? '').toString();
+      if (evento == 'trip_offer') {
+        unawaited(_tick());
+      } else if (evento == 'trip_force_assigned') {
+        // El administrador se lo asigno a mano: no es una oferta, es un viaje
+        // ya aceptado. Se monta el panel y el radar deja de sondear.
+        unawaited(_abrirViajeAsignado(datos));
+      }
     };
     // El chofer es el DUEÑO de la ruta: cada trazo nuevo del asistente
     // (fase/recalculo) viaja por WS al cliente activo del viaje.
@@ -627,13 +643,19 @@ double? _rumboParaFlecha() {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) return;
+    final visible = state == AppLifecycleState.resumed;
+    unawaited(OfertasBackgroundService.marcarPrimerPlano(visible));
+    if (!visible) return;
     // Al volver del segundo plano el reloj pudo cambiar y las ganancias
     // quedaron viejas: se resincroniza y se repinta la tarjeta.
     unawaited(widget.api.sincronizarReloj());
     _loadTodayEarnings();
     // Tambien pudo publicarse una version nueva mientras estaba fuera.
     unawaited(_revisarActualizacion());
+    // Si el servicio detecto una asignacion manual mientras la app estaba
+    // minimizada, se monta ahora. El WS de la UI pudo perderse el evento si
+    // el isolate estaba congelado.
+    unawaited(_recuperarAsignacionPendiente());
   }
 
   /// Consulta la version al backend y, si toca, muestra el aviso bloqueante.
@@ -651,6 +673,7 @@ double? _rumboParaFlecha() {
 
   @override
   void dispose() {
+    unawaited(OfertasBackgroundService.marcarPrimerPlano(false));
     _gpsSub?.cancel();
     _ticker?.cancel();
     _tripPoller?.cancel();
@@ -775,6 +798,12 @@ double? _rumboParaFlecha() {
       _abrirOfertaNotificada(tripId);
     };
 
+    // Notificacion de VIAJE ASIGNADO (no de oferta): se abre directamente su
+    // panel. Vale tanto si la app estaba viva como si arranco desde el aviso.
+    PlatformNotificationPort.onForceAssigned = (tripId) {
+      unawaited(_abrirViajeAsignado(null, tripId: tripId));
+    };
+
     _notif
       ..onExpired = _alExpirarOferta
       ..onTakenByOther = _alTomarOtroOferta;
@@ -793,6 +822,13 @@ double? _rumboParaFlecha() {
     } catch (e) {
       debugPrint('[NOTIF] no se pudo inicializar los avisos: $e');
     }
+    // Arranque en frio desde "¡Viaje Asignado!": el plugin entrega el payload
+    // en los detalles de lanzamiento, no por callback.
+    final pendiente = PlatformNotificationPort.pendingForceTripId;
+    PlatformNotificationPort.pendingForceTripId = null;
+    if (pendiente != null && pendiente.isNotEmpty) {
+      unawaited(_abrirViajeAsignado(null, tripId: pendiente));
+    }
     if (mounted) setState(() {});
   }
 
@@ -808,6 +844,136 @@ double? _rumboParaFlecha() {
       return;
     }
     _selectOffer(offer);
+  }
+
+  // ---------------- VIAJE ASIGNADO POR EL ADMINISTRADOR ----------------
+
+  /// Vuelve a la pantalla principal. Una asignacion manual es una emergencia:
+  /// da igual en que pantalla este el chofer, tiene que ver el viaje.
+  void _volverAlHome() {
+    if (!mounted) return;
+    try {
+      _scaffoldKey.currentState?.closeDrawer();
+    } catch (_) {}
+    final nav = Navigator.of(context);
+    if (nav.canPop()) nav.popUntil((r) => r.isFirst);
+  }
+
+  /// Abre el viaje que el administrador acaba de asignar.
+  ///
+  /// Se llama desde dos sitios:
+  ///  * el WebSocket de la UI (`datos` trae el viaje completo),
+  ///  * el toque de la notificacion en segundo plano (`tripId` solamente).
+  ///
+  /// En ambos casos se pide el viaje al backend porque es la fuente de verdad
+  /// (el chofer puede llevar minutos con la app congelada y el evento traer
+  /// datos viejos). Si el HTTP falla y el evento traia el viaje, se usa ese.
+  Future<void> _abrirViajeAsignado(
+    Map<String, dynamic>? datos, {
+    String? tripId,
+  }) async {
+    final id = (tripId ?? datos?['trip_id'] ?? '').toString();
+    if (!mounted || id.isEmpty) return;
+
+    // Si vino de una notificacion, volver al home es lo primero: el aviso
+    // pudo tocarse desde Perfil, Historial o un dialogo abierto.
+    if (tripId != null) _volverAlHome();
+
+    if (_activeTrip?.tripId == id) return;
+    if (_forzandoTripId == id) return;
+    _forzandoTripId = id;
+    try {
+      TripOffer? viaje;
+      try {
+        viaje = await widget.api.getTrip(id);
+      } catch (_) {
+        if (datos != null) viaje = TripOffer.fromJson(datos);
+      }
+      if (!mounted) return;
+      if (viaje == null) {
+        _mostrarAviso(
+            'No se pudo abrir el viaje asignado. Revisa tu conexión.');
+        return;
+      }
+      // Entre el evento y la consulta el viaje pudo cancelarse o completarse.
+      if (!estadosViajeVivos.contains(viaje.status)) {
+        await _limpiarMarcadorViaje();
+        await OfertasBackgroundService.limpiarViajeAsignado();
+        _mostrarAviso('Ese viaje ya no está activo');
+        return;
+      }
+      // El evento llega sin que el chofer toque nada: tambien se vuelve al
+      // home para que el panel quede a la vista.
+      if (datos != null) _volverAlHome();
+      await _montarViajeAsignado(viaje);
+    } finally {
+      _forzandoTripId = null;
+    }
+  }
+
+  /// Monta el panel del viaje asignado: mismo circuito que aceptar una oferta,
+  /// pero sin POST (el viaje ya esta `accepted` en el backend) y deteniendo el
+  /// radar de ofertas.
+  Future<void> _montarViajeAsignado(TripOffer viaje) async {
+    if (!mounted) return;
+
+    // Radar apagado: sin ticker no hay sondeos ni ofertas nuevas mientras el
+    // chofer esta ocupado. `_alPerderElViaje` lo vuelve a arrancar.
+    _ticker?.cancel();
+    _ticker = null;
+    _offerTimer?.cancel();
+    _lostTimer?.cancel();
+
+    // Retirar cualquier oferta pendiente: ya no aplica, el chofer tiene viaje.
+    for (final id in _ofertaCache.keys.toList()) {
+      await _notif.resolveTrip(id);
+    }
+    _ofertaCache.clear();
+    _declinedTripIds.clear();
+    try {
+      await PlatformNotificationPort.cancelForceAssigned(viaje.tripId);
+    } catch (_) {}
+    await OfertasBackgroundService.limpiarViajeAsignado();
+
+    if (!mounted) return;
+    setState(() {
+      _activeTrip = viaje;
+      _selectedOffer = null;
+      _lostOffer = null;
+      _lostCountdown = 0;
+      _isAccepting = false;
+      _aceptandoTripId = null;
+      _loading = false;
+      _error = null;
+      _route = [];
+      _routeToPickup = [];
+      _rutaEsRecalculada = false;
+      _rutaRecogidaEsRecalculada = false;
+    });
+
+    // Viaje nuevo: la ruta cacheada era de otro trayecto.
+    OsrmService.olvidarCache();
+    await _guardarMarcadorViaje(viaje);
+    _startTripPoller();
+    _cancelacion.cargar(driverId: widget.driverId);
+    unawaited(_asistente.iniciar(
+      tripId: viaje.tripId,
+      fase: 'recogida',
+      origen: _driverPos,
+      destino: viaje.pickup ?? viaje.dropoff ?? _driverPos,
+    ));
+    _refreshRoutes();
+    _mostrarAviso('Viaje asignado por el administrador');
+  }
+
+  /// Recupera la asignacion que el servicio de segundo plano detecto mientras
+  /// la app estaba minimizada o con el isolate congelado.
+  Future<void> _recuperarAsignacionPendiente() async {
+    if (!mounted || _activeTrip != null) return;
+    final id = await OfertasBackgroundService.leerViajeAsignado();
+    if (id == null || id.isEmpty || !mounted) return;
+    await OfertasBackgroundService.limpiarViajeAsignado();
+    await _abrirViajeAsignado(null, tripId: id);
   }
 
   /// La oferta se agoto sin respuesta. La tarjeta ya se retira sola por su
@@ -2014,6 +2180,9 @@ final updated = await widget.api.getTrip(trip.tripId);
     _filtroGps.reiniciar();
     // Sin viaje en curso ya no hace falta el marcador de antigüedad.
     await _limpiarMarcadorViaje();
+    // Si el viaje se monto desde una asignacion manual, el radar quedo
+    // detenido. Al cerrarse el viaje vuelve a buscar ofertas.
+    if (_online && _ticker == null) _startTicker();
 
     // El viaje termino (completed/cancelled/expired): recien ahora se puede
     // mostrar el aviso de actualizacion obligatoria si estaba pendiente.

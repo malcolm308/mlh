@@ -7,6 +7,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../api_config.dart';
 
@@ -68,6 +69,21 @@ class OfertasBackgroundService {
   static const _prefLastLat = 'bg_last_lat';
   static const _prefLastLng = 'bg_last_lng';
   static const _prefTipo = 'bg_tipo_vehiculo';
+
+  /// Esta la app VISIBLE (lifecycle `resumed`)? La escribe la pantalla.
+  ///
+  /// El servicio solo muestra la notificacion de "viaje asignado" cuando la
+  /// app no esta en primer plano: si el chofer la tiene abierta, el panel del
+  /// viaje es suficiente y una notificacion del sistema seria ruido.
+  static const _prefForeground = 'bg_foreground';
+
+  /// Viaje asignado por el administrador que hay que recuperar al volver a la
+  /// app (segundo plano o notificacion tocada). Lo escribe el servicio.
+  static const String prefViajeAsignado = 'bg_force_trip';
+
+  /// Ultimo viaje asignado que YA se notifico, para no repetir el aviso en
+  /// cada ciclo del sondeo de respaldo.
+  static const _prefForceNotified = 'bg_force_notified';
 
   /// Id del proceso de arranque de la app: el servicio ignora una oferta
   /// detectada mas de `ttlAviso` seg antes, y programa su retiro igual que la
@@ -170,6 +186,35 @@ class OfertasBackgroundService {
       }
     } catch (_) {}
   }
+
+  /// La pantalla avisa cuando pasa a primer plano o a segundo plano.
+  ///
+  /// El servicio lo usa para decidir si debe mostrar la notificacion de viaje
+  /// asignado o si la UI ya se esta encargando.
+  static Future<void> marcarPrimerPlano(bool activo) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefForeground, activo);
+    } catch (_) {}
+  }
+
+  /// Viaje asignado que el servicio detecto y la UI debe montar al volver.
+  static Future<String?> leerViajeAsignado() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(prefViajeAsignado);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// La UI ya monto el viaje: no hay que recuperarlo otra vez.
+  static Future<void> limpiarViajeAsignado() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(prefViajeAsignado);
+    } catch (_) {}
+  }
 }
 
 /// Punto de entrada del isolate background. El icono `@pragma` evita que
@@ -181,8 +226,8 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
   // El servicio puede ser reiniciado por el sistema en CUALQUIER momento
   // (app cerrada, crash previo). Los canales de notificacion se crean aqui
   // otra vez por si este isolate es lo primero que corre del proceso: sin el
-  // canal del servicio y el de ofertas, el primer `startForeground`/`show`
-  // tumbaria el proceso.
+  // canal del servicio, el de ofertas y el de asignaciones, el primer
+  // `startForeground`/`show` tumbaria el proceso.
   try {
     await crearCanalServicio();
   } catch (_) {}
@@ -193,6 +238,12 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
   final token = prefs.getString('driver_token') ?? '';
   final driverId = prefs.getString('driver_id') ?? '';
 
+  // Viaje que la app ya tenia cuando arranco el servicio. Cualquier otro
+  // viaje vivo que aparezca despues es una asignacion NUEVA (force-assign) y
+  // merece aviso.
+  final marcadorAlArrancar = prefs.getString('viaje_activo_trip') ?? '';
+  final yaNotificado = prefs.getString(OfertasBackgroundService._prefForceNotified);
+
   final aviso = _AvisosService();
   await aviso.init();
 
@@ -201,6 +252,12 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
   final Map<String, Timer> timers = {};
   final Set<String> avisadas = {};
 
+  // Asignaciones ya avisadas. Se siembra con la ultima persistida para que un
+  // reinicio del servicio no repita la notificacion del mismo viaje.
+  final Set<String> asignadasAvisadas = <String>{
+    if (yaNotificado != null && yaNotificado.isNotEmpty) yaNotificado,
+  };
+
   void retirar(String tripId) {
     timers.remove(tripId)?.cancel();
     if (avisadas.remove(tripId)) {
@@ -208,7 +265,7 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
     }
   }
 
-  // Marca de corte: si el latido de la pantalla corre, no sondeamos.
+  // Marca de corte: si el latido de la pantalla corre, no sondeamos ofertas.
   const corteLatido = Duration(seconds: 15);
   Future<bool> latidoFresco() async {
     final p = await SharedPreferences.getInstance();
@@ -217,8 +274,120 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
     return (ms - ts) < corteLatido.inMilliseconds;
   }
 
+  /// La UI esta visible y atendiendo los eventos.
+  ///
+  /// Se exigen las dos cosas: el flag de lifecycle Y el latido del sondeo. Si
+  /// el proceso de la app murio de golpe, el flag puede quedar obsoleto en
+  /// `true`; el latido congelado lo delata y deja que el servicio avise.
+  Future<bool> enPrimerPlano() async {
+    final p = await SharedPreferences.getInstance();
+    final visible =
+        p.getBool(OfertasBackgroundService._prefForeground) ?? false;
+    if (!visible) return false;
+    return latidoFresco();
+  }
+
+  /// Notificacion local de alta prioridad: el viaje ya es de este chofer.
+  Future<void> avisarAsignado(String tripId, String recogida) async {
+    if (!asignadasAvisadas.add(tripId)) return;
+    await aviso.mostrarAsignado(tripId, recogida);
+    // El viaje ya no es una oferta: retirar el aviso de oferta del mismo id,
+    // que se calcula con otro espacio numerico.
+    await aviso.cancelar(tripId);
+    final p = await SharedPreferences.getInstance();
+    await p.setString(OfertasBackgroundService._prefForceNotified, tripId);
+    await p.setString(OfertasBackgroundService.prefViajeAsignado, tripId);
+  }
+
+  // ---------------- Viaje asignado: WebSocket ----------------
+  //
+  // El canal `driver:{id}:offers` es el mismo de las ofertas. El backend
+  // publica ahi `trip_force_assigned` con el viaje completo. Este isolate
+  // mantiene su PROPIA conexion: la de la pantalla puede estar congelada o
+  // muerta cuando el telefono esta bloqueado.
+  final ws = _WsAsignaciones(
+    driverId: driverId,
+    tokenInicial: token,
+    onAsignado: (tripId, datos) async {
+      // Con la app visible manda la UI, que ademas detiene el radar.
+      if (await enPrimerPlano()) return;
+      await avisarAsignado(tripId, _recogidaDe(datos));
+    },
+  );
+  ws.iniciar();
+
+  // ---------------- Viaje asignado: respaldo HTTP ----------------
+  //
+  // En redes cubanas el WS puede tardar en reconectar. El historial del chofer
+  // es barato y permite detectar la asignacion aunque el push no llegue.
+  Future<void> revisarAsignacionPorHttp() async {
+    if (token.isEmpty || driverId.isEmpty) return;
+    try {
+      final resp = await http
+          .get(
+            Uri.parse(
+                '${ApiConfig.baseUrl}/trips/driver/$driverId?limit=5'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 15));
+      if (resp.statusCode != 200) return;
+
+      final list = jsonDecode(utf8.decode(resp.bodyBytes));
+      if (list is! List) return;
+
+      Map? viaje;
+      for (final j in list) {
+        if (j is Map && _estadosVivos.contains(j['status'])) {
+          viaje = j;
+          break;
+        }
+      }
+      if (viaje == null) return;
+
+      final tripId = viaje['trip_id']?.toString() ?? '';
+      if (tripId.isEmpty) return;
+      // Ese viaje ya lo tenia la app al arrancar el servicio: no es nuevo.
+      if (tripId == marcadorAlArrancar) return;
+      if (asignadasAvisadas.contains(tripId)) return;
+
+      // Direccion legible: el historial no trae `request_address`.
+      var recogida = 'Direccion pendiente de confirmar';
+      try {
+        final detalle = await http
+            .get(
+              Uri.parse('${ApiConfig.baseUrl}/trips/$tripId'),
+              headers: {'Authorization': 'Bearer $token'},
+            )
+            .timeout(const Duration(seconds: 15));
+        if (detalle.statusCode == 200) {
+          final j = jsonDecode(utf8.decode(detalle.bodyBytes));
+          if (j is Map) recogida = _recogidaDe(j);
+        }
+      } catch (_) {
+        // Se avisa igual con la direccion pendiente.
+      }
+
+      if (await enPrimerPlano()) return;
+      await avisarAsignado(tripId, recogida);
+    } catch (_) {
+      // El siguiente ciclo reintenta.
+    }
+  }
+
+  servicio.on('stopService').listen((_) {
+    ws.detener();
+    servicio.stopSelf();
+  });
+
   Timer.periodic(const Duration(seconds: 4), (_) async {
     try {
+      // En segundo plano (o con la app congelada) se vigila la asignacion
+      // manual aunque el latido siga fresco: un telefono minimizado no es un
+      // telefono visible.
+      if (!await enPrimerPlano()) {
+        await revisarAsignacionPorHttp();
+      }
+
       if (await latidoFresco()) return;
 
       final p = await SharedPreferences.getInstance();
@@ -278,6 +447,102 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
   });
 }
 
+/// Estados en los que el chofer ya tiene un viaje encima.
+const Set<String> _estadosVivos = {
+  'accepted',
+  'driver_arrived',
+  'in_progress',
+};
+
+/// WebSocket del isolate de segundo plano.
+///
+/// Es una conexion PROPIA, distinta de la de `WsChofer` en la pantalla. El
+/// isolate de UI puede estar congelado o muerto cuando el telefono se bloquea;
+/// esta conexion vive con el servicio en primer plano y recibe el empujon
+/// `trip_force_assigned` aunque la app no se este dibujando.
+class _WsAsignaciones {
+  _WsAsignaciones({
+    required this.driverId,
+    required this.tokenInicial,
+    required this.onAsignado,
+  });
+
+  final String driverId;
+  final String tokenInicial;
+  final Future<void> Function(String tripId, Map<String, dynamic> datos)
+      onAsignado;
+
+  WebSocketChannel? _canal;
+  Timer? _reconexion;
+  bool _deseado = false;
+
+  void iniciar() {
+    _deseado = true;
+    unawaited(_conectar());
+  }
+
+  void detener() {
+    _deseado = false;
+    _reconexion?.cancel();
+    _reconexion = null;
+    try {
+      _canal?.sink.close();
+    } catch (_) {}
+    _canal = null;
+  }
+
+  Future<void> _conectar() async {
+    if (!_deseado || driverId.isEmpty) return;
+    // El token se relee en cada reconexion: la pantalla puede haberlo
+    // renovado mientras esta conexion estaba caida.
+    String token = tokenInicial;
+    try {
+      final p = await SharedPreferences.getInstance();
+      token = p.getString('driver_token') ?? tokenInicial;
+    } catch (_) {}
+    if (!_deseado) return;
+
+    try {
+      final base = ApiConfig.baseUrl;
+      final ws = base.startsWith('https://')
+          ? base.replaceFirst('https://', 'wss://')
+          : base.replaceFirst('http://', 'ws://');
+      final canal = WebSocketChannel.connect(Uri.parse(
+          '$ws/ws/chofer/$driverId?token=${Uri.encodeQueryComponent(token)}'));
+      _canal = canal;
+      canal.stream.listen(
+        (crudo) {
+          try {
+            final env = jsonDecode(crudo as String);
+            if (env is! Map) return;
+            final datos = env['datos'];
+            if (datos is! Map) return;
+            final evento = Map<String, dynamic>.from(datos);
+            if ((evento['event'] ?? '') != 'trip_force_assigned') return;
+            final tripId = (evento['trip_id'] ?? '').toString();
+            if (tripId.isEmpty) return;
+            unawaited(onAsignado(tripId, evento));
+          } catch (_) {
+            // Payload ilegible: se ignora, el respaldo HTTP lo cubre.
+          }
+        },
+        onDone: _reconectar,
+        onError: (Object _) => _reconectar(),
+      );
+    } catch (_) {
+      _reconectar();
+    }
+  }
+
+  void _reconectar() {
+    if (!_deseado) return;
+    _reconexion?.cancel();
+    _reconexion = Timer(const Duration(seconds: 5), () {
+      if (_deseado) unawaited(_conectar());
+    });
+  }
+}
+
 /// Campos que el aviso necesita, aislados del mapa JSON por si el backend
 /// cambia una clave.
 String _recogidaDe(Map j) {
@@ -326,9 +591,33 @@ class _AvisosService {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(canal);
+
+    // Canal PROPIO del viaje asignado. No se reutiliza `trip_offers_v3`
+    // porque Android fija la importancia y el texto del canal al crearlo, y
+    // aqui el aviso es mas urgente y persistente que una oferta.
+    final canalAsignado = AndroidNotificationChannel(
+      'trip_assigned_v1',
+      'Viajes asignados',
+      description: 'Aviso de un viaje asignado manualmente por el administrador.',
+      importance: Importance.max,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound('spacebell'),
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 900, 300, 900, 300, 900]),
+      enableLights: true,
+    );
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(canalAsignado);
   }
 
   int _idDe(String tripId) => tripId.hashCode & 0x7fffffff;
+
+  /// Id de la notificacion de viaje asignado, en un espacio distinto al de la
+  /// oferta del mismo viaje para que no se pisen.
+  int _idAsignado(String tripId) =>
+      ('force_$tripId').hashCode & 0x7fffffff;
 
   Future<void> mostrar(String tripId, String rec) async {
     await init();
@@ -358,4 +647,41 @@ class _AvisosService {
   }
 
   Future<void> cancelar(String tripId) => _plugin.cancel(_idDe(tripId));
+
+  /// Aviso de alta prioridad: el administrador te asigno este viaje.
+  ///
+  /// El payload lleva el prefijo `force:` para que la pantalla principal
+  /// distinga este toque de uno de oferta y navegue directo al viaje.
+  Future<void> mostrarAsignado(String tripId, String rec) async {
+    await init();
+    final detalles = AndroidNotificationDetails(
+      'trip_assigned_v1',
+      'Viajes asignados',
+      channelDescription:
+          'Aviso de un viaje asignado manualmente por el administrador.',
+      importance: Importance.max,
+      priority: Priority.max,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound('spacebell'),
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 900, 300, 900, 300, 900]),
+      enableLights: true,
+      visibility: NotificationVisibility.public,
+      autoCancel: true,
+      category: AndroidNotificationCategory.call,
+      styleInformation: BigTextStyleInformation(
+        'Recogida en: $rec\nToca para abrir el viaje.',
+      ),
+    );
+    await _plugin.show(
+      _idAsignado(tripId),
+      '¡Viaje Asignado!',
+      'Recogida en: $rec',
+      NotificationDetails(android: detalles),
+      payload: 'force:$tripId',
+    );
+  }
+
+  Future<void> cancelarAsignado(String tripId) =>
+      _plugin.cancel(_idAsignado(tripId));
 }

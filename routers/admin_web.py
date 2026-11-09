@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 from datetime import datetime
@@ -45,7 +46,9 @@ from routers.Solicitud_de_viajes_v4 import (
     OFFER_TTL_SECS,
     _driver_vehicle_type,
     _normalize_vehicle_type,
+    garnet,
     get_connection,
+    get_trip,
     publish_trip_event,
     set_driver_status,
 )
@@ -438,6 +441,24 @@ class ForzarAsignacionIn(BaseModel):
     driver_id: Optional[str] = Field(None, description="Alternativa al telefono.")
 
 
+def _telefono_cliente(client_id) -> Optional[str]:
+    """Telefono del pasajero para el evento de asignacion manual.
+
+    La app del chofer ya lo recibe en `GET /trips/{id}`, pero el evento se
+    publica tambien con el objeto completo para que el aviso en segundo plano
+    pueda mostrar la recogida incluso si el HTTP falla.
+    """
+    try:
+        if not client_id or not ObjectId.is_valid(str(client_id)):
+            return None
+        doc = cliente_coleccion.find_one({"_id": ObjectId(str(client_id))}) or {}
+        profile = doc.get("profile") or {}
+        return (doc.get("numero_de_telefono") or doc.get("phone")
+                or profile.get("phone"))
+    except Exception:
+        return None
+
+
 def _buscar_chofer_para_asignar(datos: ForzarAsignacionIn) -> dict:
     if datos.driver_id:
         if not ObjectId.is_valid(datos.driver_id):
@@ -598,6 +619,41 @@ async def forzar_asignacion(
         await set_driver_status(driver_id, "busy")
     except Exception as exc:
         logger.warning("force-assign: no se pudo marcar chofer %s: %s", driver_id, exc)
+
+    # Aviso DIRECTO al chofer por su canal de WebSocket.
+    #
+    # Hasta ahora force-assign solo publicaba `trip_accepted` en el canal del
+    # VIAJE: el pasajero se enteraba y el chofer no. La app del chofer no
+    # sondea viajes ya asignados (solo `requested-nearby`), asi que el admin
+    # cambiaba la fila en Postgres y el chofer seguia en "Aceptando viajes"
+    # hasta reiniciar la app.
+    #
+    # El evento lleva el objeto completo del viaje (origen, destino, cliente y
+    # precio): el isolate de segundo plano lo usa para la notificacion local y
+    # la app en primer plano lo usa para montar el panel del viaje sin esperar
+    # a otra peticion.
+    try:
+        viaje = get_trip(trip_id) or {}
+        evento = _json_trip(viaje)
+        evento.update({
+            "event": "trip_force_assigned",
+            "trip_id": trip_id,
+            "driver_id": driver_id,
+            "status": "accepted",
+            "asignado_por": admin.get("email"),
+            "client_name": _nombre_de(
+                cliente_coleccion, viaje.get("client_id")),
+            "client_phone": _telefono_cliente(viaje.get("client_id")),
+        })
+        await garnet.publish(
+            f"driver:{driver_id}:offers",
+            json.dumps(evento, ensure_ascii=False, default=str),
+        )
+    except Exception as exc:
+        logger.warning(
+            "force-assign: no se pudo avisar al chofer %s por WS: %s",
+            driver_id, exc)
+
     try:
         await publish_trip_event(trip_id, "trip_accepted", {
             "driver_id": driver_id,
