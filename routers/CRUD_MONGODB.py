@@ -244,17 +244,24 @@ async def login(request: LoginRequest):
             status_code=400, detail="Escribe tu número de teléfono o tu correo")
 
     # La app que pregunta decide donde mirar: una persona puede darse de alta
-    # en la app de chofer Y en la de cliente con el MISMO numero; el login no
-    # puede devolver la cuenta equivocada. Sin `app` (apps viejas, panel web)
-    # se conserva el orden legacy.
+    # en la app de chofer Y en la de cliente (e incluso ser administrador) con
+    # el MISMO correo; el login tiene que devolver la cuenta de la app que
+    # pregunta, no la primera que aparezca. Sin `app` (apps viejas) se
+    # conserva el orden legacy, con el admin al final.
     app_destino = (request.app or "").strip().lower()
     if app_destino in ("chofer", "driver"):
         candidatas = [("chofer", chofer_coleccion)]
     elif app_destino in ("cliente", "client", "pasajero"):
         candidatas = [("cliente", cliente_coleccion)]
+    elif app_destino in ("admin", "web"):
+        # El panel SIEMPRE pide 'admin': con el mismo correo usado en las
+        # otras apps, aqui no puedo resolver chofer (fuente del bug
+        # "token app=driver" al crear administradores).
+        candidatas = [("admin", admin_coleccion)]
     else:
         candidatas = [("chofer", chofer_coleccion),
-                      ("cliente", cliente_coleccion)]
+                      ("cliente", cliente_coleccion),
+                      ("admin", admin_coleccion)]
 
     if request.parece_telefono:
         # Se busca por número normalizado, porque en la base el teléfono está
@@ -288,6 +295,8 @@ async def login(request: LoginRequest):
                     detail="Tu cuenta fue rechazada por el administrador. Contacta al soporte.")
             if not cuenta.get("Enable", True):
                 raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
+        if rol == "admin" and not cuenta.get("Enable", True):
+            raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
         if bcrypt.checkpw(request.password.encode('utf-8'),
                           cuenta.get("password", "").encode('utf-8')):
             token_data = {"sub": cuenta["email"], "id": str(cuenta["_id"])}
@@ -295,25 +304,22 @@ async def login(request: LoginRequest):
                 return _respuesta_tokens(
                     token_data, create_access_token_chofer,
                     create_refresh_token_chofer)
+            if rol == "admin":
+                return _respuesta_tokens(
+                    token_data, create_access_token_admin,
+                    create_refresh_token_admin)
             return _respuesta_tokens(
                 token_data, create_access_token_cliente,
                 create_refresh_token_cliente)
 
-    if request.parece_telefono and app_destino:
-        # Una app que declara su rol no aprende cuentas del panel.
+    if app_destino:
+        # Una app que declara su rol no aprende cuentas de otro tipo: si el
+        # correo existe como chofer pero entras al panel, es un 401 limpio
+        # antes que un token equivocado.
         raise HTTPException(
             status_code=401,
-            detail="El número de teléfono o la contraseña no son correctos")
-
-    admin = None if request.parece_telefono else \
-        admin_coleccion.find_one({"email": identificador.lower()})
-    if admin:
-        if bcrypt.checkpw(request.password.encode('utf-8'),
-                          admin.get("password", "").encode('utf-8')):
-            token_data = {"sub": admin["email"], "id": str(admin["_id"])}
-            return _respuesta_tokens(
-                token_data, create_access_token_admin,
-                create_refresh_token_admin)
+            detail="El identificador o la contraseña no son correctos para "
+                   "esta aplicación")
 
     raise HTTPException(
         status_code=401,
