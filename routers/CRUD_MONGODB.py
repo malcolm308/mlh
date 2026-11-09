@@ -47,11 +47,18 @@ class LoginRequest(BaseModel):
     Da igual qué se mande: el JWT sigue llevando el correo en `sub`. Cambiarlo
     obligaría a revisar documentos.py, admin_panel.py y billetera.py, que hoy lo
     usan como identificador de email.
+
+    `app` declara QUIEN pregunta: 'chofer' o 'cliente'. Es lo que permite tener
+    la MISMA persona dada de alta en las dos apps con el MISMO numero: el login
+    devuelve el token de la app que pregunta, no el de la primera cuenta que
+    aparezca. Las apps viejas no mandan nada y usan el orden legacy
+    (chofer -> cliente -> admin).
     """
 
     email: Optional[str] = None
     telefono: Optional[str] = None
     password: str
+    app: Optional[str] = None
 
     @property
     def identificador(self) -> str:
@@ -198,8 +205,13 @@ def _por_telefono_o_primero(coleccion, digitos: str):
     return None
 
 
-def _rechazar_telefono_repetido(coleccion, telefono: str, otro_coleccion=None):
-    """Impide dar de alta dos cuentas con el mismo número.
+def _rechazar_telefono_repetido(coleccion, telefono: str) -> None:
+    """Impide dar de alta dos cuentas con el mismo número DENTRO de una app.
+
+    La misma persona PUEDE estar dada de alta en la app de chofer y en la de
+    cliente con el mismo numero: son cuentas distintas en bases distintas. Lo
+    que no puede haber son dos choferes (o dos pasajeros) con el mismo
+    telefono, porque el login ya no sabria a quien entregar el token.
 
     Se compara el teléfono NORMALIZADO y no el texto guardado: sin eso,
     "+5359295207" y "59295207" pasarían los dos y el índice único no serviría,
@@ -210,10 +222,6 @@ def _rechazar_telefono_repetido(coleccion, telefono: str, otro_coleccion=None):
             status_code=400,
             detail="El número de teléfono no es válido. Escribe los 8 dígitos.")
     if buscar_por_telefono(coleccion, telefono):
-        raise HTTPException(
-            status_code=409,
-            detail="El número de teléfono ya está asociado a otra cuenta.")
-    if otro_coleccion is not None and buscar_por_telefono(otro_coleccion, telefono):
         raise HTTPException(
             status_code=409,
             detail="El número de teléfono ya está asociado a otra cuenta.")
@@ -235,52 +243,77 @@ async def login(request: LoginRequest):
         raise HTTPException(
             status_code=400, detail="Escribe tu número de teléfono o tu correo")
 
+    # La app que pregunta decide donde mirar: una persona puede darse de alta
+    # en la app de chofer Y en la de cliente con el MISMO numero; el login no
+    # puede devolver la cuenta equivocada. Sin `app` (apps viejas, panel web)
+    # se conserva el orden legacy.
+    app_destino = (request.app or "").strip().lower()
+    if app_destino in ("chofer", "driver"):
+        candidatas = [("chofer", chofer_coleccion)]
+    elif app_destino in ("cliente", "client", "pasajero"):
+        candidatas = [("cliente", cliente_coleccion)]
+    else:
+        candidatas = [("chofer", chofer_coleccion),
+                      ("cliente", cliente_coleccion)]
+
     if request.parece_telefono:
         # Se busca por número normalizado, porque en la base el teléfono está
-        # escrito como lo escribió la persona: "+5359295207" y "59295207" son el
-        # mismo número y tienen que entrar por la misma puerta.
+        # escrito como lo escribió la persona: "+5359295207" y "59295207" son
+        # el mismo número y tienen que entrar por la misma puerta.
         digitos = normalizar_telefono(identificador)
         if not es_telefono_valido(digitos):
             raise HTTPException(
                 status_code=401,
                 detail="Ese número no parece válido. Revisa que esté completo.")
-        chofer = _por_telefono_o_primero(chofer_coleccion, digitos)
-        cliente = None if chofer else _por_telefono_o_primero(cliente_coleccion, digitos)
+        cuentas = [(rol, _por_telefono_o_primero(col, digitos))
+                   for rol, col in candidatas]
     else:
         correo = identificador.lower()
-        chofer = chofer_coleccion.find_one({"email": correo})
-        cliente = None if chofer else cliente_coleccion.find_one({"email": correo})
+        cuentas = [(rol, col.find_one({"email": correo}))
+                   for rol, col in candidatas]
 
-    if chofer:
-        # El administrador decide si el chofer está apto para entrar a la app
-        estado = _estado_habilitacion(chofer)
-        if estado == ESTADO_PENDIENTE:
-            raise HTTPException(
-                status_code=403,
-                detail="Tu cuenta está pendiente de aprobación por el administrador")
-        if estado == ESTADO_RECHAZADO:
-            raise HTTPException(
-                status_code=403,
-                detail="Tu cuenta fue rechazada por el administrador. Contacta al soporte.")
-        if not chofer.get("Enable", True):
-            raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
-        if bcrypt.checkpw(request.password.encode('utf-8'), chofer.get("password", "").encode('utf-8')):
-            token_data = {"sub": chofer["email"], "id": str(chofer["_id"])}
-            return _respuesta_tokens(
-                token_data, create_access_token_chofer, create_refresh_token_chofer)
-
-    cliente = cliente or cliente_coleccion.find_one({"email": identificador.lower()})
-    if cliente:
-        if bcrypt.checkpw(request.password.encode('utf-8'), cliente.get("password", "").encode('utf-8')):
-            token_data = {"sub": cliente["email"], "id": str(cliente["_id"])}
-            return _respuesta_tokens(
-                token_data, create_access_token_cliente, create_refresh_token_cliente)
-    admin = admin_coleccion.find_one({"email": identificador.lower()})
-    if admin:
-            if bcrypt.checkpw(request.password.encode('utf-8'), admin.get("password", "").encode('utf-8')):
-                token_data = {"sub": admin["email"], "id": str(admin["_id"])}
+    for rol, cuenta in cuentas:
+        if not cuenta:
+            continue
+        if rol == "chofer":
+            # El administrador decide si el chofer está apto para entrar a la app
+            estado = _estado_habilitacion(cuenta)
+            if estado == ESTADO_PENDIENTE:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Tu cuenta está pendiente de aprobación por el administrador")
+            if estado == ESTADO_RECHAZADO:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Tu cuenta fue rechazada por el administrador. Contacta al soporte.")
+            if not cuenta.get("Enable", True):
+                raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
+        if bcrypt.checkpw(request.password.encode('utf-8'),
+                          cuenta.get("password", "").encode('utf-8')):
+            token_data = {"sub": cuenta["email"], "id": str(cuenta["_id"])}
+            if rol == "chofer":
                 return _respuesta_tokens(
-                    token_data, create_access_token_admin, create_refresh_token_admin)
+                    token_data, create_access_token_chofer,
+                    create_refresh_token_chofer)
+            return _respuesta_tokens(
+                token_data, create_access_token_cliente,
+                create_refresh_token_cliente)
+
+    if request.parece_telefono and app_destino:
+        # Una app que declara su rol no aprende cuentas del panel.
+        raise HTTPException(
+            status_code=401,
+            detail="El número de teléfono o la contraseña no son correctos")
+
+    admin = None if request.parece_telefono else \
+        admin_coleccion.find_one({"email": identificador.lower()})
+    if admin:
+        if bcrypt.checkpw(request.password.encode('utf-8'),
+                          admin.get("password", "").encode('utf-8')):
+            token_data = {"sub": admin["email"], "id": str(admin["_id"])}
+            return _respuesta_tokens(
+                token_data, create_access_token_admin,
+                create_refresh_token_admin)
 
     raise HTTPException(
         status_code=401,
@@ -298,10 +331,10 @@ async def create_chofer(chofer: CHOFER):
     if chofer_coleccion.find_one({"email": chofer.email}):
         raise HTTPException(status_code=400, detail="Correo ya registrado")
 
-    # El teléfono identifica a la persona, así que no puede repetirse: ni entre
-    # choferes ni contra una cuenta de pasajero.
-    _rechazar_telefono_repetido(chofer_coleccion, chofer.numero_de_telefono,
-                                 cliente_coleccion)
+    # El teléfono identifica la cuenta DENTRO de la app de chofer. La misma
+    # persona puede tener cuenta de pasajero con este mismo numero: son bases
+    # distintas y el login distingue por la app que pregunta.
+    _rechazar_telefono_repetido(chofer_coleccion, chofer.numero_de_telefono)
 
     # Convertir a dict CON fechas como string (gracias a mode='json')
     chofer_dict = chofer.model_dump(mode='json')
@@ -463,10 +496,10 @@ async def create_cliente(cliente: CLIENTE):
     if cliente_coleccion.find_one({"email": cliente.email}):
         raise HTTPException(status_code=400, detail="Correo ya registrado")
 
-    # El teléfono también es único entre pasajeros: es lo que usa la app para
-    # reconocer al pasajero y no puede apuntar a dos cuentas.
-    _rechazar_telefono_repetido(cliente_coleccion, cliente.numero_de_telefono,
-                                 chofer_coleccion)
+    # Único entre pasajeros: es lo que usa la app para reconocer al pasajero.
+    # La misma persona puede tener cuenta de chofer con este mismo numero; el
+    # login ya distingue por la app que pregunta.
+    _rechazar_telefono_repetido(cliente_coleccion, cliente.numero_de_telefono)
 
     # El código de referido llega como dato de entrada. Si es válido se guarda
     # el `_id` del referidor en `referido_por`; el código propio del pasajero se
