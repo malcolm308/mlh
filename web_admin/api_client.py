@@ -104,7 +104,7 @@ class ApiClient:
         """
         data = self._json(
             "POST", "/login",
-            json={"email": email.strip(), "password": password},
+            json={"email": email.strip(), "password": password, "app": "admin"},
             auth=False, retry_auth=False,
         )
         access = (data or {}).get("access_token")
@@ -163,6 +163,45 @@ class ApiClient:
         if fecha:
             params["fecha"] = fecha
         return self._json("GET", "/admin/choferes/top", params=params)
+
+    # ---------------- perfil y gestion de admins ----------------
+
+    def perfil_admin(self) -> dict:
+        """Email + rol del admin en sesion (define las pestanas visibles)."""
+        return self._json("GET", "/admin/perfil")
+
+    def listar_administradores(self) -> dict:
+        return self._json("GET", "/admin/administradores")
+
+    def crear_administrador(self, email: str, rol: str,
+                            nombre: str = "", telefono: str = "",
+                            password: Optional[str] = None) -> dict:
+        cuerpo: dict = {"email": email.strip(), "rol": rol}
+        if nombre.strip():
+            cuerpo["nombre"] = nombre.strip()
+        if telefono.strip():
+            cuerpo["telefono"] = telefono.strip()
+        if password:
+            cuerpo["password"] = password
+        return self._json("POST", "/admin/administradores", json=cuerpo)
+
+    def despedir_administrador(self, admin_id: str) -> dict:
+        return self._json("DELETE", "/admin/users/%s" % admin_id)
+
+    def asignar_password_admin(self, admin_id: str) -> dict:
+        """Sin pasarla por el panel: el backend genera y la devuelve UNA VEZ."""
+        return self._json("PUT", "/admin/users/%s/password" % admin_id,
+                          json={})
+
+    def cambiar_mi_password(self, actual: str, nueva: str) -> dict:
+        return self._json("PUT", "/admin/mi-password",
+                          json={"actual": actual, "nueva": nueva})
+
+    def buscar_clientes(self, q: str) -> dict:
+        return self._json("GET", "/users/admin/buscar", params={"q": q})
+
+    def borrar_cliente(self, cliente_id: str) -> dict:
+        return self._json("POST", "/users/admin/eliminar/%s" % cliente_id)
 
     def _refresh(self) -> None:
         if not self.refresh_token:

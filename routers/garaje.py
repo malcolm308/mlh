@@ -31,7 +31,8 @@ from typing import Optional, Tuple, Dict
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import (APIRouter, Body, File, Header, HTTPException, Request,
+from fastapi import (APIRouter, Body, Depends, File, Header, HTTPException,
+                     Request,
                      Response, UploadFile)
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
@@ -43,6 +44,7 @@ from db.Chofer.auth import verify_token as verify_chofer_token
 from services.fotos_nube import borrar as borrar_nube
 from services.fotos_nube import descargar as descargar_nube
 from services.fotos_nube import subir as subir_nube
+from routers.admin_roles import REQUIERE_OPERADOR_REGISTROS
 from services.tipo_vehiculo import (campos_exigidos_por_tipo,
                                     normalizar_tipo_vehiculo,
                                     tipos_iguales)
@@ -920,14 +922,14 @@ async def listar_vehiculos_admin(estado: Optional[str] = None,
 
 @router.put("/admin/vehicles/{vehiculo_id}/approve")
 async def aprobar_vehiculo(vehiculo_id: str, body: VehiculoAprobacion = Body(...),
-                           authorization: Optional[str] = Header(None)):
+                           admin: dict = Depends(REQUIERE_OPERADOR_REGISTROS)):
     """Aprueba o rechaza un vehiculo (solo administrador).
 
     El rechazo desactiva el vehiculo; si era el activo del chofer, este queda
     sin vehiculo activo y no podra ponerse en linea hasta elegir otro
     aprobado.
     """
-    email_admin = _admin_actual(authorization)
+    email_admin = admin["email"]
     if not ObjectId.is_valid(vehiculo_id):
         raise HTTPException(status_code=400, detail="Id invalido")
     decision = (body.decision or "").strip().lower()
@@ -983,7 +985,7 @@ async def aprobar_vehiculo(vehiculo_id: str, body: VehiculoAprobacion = Body(...
 @router.put("/admin/vehicles/{vehiculo_id}/fotos/{campo}/revisar")
 async def revisar_foto_vehiculo(vehiculo_id: str, campo: str,
                                 body: FotoRevision = Body(...),
-                                authorization: Optional[str] = Header(None)):
+                                admin: dict = Depends(REQUIERE_OPERADOR_REGISTROS)):
     """Aprueba o rechaza UNA foto del vehiculo (solo administrador).
 
     El chofer ve la decision y el motivo en su app. Cuando TODAS las
@@ -992,7 +994,7 @@ async def revisar_foto_vehiculo(vehiculo_id: str, campo: str,
     Un rechazo deja el vehiculo en `pendiente` para que el chofer vuelva a
     subirla.
     """
-    email_admin = _admin_actual(authorization)
+    email_admin = admin["email"]
     if not ObjectId.is_valid(vehiculo_id):
         raise HTTPException(status_code=400, detail="Id invalido")
     if campo not in FOTOS_OBLIGATORIAS:

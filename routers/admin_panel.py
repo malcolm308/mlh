@@ -14,6 +14,8 @@ Consumida por la app de escritorio `desktop_admin/`:
 Todos los endpoints exigen token de administrador.
 """
 import logging
+import random
+import secrets
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
@@ -22,6 +24,10 @@ import bcrypt
 import psycopg2
 import psycopg2.extras
 from bson import ObjectId
+
+from routers.admin_roles import (ROLES_VALIDOS, REQUIERE_OPERADOR_REGISTROS,
+                                 REQUIERE_OPERADOR_VIAJES, ROL_SUPER,
+                                 REQUIERE_SUPER)
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel
 
@@ -173,10 +179,14 @@ class AdminNuevoIn(BaseModel):
     backend; la contrasena en claro nunca se guarda ni se devuelve.
     """
 
-    nombre: str
+    # El super_admin es quien crea contrasenas: nombre y telefono son
+    # opcionales (si no hay nombre, se deriva del correo). La contrasena
+    # TAMBIEN: si no viene, el backend genera una aleatoria y la devuelve
+    # UNA VEZ en la respuesta.
+    nombre: str = ""
     email: str
-    telefono: str
-    password: str
+    telefono: str = ""
+    password: Optional[str] = None
     rol: str = "admin"
 
 
@@ -196,8 +206,19 @@ def _validar_admin_nuevo(datos: AdminNuevoIn) -> dict:
     telefono = (datos.telefono or "").strip()
     rol = (datos.rol or "").strip().lower() or "admin"
 
+    # Solo se crean OPERADORES. El super_admin es una cuenta semanticamente
+    # diferente (gatekeeper): si se pudiera fabricar con este endpoint, el
+    # "solo existe un super_admin" seria una promesa de papel.
+    ROLES_CREATIVOS = ("trip_operator", "user_operator", "wallet_operator")
+    if rol not in ROLES_CREATIVOS:
+        raise HTTPException(
+            status_code=400,
+            detail="El rol debe ser uno de: %s. No se puede crear un "
+                   "super_admin." % ", ".join(ROLES_CREATIVOS))
+
     if not nombre:
-        raise HTTPException(status_code=400, detail="El nombre es obligatorio.")
+        # Solo un correo: el nombre sale de la parte local del email.
+        nombre = email.split("@")[0].replace(".", " ").replace("_", " ").title()
     if "@" not in email or "." not in email.split("@")[-1]:
         raise HTTPException(
             status_code=400, detail="El email no tiene un formato valido.")
@@ -209,7 +230,10 @@ def _validar_admin_nuevo(datos: AdminNuevoIn) -> dict:
         raise HTTPException(
             status_code=409, detail="Ya existe un administrador con ese email.")
 
-    if len(datos.password) < ADMIN_PASSWORD_MINIMA:
+    # La contraseña la CREA EL BACKEND (o la trae el super con >= minima).
+    # Si no viene, se genera y se devuelve UNA VEZ en la respuesta.
+    contraseña = datos.password or _generar_contraseña()
+    if len(contraseña) < ADMIN_PASSWORD_MINIMA:
         raise HTTPException(
             status_code=400,
             detail="La contrasena debe tener al menos %d caracteres."
@@ -223,17 +247,20 @@ def _validar_admin_nuevo(datos: AdminNuevoIn) -> dict:
         # bcrypt con sal propia. El login usa `checkpw`, que compara contra
         # esto; guardar el texto plano seria inutil y peligroso.
         "password": bcrypt.hashpw(
-            datos.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
+            contraseña.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
         "rol": rol,
         "created_at": ahora,
         "updated_at": ahora,
+        # Para la respuesta de creacion unica vez; el documento en Mongo
+        # lo llevara (hay que hacer pop antes de insertar).
+        "_contraseña_plana": contraseña,
     }
 
 
 @router.post("/administradores", status_code=201)
 async def crear_administrador(
     body: AdminNuevoIn,
-    admin: dict = Depends(require_admin),
+    admin: dict = Depends(REQUIERE_SUPER),
 ):
     """Crea una cuenta de administrador.
 
@@ -242,25 +269,30 @@ async def crear_administrador(
     un acceso total al panel.
     """
     documento = _validar_admin_nuevo(body)
+    contraseña_plana = documento.pop("_contraseña_plana", None)
     resultado = admin_coleccion.insert_one(documento)
 
     logger.info("Administrador creado: %s por %s",
                 documento["email"], admin.get("email"))
 
     # El documento de vuelta lleva el hash fuera a proposito: que no salga por
-    # la red ni siquiera una vez evita que acabe en un log del panel.
+    # la red ni siquiera una vez evita que acabe en un log del panel. Pero la
+    # CONTRASEÑA GENERADA si se devuelve UNA VEZ: el pass nunca es recuperable
+    # despues, solo re-asignable con otro reset.
     return {
         "id": str(resultado.inserted_id),
         "nombre": documento["nombre"],
         "email": documento["email"],
         "telefono": documento["telefono"],
         "rol": documento["rol"],
-        "message": "Administrador creado correctamente",
+        "password_generada": contraseña_plana,
+        "message": "Administrador creado. Guarda la contraseña ahora: no se "
+                   "volverá a mostrar.",
     }
 
 
 @router.get("/administradores")
-async def listar_administradores(admin: dict = Depends(require_admin)):
+async def listar_administradores(admin: dict = Depends(REQUIERE_SUPER)):
     """Lista las cuentas de administrador, sin passwords."""
     admins = admin_coleccion.find({}).sort("created_at", 1)
     return {
@@ -277,6 +309,154 @@ async def listar_administradores(admin: dict = Depends(require_admin)):
             for a in admins
         ]
     }
+
+
+@router.delete("/users/{user_id}")
+async def despedir_administrador(
+    user_id: str,
+    admin: dict = Depends(REQUIERE_SUPER),
+):
+    """Despide (elimina) a otro administrador. SOLO super_admin.
+
+    Reglas de seguridad:
+      * Un operador que intente despidar recibe 403 (dependencia del router).
+      * El super_admin NO puede despedirse a si mismo: quedaria sin nadie
+        capaz de gestionar a los operadores.
+      * No se elimina por email en el body: el target va en la URL y la
+        identidad del que pide sale del token.
+    """
+    if not ObjectId.is_valid(user_id):
+        raise HTTPException(status_code=400, detail="Id invalido")
+    objetivo = admin_coleccion.find_one({"_id": ObjectId(user_id)})
+    if not objetivo:
+        raise HTTPException(status_code=404, detail="Administrador no encontrado")
+    if str(objetivo["_id"]) == str(admin["id"]):
+        raise HTTPException(
+            status_code=400,
+            detail="No puedes eliminar tu propia cuenta desde el panel.")
+    if (objetivo.get("rol") or "").strip().lower() == "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="No se puede eliminar una cuenta super_admin.")
+    admin_coleccion.delete_one({"_id": objetivo["_id"]})
+    logger.info("Administrador eliminado: %s (%s) por %s",
+                objetivo.get("email"), user_id, admin.get("email"))
+    return {"ok": True,
+            "message": "Administrador eliminado: %s" % objetivo.get("email")}
+
+
+class CambioPasswordIn(BaseModel):
+    """Cambio de la PROPIA contrasena: exige la actual, evita un token robado."""
+
+    actual: str
+    nueva: str
+
+
+class PasswordAsignadaIn(BaseModel):
+    """Reset de contraseña por el super_admin. Si `nueva` viene vacia o None,
+    el backend GENERA una y la devuelve UNA VEZ en la respuesta."""
+
+    nueva: Optional[str] = None
+
+
+def _hash_contrasena_nueva(nueva: str) -> str:
+    if len(nueva or "") < ADMIN_PASSWORD_MINIMA:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener "
+                            "al menos %d caracteres." % ADMIN_PASSWORD_MINIMA)
+    return bcrypt.hashpw(nueva.encode("utf-8"),
+                         bcrypt.gensalt()).decode("utf-8")
+
+
+def _generar_contraseña(largo: int = 12) -> str:
+    """Contraseña aleatoria legible: sin 0/O/1/l para que no se confundan
+    al leerse por telefono."""
+    alfabeto = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    # Garantiza letra mayuscula + minuscula + digito.
+    partes = [
+        secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ"),
+        secrets.choice("abcdefghjkmnpqrstuvwxyz"),
+        secrets.choice("23456789"),
+    ]
+    partes.extend(secrets.choice(alfabeto) for _ in range(max(largo - len(partes), 0)))
+    random.shuffle(partes)
+    return "".join(partes)
+
+
+@router.put("/mi-password")
+async def cambiar_mi_password(body: CambioPasswordIn,
+                              admin: dict = Depends(require_admin)):
+    """Cada administrador cambiaSU contrasena: valido la actual primero.
+
+    Exige sesion de admin (cualquier rol) pero SOLO toca la cuenta del
+    token: cambiar la de otro por esta via seria un agujero.
+    """
+    documento = admin_coleccion.find_one(
+        {"email": admin["email"]}, {"password": 1})
+    if not documento:
+        raise HTTPException(status_code=404, detail="Administrador no encontrado")
+    guardada = (documento.get("password") or "")
+    if not bcrypt.checkpw(body.actual.encode("utf-8"), guardada.encode("utf-8")):
+        raise HTTPException(status_code=403, detail="La contraseña actual no es correcta")
+    hash_nuevo = _hash_contrasena_nueva(body.nueva)
+    admin_coleccion.update_one({"_id": documento["_id"]},
+                               {"$set": {"password": hash_nuevo,
+                                         "updated_at": datetime.utcnow()}})
+    logger.info("Contrasena cambiada (propia) de %s", admin["email"])
+    return {"ok": True, "message": "Contraseña actualizada"}
+
+
+@router.put("/users/{user_id}/password")
+async def asignar_password(user_id: str,
+                           body: Optional[PasswordAsignadaIn] = None,
+                           admin: dict = Depends(REQUIERE_SUPER)):
+    """El super_admin pide una contrasena nueva PARA OTRO administrador.
+
+    Si no envia `nueva`, el backend la genera y la devuelve UNA VEZ (despues
+    no es recuperable: solo se puede pedir otro reset). Es el flujo "yo solo
+    la solicito": el operador la recibe por un canal seguro del super.
+    """
+    body = body or PasswordAsignadaIn()
+    if not ObjectId.is_valid(user_id):
+        raise HTTPException(status_code=400, detail="Id invalido")
+    objetivo = admin_coleccion.find_one(
+        {"_id": ObjectId(user_id)}, {"email": 1, "rol": 1})
+    if not objetivo:
+        raise HTTPException(status_code=404, detail="Administrador no encontrado")
+    contraseña = (body.nueva or "").strip() or _generar_contraseña()
+    hash_nuevo = _hash_contrasena_nueva(contraseña)
+    admin_coleccion.update_one({"_id": objetivo["_id"]},
+                               {"$set": {"password": hash_nuevo,
+                                         "updated_at": datetime.utcnow()}})
+    logger.info("Contrasena asignada a %s por %s",
+                objetivo.get("email"), admin["email"])
+    return {"ok": True,
+            "password_generada": contraseña,
+            "message": "Contraseña asignada a %s. Guardala: no se volverá a "
+                       "mostrar." % objetivo.get("email")}
+
+
+# ===================== PERFIL DEL ADMIN =====================
+
+def require_admin_super():  # mantenido aqui por el import legacy del panel
+    return REQUIERE_SUPER
+
+
+@router.get("/perfil")
+async def perfil_admin(admin: dict = Depends(require_admin)):
+    """Perfil del administrador que entra: email y rol para el panel.
+
+    Backfill del super: si la cuenta es la del dueño y aun no tiene el rol,
+    se asigna en el momento (`super_admin`), sin script de migracion.
+    """
+    if admin["email"] == "malcolmlamarhurtado@gmail.com" and \
+            (admin.get("rol") or "") != ROL_SUPER:
+        admin_coleccion.update_one(
+            {"email": admin["email"]},
+            {"$set": {"rol": ROL_SUPER, "updated_at": datetime.utcnow()}})
+        admin["rol"] = ROL_SUPER
+    return {"email": admin["email"], "rol": admin.get("rol") or "",
+            "nombre": (admin_coleccion.find_one({"email": admin["email"]},
+                                                {"nombre": 1}) or {}).get("nombre")}
 
 
 @router.get("/choferes")
@@ -324,7 +504,7 @@ async def choferes_pendientes(admin: dict = Depends(require_admin)):
 
 
 @router.post("/choferes/{driver_id}/estado")
-async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Depends(require_admin)):
+async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Depends(REQUIERE_OPERADOR_REGISTROS)):
     """Habilita o rechaza a un chofer (control de acceso a la app)."""
     if body.estado not in ESTADOS_VALIDOS:
         if isinstance(body.estado, str):
@@ -459,7 +639,7 @@ async def viajes_diarios(dias: int = 7, hasta: Optional[str] = None,
 
 
 @router.delete("/trips/{trip_id}")
-async def eliminar_viaje(trip_id: str, admin: dict = Depends(require_admin)):
+async def eliminar_viaje(trip_id: str, admin: dict = Depends(REQUIERE_SUPER)):
     """Elimina un viaje (pensado para viajes de PRUEBA).
 
     Un viaje de prueba completado contamina las ganancias del chofer y los
@@ -684,7 +864,7 @@ async def viajes_activos(admin: dict = Depends(require_admin)):
 
 
 @router.post("/trips/{trip_id}/force-start")
-async def forzar_inicio(trip_id: str, admin: dict = Depends(require_admin)):
+async def forzar_inicio(trip_id: str, admin: dict = Depends(REQUIERE_OPERADOR_VIAJES)):
     """Pone el viaje 'en curso' aunque el chofer no tenga conexion."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -746,7 +926,7 @@ async def forzar_fin(
     trip_id: str,
     background: BackgroundTasks,
     body: Optional[ForzarFinIn] = None,
-    admin: dict = Depends(require_admin),
+    admin: dict = Depends(REQUIERE_OPERADOR_VIAJES),
 ):
     """Cierra el viaje con el MISMO calculo de precio que el cierre normal.
 

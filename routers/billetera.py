@@ -26,6 +26,7 @@ from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
 from db.Administración.auth import verify_token as verify_admin_token
 from routers.Solicitud_de_viajes_v4 import get_connection
+from routers.admin_roles import REQUIERE_OPERADOR_CARTERA
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,7 @@ async def listar_choferes(q: Optional[str] = None, limit: int = 50,
 
 
 @router.post("/recarga")
-async def recargar(body: RecargaIn, admin: dict = Depends(require_admin)):
+async def recargar(body: RecargaIn, admin: dict = Depends(REQUIERE_OPERADOR_CARTERA)):
     """Recarga saldo al fondo de un chofer. Solo administradores."""
     identificador = body.driver_id or body.email
     if not identificador:
@@ -283,7 +284,7 @@ async def recargar(body: RecargaIn, admin: dict = Depends(require_admin)):
 
 
 @router.post("/descargo")
-async def descontar(body: DescargoIn, admin: dict = Depends(require_admin)):
+async def descontar(body: DescargoIn, admin: dict = Depends(REQUIERE_OPERADOR_CARTERA)):
     """Descuenta saldo del fondo de un chofer (ajuste o penalizacion)."""
     doc = _driver_doc(body.driver_id)
     if not doc:

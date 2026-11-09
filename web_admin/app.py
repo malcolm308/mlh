@@ -31,6 +31,27 @@ from api_client import ApiClient, ApiError, SesionExpirada, explicar_error
 from config import get_api_base_url
 from tabs import billetera, choferes, configuracion, vehiculos, viajes
 from tabs import viajes_criticos
+from tabs import admins, clientes
+
+# Pestañas permitidas por rol. `super_admin` ve TODO (incluida la de CRUD de
+# admins). Un rol de operador ve lo suyo; quien no tenga opcion, ve aviso.
+TABS_BASE = [
+    ("🚨 Viajes críticos", viajes_criticos.render),
+    ("🚗 Vehículos", vehiculos.render),
+    ("🎁 Promociones y tarifas", configuracion.render),
+    ("🧑‍✈️ Chóferes", choferes.render),
+    ("💰 Billetera", billetera.render),
+    ("📊 Viajes", viajes.render),
+    ("👤 Clientes", clientes.render),
+    ("👥 Gestión de Admins", admins.render),
+]
+
+TABS_POR_ROL = {
+    "super_admin": [t[0] for t in TABS_BASE],
+    "trip_operator": ["🚨 Viajes críticos", "📊 Viajes"],
+    "user_operator": ["🚗 Vehículos", "🧑‍✈️ Chóferes", "👤 Clientes"],
+    "wallet_operator": ["💰 Billetera"],
+}
 
 
 st.set_page_config(
@@ -122,6 +143,7 @@ def _restaurar_sesion() -> Optional[ApiClient]:
         st.warning("No se pudo restaurar la sesión: %s" % explicar_error(exc))
         return None
     st.session_state["api"] = cliente
+    _cargar_rol(cliente)
     return cliente
 
 
@@ -132,6 +154,7 @@ def _cerrar_sesion(api: ApiClient, aviso: str = "") -> None:
         pass
     _borrar_cookies()
     st.session_state.pop("api", None)
+    st.session_state.pop("admin_rol", None)
     ui.invalidar()
     if aviso:
         ui.flash("warning", aviso)
@@ -195,6 +218,7 @@ def _login() -> None:
     try:
         with st.spinner("Conectando con el servidor..."):
             cliente.login(email, password)
+            _cargar_rol(cliente)
     except ApiError as exc:
         st.error(explicar_error(exc))
         return
@@ -202,6 +226,19 @@ def _login() -> None:
     st.session_state["api"] = cliente
     ui.invalidar()
     st.rerun()
+
+
+def _cargar_rol(cliente: ApiClient) -> None:
+    """Consulta el rol del admin y lo deja en session_state.
+
+    Si falla la consulta no bloquea el login: el panel refresca el rol al
+    mostrar las pestanas.
+    """
+    try:
+        perfil = cliente.perfil_admin()
+        st.session_state["admin_rol"] = (perfil.get("rol") or "").strip()
+    except ApiError:
+        st.session_state["admin_rol"] = ""
 
 
 # ===================== PANEL =====================
@@ -256,6 +293,8 @@ def _panel(api: ApiClient) -> None:
     # Refresca la cookie de sesion en cada carga (si el paquete esta instalado).
     _guardar_cookies(api)
     _sidebar(api)
+    if not st.session_state.get("admin_rol"):
+        _cargar_rol(api)
 
     try:
         _cabecera(api)
@@ -264,27 +303,22 @@ def _panel(api: ApiClient) -> None:
 
     st.divider()
 
-    pestanas = st.tabs([
-        "🚨 Viajes críticos",
-        "🚗 Vehículos",
-        "🎁 Promociones y tarifas",
-        "🧑‍✈️ Chóferes",
-        "💰 Billetera",
-        "📊 Viajes",
-    ])
+    rol = (st.session_state.get("admin_rol") or "").strip()
+    permitidas = TABS_POR_ROL.get(rol, [])
+    if not permitidas:
+        st.error(
+            "Tu cuenta de administrador no tiene un rol operativo asignado. "
+            "Pide al **super_admin** (%s) que te asigna uno: trip_operator, "
+            "user_operator o wallet_operator." % "malcolmlamarhurtado@gmail.com"
+            if rol else
+            "No se pudo identificar el rol de tu cuenta. Inicia sesión de nuevo.")
+        return
 
-    with pestanas[0]:
-        _seguro(viajes_criticos.render, api)
-    with pestanas[1]:
-        _seguro(vehiculos.render, api)
-    with pestanas[2]:
-        _seguro(configuracion.render, api)
-    with pestanas[3]:
-        _seguro(choferes.render, api)
-    with pestanas[4]:
-        _seguro(billetera.render, api)
-    with pestanas[5]:
-        _seguro(viajes.render, api)
+    pestanas = st.tabs(permitidas)
+    render_por_nombre = dict(TABS_BASE)
+    for i, nombre in enumerate(permitidas):
+        with pestanas[i]:
+            _seguro(render_por_nombre[nombre], api)
 
 
 # ===================== ARRANQUE =====================

@@ -3,10 +3,11 @@ Gestión de cuenta de usuario.
 """
 import logging
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Header, HTTPException, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from bson import ObjectId
 import bcrypt
@@ -14,6 +15,7 @@ import bcrypt
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Cliente.connection import cliente_db
 from services.codigos_referido import asegurar_codigo
+from routers.admin_roles import REQUIERE_OPERADOR_REGISTROS, REQUIERE_SUPER
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,7 @@ async def delete_account(user: dict = Depends(get_current_user)):
 
 @router.post("/admin/eliminar/{cliente_id}")
 async def admin_eliminar_cliente(cliente_id: str,
-                                 authorization: Optional[str] = Header(None)):
+                                 admin: dict = Depends(REQUIERE_OPERADOR_REGISTROS)):
     """Borrado FISICO de la cuenta de un pasajero, desde el panel admin.
 
     Es el caso de emergencia "borre mi cuenta y aun asi se puede abrir": el
@@ -103,18 +105,9 @@ async def admin_eliminar_cliente(cliente_id: str,
     encuentra el perfil. Los viajes guardan solo el id, y los recibos de
     facturacion viven en Postgres, no aqui.
 
-    La autenticacion EXIGE que el token sea de la app 'admin' (el claim del
-    JWT): sin ese chequeo, un token de pasajero/chofer pasaria la verificacion
-    generica y podria borrar cuentas ajenas.
+    Solo `super_admin` o `user_operator`: otros roles de administrador
+    reciben 403 (dependencia de roles; super_admin pasa siempre).
     """
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Token requerido")
-    payload = verify_admin_token(authorization.split(" ", 1)[1].strip())
-    if not payload:
-        raise HTTPException(status_code=401, detail="Token de administrador invalido")
-    if payload.get("app") != "admin":
-        raise HTTPException(status_code=403, detail="La cuenta no es de administrador")
-
     if not ObjectId.is_valid(cliente_id):
         raise HTTPException(status_code=400, detail="Id invalido")
     resultado = users_coleccion.delete_one({"_id": ObjectId(cliente_id)})
@@ -122,6 +115,43 @@ async def admin_eliminar_cliente(cliente_id: str,
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     logger.info("Cuenta del pasajero %s borrada por el administrador", cliente_id)
     return {"ok": True, "message": "Cuenta borrada"}
+
+
+@router.get("/admin/buscar")
+async def buscar_clientes(q: str = "", admin: dict = Depends(REQUIERE_OPERADOR_REGISTROS)):
+    """Busca pasajeros por telefono, correo o nombre (panel admin).
+
+    Devuelve campos limitados (sin password, sin direccion): lo justo para
+    identificar la cuenta antes de un borrado. Visible para super_admin y
+    user_operator; otros roles reciben 403.
+    """
+    texto = (q or "").strip()
+    if not texto:
+        return {"clientes": []}
+    patron = {"$regex": re.escape(texto), "$options": "i"}
+    docs = users_coleccion.find({
+        "$or": [
+            {"numero_de_telefono": patron},
+            {"email": patron},
+            {"Nombre": patron},
+            {"Apellidos": patron},
+        ]
+    }, {"password": 0}).limit(30)
+    salida = []
+    for d in docs:
+        salida.append({
+            "id": str(d["_id"]),
+            "nombre": " ".join(x for x in (d.get("Nombre"),
+                                          d.get("Apellidos")) if x).strip(),
+            "email": d.get("email"),
+            "telefono": d.get("numero_de_telefono") or d.get("phone"),
+            "enable": bool(d.get("Enable", True)),
+            "eliminado": bool(d.get("eliminado")),
+            "viajes": int(d.get("viajes_completados") or 0),
+            "creado": (d.get("created_at").isoformat()
+                       if isinstance(d.get("created_at"), datetime) else None),
+        })
+    return {"clientes": salida}
 
 @router.get("/me")
 async def get_my_profile(user: dict = Depends(get_current_user)):

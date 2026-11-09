@@ -53,6 +53,7 @@ from routers.Solicitud_de_viajes_v4 import (
     set_driver_status,
 )
 from routers.admin_panel import _json_trip, _nombre_de, require_admin
+from routers.admin_roles import REQUIERE_OPERADOR_VIAJES, REQUIERE_SUPER
 from routers.promociones import (
     PromoIn,
     _a_json,
@@ -511,7 +512,7 @@ def _chofer_tiene_viaje_activo(driver_id: str) -> Optional[str]:
 async def forzar_asignacion(
     trip_id: str,
     datos: ForzarAsignacionIn,
-    admin: dict = Depends(require_admin),
+    admin: dict = Depends(REQUIERE_OPERADOR_VIAJES),
 ):
     """Asigna un viaje sin chofer a un chofer concreto (emergencia).
 
@@ -695,7 +696,7 @@ async def _configuracion_actual() -> dict:
 
 
 @router.get("/configuracion")
-async def obtener_configuracion(admin: dict = Depends(require_admin)):
+async def obtener_configuracion(admin: dict = Depends(REQUIERE_SUPER)):
     """Todo lo que edita la pestaña Promociones y Tarifas, en una respuesta."""
     return await _configuracion_actual()
 
@@ -703,7 +704,7 @@ async def obtener_configuracion(admin: dict = Depends(require_admin)):
 @router.put("/configuracion")
 async def guardar_configuracion(
     datos: ConfiguracionIn,
-    admin: dict = Depends(require_admin),
+    admin: dict = Depends(REQUIERE_SUPER),
 ):
     """Guarda comisión, bono, descuento, referidos, caducidad y coeficientes.
 

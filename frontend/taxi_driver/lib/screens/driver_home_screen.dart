@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../api_config.dart';
@@ -3236,6 +3237,13 @@ String _fmtCoord(LatLng p) =>
     }
     final trip = _activeTrip;
     if (trip != null) {
+      // PASO INTERMEDIO (aceptado): antes de ir al punto de recogida, la app
+      // muestra la tarjeta "Ir a buscar al cliente" con los datos del
+      // pasajero, Llamar/WhatsApp y el deslizable. Al deslizar pasa a
+      // driver_arrived y vuelve el panel de viaje de siempre.
+      if (trip.status == 'accepted') {
+        return _buildRecogidaCard(trip);
+      }
       // Panel del viaje en curso: una hoja arrastrable que se abre COLAPSADA
       // (solo destino + precio) y deja el mapa y la flecha de navegacion a la
       // vista. Se despliega con el asa o arrastrando.
@@ -3260,6 +3268,141 @@ String _fmtCoord(LatLng p) =>
       bottom: 8,
       child: _buildControlPanel(),
     );
+  }
+
+  /// Tarjeta del PASO INTERMEDIO: el viaje esta `accepted` y el chofer tiene
+  /// que IR A BUSCAR al cliente.
+  ///
+  /// Muestra los datos del pasajero (nombre, recogida, tipo de vehiculo),
+  /// botones de contacto rapido (Llamar con `tel:`, WhatsApp con el servicio
+  /// ya existente) y el deslizable que marca la LLEGADA al punto:
+  /// `_advanceTrip` en 'accepted' envia `setPickup` + pasa a
+  /// `driver_arrived`, y con eso vuelve el panel de viaje de siempre.
+  Widget _buildRecogidaCard(TripOffer trip) {
+    const muted = Color(0xFF6B7280);
+    final nombre = trip.clientName?.trim();
+    final telefono = trip.clientPhone?.trim() ?? '';
+    // La direccion de recogida la trae el backend (`request_address`).
+    final recogida = trip.requestAddress?.trim() ?? '';
+    return Positioned(
+      left: 8,
+      right: 8,
+      bottom: 8,
+      child: _PanelCard(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Vas a buscar al cliente',
+                    style: TextStyle(
+                        color: AppColors.tinta,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800),
+                  ),
+                ),
+                // Llamar: si no hay numero, el toque avisa igual.
+                _accionCliente(
+                  icon: Icons.call_rounded,
+                  tooltip: 'Llamar al cliente',
+                  onTap: () => _llamarCliente(telefono),
+                ),
+                const SizedBox(width: 8),
+                _accionCliente(
+                  icon: Icons.chat_rounded,
+                  tooltip: 'WhatsApp al cliente',
+                  onTap: _enviarWhatsApp,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: const BoxDecoration(
+                    color: AppColors.acentoSuave,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.person_rounded,
+                      color: AppColors.tinta, size: 22),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        (nombre == null || nombre.isEmpty)
+                            ? 'Cliente'
+                            : nombre,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: AppColors.tinta,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Recogida: ${recogida.isEmpty ? "dirección en el mapa" : recogida}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: muted, fontSize: 12),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Solicita: ${_vehicleTypeLabel(trip.vehicleType)}'
+                        '${telefono.isEmpty ? "" : " · $telefono"}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: muted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // El mapa de atras ya trae la ruta hacia la recogida: al deslizar
+            // se marca la llegada (driver_arrived) y arranque la navegacion
+            // paso a paso.
+            SlideToConfirm(
+              label: 'Desliza para ir a buscar al cliente',
+              icon: Icons.location_on_rounded,
+              color: AppColors.acento,
+              foregroundColor: AppColors.tinta,
+              loading: _loading,
+              onConfirmed: _advanceTrip,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Llamada REAL de telefono con `url_launcher` (el chat de WhatsApp ya lo
+  /// hace [WhatsAppService]). El numero se deja tal cual lo trae el backend
+  /// (con prefijo), se quitan separadores.
+  Future<void> _llamarCliente(String telefono) async {
+    final limpio = telefono.replaceAll(RegExp(r'[\s\-()]'), '');
+    if (limpio.isEmpty) {
+      _showError('No hay un número de teléfono del pasajero para este viaje.');
+      return;
+    }
+    try {
+      final uri = Uri(scheme: 'tel', path: limpio);
+      if (!await launchUrl(uri)) {
+        _showError('El teléfono no pudo abrir la app de llamadas.');
+      }
+    } catch (e) {
+      _showError('$e');
+    }
   }
 
   /// Resumen compacto del viaje para el panel COLAPSADO.
