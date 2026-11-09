@@ -67,6 +67,19 @@ def _detalle(resp: requests.Response) -> str:
     return str(cuerpo)
 
 
+def _app_de_token(token: Optional[str]) -> Optional[str]:
+    """Lee el claim `app` del JWT SIN verificar firma (la firma la verifica
+    el backend). Sirve para atrapar en el panel una sesion guardada cuyo
+    token pertenece a otra app (p.ej. app=driver de un login viejo)."""
+    try:
+        payload = token.split(".")[1]
+        datos = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode())
+        return (datos.get("app") or "").strip().lower() or None
+    except Exception:
+        return None
+
+
 class ApiClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
@@ -110,6 +123,14 @@ class ApiClient:
         access = (data or {}).get("access_token")
         if not access:
             raise ApiError("El servidor no devolvió un token de acceso.")
+        if _app_de_token(access) != "admin":
+            # Mismo correo dado de alta en otra app: el login desconoce el
+            # rol. Sin esto, la sesion seguiria con el token de CHOFER y el
+            # panel mostraría 403 en todas partes (app=driver).
+            raise ApiError(
+                "El correo no corresponde a un administrador. Revisa que "
+                "sea la cuenta correcta o pide al super_admin darla de "
+                "alta.", status=403)
         self.access_token = access
         self.refresh_token = (data or {}).get("refresh_token")
         self.admin_email = email.strip().lower()
@@ -133,6 +154,14 @@ class ApiClient:
         self.refresh_token = (refresh_token or "").strip() or None
         self.admin_email = (email or "").strip().lower() or None
         self._refresh()
+        if _app_de_token(self.access_token) != "admin":
+            # La cookie guardo una sesion de otra app (el mismo correo podria
+            # estar en la app de chofer/cliente). No sirve para el panel:
+            # pide login limpio en lugar de morir a mitad de las pestañas.
+            self.logout()
+            raise SesionExpirada(
+                "Tu sesión guardada no es de administrador. Inicia sesión "
+                "con tu correo de administrador.", status=401)
         try:
             self.ping()
         except ApiError as exc:
