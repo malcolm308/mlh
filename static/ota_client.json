@@ -29,6 +29,13 @@
   ],
   "patches": [
     {
+      "version": "1.0.7-p1",
+      "target_version_code": 4008,
+      "file": "patch_latest.zip",
+      "md5": "81c1ec04e5a9b1ab361c3ee95c9a28d6",
+      "published_at": "2026-11-09T17:20:06+00:00"
+    },
+    {
       "version": "1.0.6-p1",
       "target_version_code": 2006,
       "file": "patch_latest.zip",
@@ -43,5 +50,5 @@
       "published_at": "2026-11-08T12:57:52+00:00"
     }
   ],
-  "updated_at": "2026-11-09T17:17:27+00:00"
+  "updated_at": "2026-11-09T17:20:06+00:00"
 }
