@@ -11,9 +11,11 @@ El claim `type` distingue los dos. Los tokens emitidos antes de este cambio no
 lo llevan; se siguen aceptando como access para no cerrar sesiones al
 desplegar.
 
-El secreto se lee de `JWT_SECRET_KEY`; si no esta definida se usa el valor
-historico para no romper produccion. Conviene definirla en Render: cambiar el
-secreto invalida todas las sesiones (los usuarios tendran que entrar de nuevo).
+El secreto se lee de `JWT_SECRET_KEY`; si no esta definida se usa este valor
+generado alonical (rotacion de 2026-11-09, ya no la clave historica que
+estaba a la vista). Conviene ademas definirla en Render para que un cambio
+de codigo no rote las sesiones: si se define, es preferible regenerarla y
+solo en una ventana acordada (cierra TODAS las sesiones al aplicarse).
 """
 
 from __future__ import annotations
@@ -24,7 +26,9 @@ from typing import Optional
 
 from jose import JWTError, jwt
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "TaxiRapid_SecretKey_2026")
+SECRET_KEY = os.getenv(
+    "JWT_SECRET_KEY",
+    "d8f5d18e0ae77c1f67ec98527e34637a7e316216e7242e5c2aa9f1b45300a5e622497f5533a170ce21ad3bf5364d20189696f569bc9cbc1b79645a9aeb5a78df")
 ALGORITHM = "HS256"
 
 ACCESS_TOKEN_EXPIRE_MINUTES = int(
