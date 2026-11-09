@@ -82,8 +82,9 @@ class ClientTrip {
   final double? driverLat;
   final double? driverLng;
 
-  /// Velocidad del chofer en km/h. Decide el zoom dinamico de la camara 3D.
-  final double? driverSpeed;
+  /// Motivo y quien cancelo: `driver` = chofer cancelo en el paso intermedio.
+  final String? cancelledBy;
+  final String? cancellationReason;
 
   const ClientTrip({
     required this.tripId,
@@ -114,6 +115,8 @@ class ClientTrip {
     this.driverLat,
     this.driverLng,
     this.driverSpeed,
+    this.cancelledBy,
+    this.cancellationReason,
   });
 
   factory ClientTrip.fromJson(Map<String, dynamic> j) => ClientTrip(
@@ -145,6 +148,8 @@ class ClientTrip {
         driverLat: (j['driver_lat'] as num?)?.toDouble(),
         driverLng: (j['driver_lng'] as num?)?.toDouble(),
         driverSpeed: (j['driver_speed'] as num?)?.toDouble(),
+        cancelledBy: j['cancelled_by']?.toString(),
+        cancellationReason: j['cancellation_reason']?.toString(),
       );
 
   /// El backend entrega las coordenadas como "POINT(lng lat)".

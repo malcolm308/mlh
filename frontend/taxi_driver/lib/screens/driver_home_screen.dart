@@ -3380,16 +3380,48 @@ String _fmtCoord(LatLng p) =>
               loading: _loading,
               onConfirmed: _advanceTrip,
             ),
+            const SizedBox(height: 6),
+            // Cancelar en este paso NO consume las 3 del dia: quien falto fue
+            // el cliente. Es un TextButton rojo, no otro deslizable, para que
+            // no se confunda con el de arriba.
+            TextButton.icon(
+              onPressed: _loading ? null : () => _cancelarRecogida(trip),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.red,
+                minimumSize: const Size.fromHeight(36),
+              ),
+              icon: const Icon(Icons.cancel_outlined, size: 16),
+              label: const Text('Cancelar viaje (cliente no aparece)',
+                  style: TextStyle(fontSize: 12)),
+            ),
           ],
         ),
       ),
     );
   }
 
-  /// Llamada REAL de telefono con `url_launcher` (el chat de WhatsApp ya lo
-  /// hace [WhatsAppService]). El numero se deja tal cual lo trae el backend
-  /// (con prefijo), se quitan separadores.
-  Future<void> _llamarCliente(String telefono) async {
+  Future<void> _cancelarRecogida(TripOffer trip) async {
+    if (_loading || _isAccepting) return;
+    final motivo = await CancelarRecogidaDialog.mostrar(context);
+    if (motivo == null || !mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await widget.api.driverCancelTrip(trip.tripId, motivo);
+      if (!mounted) return;
+      await _notif.resolveTrip(trip.tripId);
+      _ofertaCache.remove(trip.tripId);
+      _alPerderElViaje('Viaje cancelado');
+      _refreshRoutes();
+      unawaited(_tick());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      _showError('$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), ''));
+    }
+  }
     final limpio = telefono.replaceAll(RegExp(r'[\s\-()]'), '');
     if (limpio.isEmpty) {
       _showError('No hay un número de teléfono del pasajero para este viaje.');

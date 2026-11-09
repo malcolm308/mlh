@@ -5,7 +5,9 @@ import os
 import logging
 from contextlib import contextmanager
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Header, Query, BackgroundTasks
+
+from db.Chofer.auth import verify_token as verify_token_chofer
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -3499,6 +3501,99 @@ async def api_cancel_trip(trip_id: str, body: Optional[dict] = None):
         "reason": motivo,
         "restantes": restantes,
     }
+
+
+# Columnas de contexto de cancelacion por parte del chofer (created lazily la
+# primera vez que se usan; ALTER ... IF NOT EXISTS es idempotente).
+_columnas_cancelacion_listas = False
+_columnas_cancelacion_lock = __import__("threading").Lock()
+
+
+def _asegurar_columnas_cancelacion():
+    """Añade `cancellation_reason` y `cancelled_by` a trips si faltan."""
+    global _columnas_cancelacion_listas
+    if _columnas_cancelacion_listas:
+        return
+    with _columnas_cancelacion_lock:
+        if _columnas_cancelacion_listas:
+            return
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("ALTER TABLE trips "
+                        "ADD COLUMN IF NOT EXISTS cancellation_reason TEXT")
+            cur.execute("ALTER TABLE trips "
+                        "ADD COLUMN IF NOT EXISTS cancelled_by VARCHAR(15)")
+            conn.commit()
+            cur.close()
+        _columnas_cancelacion_listas = True
+
+
+@router.post("/trips/{trip_id}/driver-cancel")
+async def api_driver_cancel_trip(trip_id: str,
+                                 body: Optional[dict] = None,
+                                 authorization: Optional[str] = Header(None)):
+    """El CHOFER cancela un viaje aceptado (paso intermedio "ir a buscar").
+
+    Reglas del nuevo flujo:
+      * Solo el chofer ASIGNADO (el del token): un driver_id en el body no
+        sirve, porque el body no autoriza.
+      * Solo estando en `accepted` o `driver_arrived`: mas adelante el cliente
+        ya salio de casa.
+      * NO cuenta de las 3 cancelaciones diarias: aqui quien no aparecio es
+        el cliente; la limitacion es para abandonar viajes ya iniciados.
+      * Libera al chofer (available) para que la proxima oferta llegue ya y
+        avisa al pasajero por WebSocket con `trip_cancelled_by_driver`.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Token requerido")
+    payload = verify_token_chofer(authorization.split(" ", 1)[1].strip())
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token invalido o expirado")
+    driver_id_token = str(payload.get("id") or "")
+
+    trip_actual = get_trip(trip_id)
+    if not trip_actual:
+        raise HTTPException(status_code=404, detail="Viaje no encontrado")
+    if str(trip_actual.get("driver_id")) != driver_id_token:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el chofer asignado puede cancelar este viaje")
+    estado_previo = trip_actual.get("status")
+    if estado_previo not in ("accepted", "driver_arrived"):
+        raise HTTPException(
+            status_code=409,
+            detail="Este paso ya no se cancela por aca (el viaje esta en "
+                   "%s)" % estado_previo)
+
+    motivo = ((body or {}).get("reason") or "").strip() or \
+        "El cliente no respondio o no aparecio en el punto"
+
+    _asegurar_columnas_cancelacion()
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE trips SET status = 'cancelled', cancelled_by = 'driver', "
+            "cancellation_reason = %s, completed_at = %s "
+            "WHERE trip_id = %s AND status IN ('accepted','driver_arrived')",
+            (motivo, datetime.utcnow(), trip_id))
+        cancelado = cur.rowcount
+        conn.commit()
+        cur.close()
+    if not cancelado:
+        # Perdio la carrera con otro estado (el pasajero cancelo a la vez).
+        raise HTTPException(status_code=409,
+                            detail="El viaje ya no se pudo cancelar")
+
+    await set_driver_status(driver_id_token, "available")
+    # El evento nuevo para el cliente actual; el clasico para apps viejas.
+    await publish_trip_event(trip_id, "trip_cancelled_by_driver")
+    await publish_trip_event(trip_id, "trip_cancelled")
+    logger.info("Chofer %s cancelo %s en %s (motivo: %s)",
+                driver_id_token, trip_id, estado_previo, motivo)
+    return {"ok": True,
+            "message": "Viaje cancelado",
+            "reason": motivo}
 
 
 @router.get("/trips/client/{client_id}")

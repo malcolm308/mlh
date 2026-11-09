@@ -464,6 +464,14 @@ class ApiService {
     await _map('PUT', '/trips/$tripId/pickup', body: {'lat': lat, 'lng': lng});
   }
 
+  /// El chofer cancela un viaje aceptado (el cliente no respondio/aparece).
+  /// No descuenta de las 3 cancelaciones del dia: aqui quien falto fue el
+  /// cliente. El backend libera al chofer y avisa al pasajero por WebSocket.
+  Future<void> driverCancelTrip(String tripId, String reason) async {
+    await _map('POST', '/trips/$tripId/driver-cancel',
+        body: {'reason': reason});
+  }
+
   Future<List<RoutePoint>> getTripRoute(String tripId) async {
     final j = await _map('GET', '/trips/$tripId/route');
     final list = (j['points'] as List<dynamic>?) ?? const [];

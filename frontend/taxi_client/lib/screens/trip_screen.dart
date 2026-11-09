@@ -39,6 +39,7 @@ class _TripScreenState extends State<TripScreen> {
   ClientTrip? _trip;
   bool _cancelling = false;
   bool _popped = false;  // Flag to prevent double pop
+  bool _avisoChoferCanceloMostrado = false;  // Evita mostrar el aviso dos veces
   String? _error;
   Timer? _poll;
   List<LatLng> _route = [];
@@ -149,6 +150,7 @@ class _TripScreenState extends State<TripScreen> {
               'trip_accepted' ||
               'trip_started' ||
               'trip_cancelled' ||
+              'trip_cancelled_by_driver' ||
               'trip_expired' ||
               'trip_completed':
           unawaited(_refresh());
@@ -218,6 +220,10 @@ class _TripScreenState extends State<TripScreen> {
       }
       if (t.status == 'completed' || t.status == 'cancelled' || t.status == 'expired') {
         _poll?.cancel();
+      }
+      if (t.status == 'cancelled' && t.cancelledBy == 'driver' && !_avisoChoferCanceloMostrado) {
+        _avisoChoferCanceloMostrado = true;
+        _aviso_('El chófer ha cancelado el viaje');
       }
       // IMPORTANTE: al completarse NO se limpia `_trip` ni se hace pop aqui.
       // La pantalla sigue viva y cambia al recibo (`_buildCompletedScreen`).
@@ -818,6 +824,10 @@ class _TripScreenState extends State<TripScreen> {
                   _cardBuscando()
                 else if (t.driverId != null)
                   _tarjetaChofer(t),
+                if (buscando && !cancelled)
+                  _cardBuscando()
+                else if (t.driverId != null)
+                  _tarjetaChofer(t),
                 if (cancelled) ...[
                   if (expirado)
                     const WarningBox(
@@ -826,6 +836,16 @@ class _TripScreenState extends State<TripScreen> {
                           'Ningún chófer tomó el viaje a tiempo. Vuelve a '
                           'pedirlo: estás a un toque.',
                       icon: Icons.search_off_rounded,
+                    )
+                  else if (t.cancelledBy == 'driver')
+                    WarningBox(
+                      title: 'El chófer ha cancelado el viaje',
+                      message: (t.cancellationReason != null &&
+                              t.cancellationReason!.trim().isNotEmpty)
+                          ? t.cancellationReason!
+                          : 'El chófer no pudo continuar con tu viaje. '
+                              'Solicita uno nuevo cuando quieras.',
+                      icon: Icons.cancel_outlined,
                     )
                   else
                     const WarningBox(
