@@ -344,6 +344,24 @@ def _guardar_foto_vehiculo(vehiculo_id: str, campo: str,
     }
 
 
+def _marcar_fotos_aprobadas(fotos: dict, email_admin: str) -> dict:
+    """Marca todas las fotos del vehiculo como aprobadas de una vez.
+
+    Se usa al aprobar el vehiculo desde el panel: si el administrador ya dio
+    el visto bueno al conjunto, no tiene sentido dejarlas en `pendiente` y
+    obligarlo a aprobarlas una por una.
+    """
+    momento = datetime.utcnow().isoformat()
+    for ref in (fotos or {}).values():
+        if not isinstance(ref, dict):
+            continue
+        ref["estado"] = ESTADO_APROBADO
+        ref["motivo"] = None
+        ref["revisado_por"] = email_admin
+        ref["revisado_at"] = momento
+    return fotos
+
+
 def _fotos_salida(doc: dict) -> Optional[dict]:
     fotos = doc.get("fotos")
     if not isinstance(fotos, dict):
@@ -940,12 +958,20 @@ async def aprobar_vehiculo(vehiculo_id: str, body: VehiculoAprobacion = Body(...
                 }},
             )
     else:
+        # Aprobar el vehiculo aprueba TAMBIEN todas sus fotos: la decision
+        # del administrador es sobre el conjunto, no foto por foto.
+        fotos = doc.get("fotos")
+        if isinstance(fotos, dict) and fotos:
+            cambios["fotos"] = _marcar_fotos_aprobadas(fotos, email_admin)
         coleccion.update_one({"_id": doc["_id"]}, {"$set": cambios})
     _invalidar_cache(doc.get("driver_id"))
 
-    decision_txt = "aprobado" if decision == ESTADO_APROBADO else "rechazado"
+    if decision == ESTADO_APROBADO:
+        mensaje = "Vehiculo aprobado con todas sus fotos"
+    else:
+        mensaje = "Vehiculo rechazado"
     salida = _vehiculo_out(coleccion.find_one({"_id": doc["_id"]}) or doc)
-    return {"ok": True, "message": "Vehiculo %s" % decision_txt, **salida}
+    return {"ok": True, "message": mensaje, **salida}
 
 
 @router.put("/admin/vehicles/{vehiculo_id}/fotos/{campo}/revisar")
@@ -996,6 +1022,10 @@ async def revisar_foto_vehiculo(vehiculo_id: str, campo: str,
     # solo. Con alguna rechazada sigue `pendiente` (el chofer corregira).
     auto_aprobado = False
     if completas and doc.get("estado") != ESTADO_APROBADO:
+        # El vehiculo queda aprobado: todas sus fotos (incluidas las
+        # licencias) quedan aprobadas en la misma pasada.
+        _marcar_fotos_aprobadas(fotos, email_admin)
+        cambios["fotos"] = fotos
         cambios["estado"] = ESTADO_APROBADO
         cambios["revisado_por"] = email_admin
         cambios["revisado_at"] = datetime.utcnow()

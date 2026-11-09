@@ -3,6 +3,8 @@
 # psycopg2.
 streamlit>=1.39,<2
 streamlit-autorefresh>=1.0.1,<2
+# Persistencia del refresh token en cookie para sobrevivir a un F5.
+extra-streamlit-components>=0.1.71,<0.2
 requests>=2.31,<3
 pandas>=2.1,<3
 Pillow>=10.2,<13

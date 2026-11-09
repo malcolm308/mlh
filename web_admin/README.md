@@ -100,7 +100,9 @@ grupo, 403 = el bot no es administrador).
   caché por sesión con TTL para no saturar el backend gratuito de Render.
 - **Sesión:** el login usa `POST /login` y comprueba con `ping()` que la cuenta
   sea de administrador. Cuando el access token caduca se renueva solo con
-  `POST /auth/refresh`; si el refresh falla, vuelve al login.
+  `POST /auth/refresh`; si el refresh falla, vuelve al login. El refresh token
+  se guarda en una cookie (30 días), así que un F5 o reiniciar el navegador no
+  obliga a escribir la contraseña mientras siga vigente.
 - **Pitido:** se genera un WAV en Python y se reproduce con `st.audio`. Solo
   suena cuando aparece o cambia el conjunto de viajes sin chófer, no cada 10 s.
 - **Privacidad:** la interfaz no muestra `_id` de Mongo. Los `driver_id` y

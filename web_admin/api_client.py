@@ -123,6 +123,26 @@ class ApiClient:
                     status=exc.status)
             raise
 
+    def restaurar(self, refresh_token: str, email: str = "") -> None:
+        """Recupera la sesion a partir del refresh token guardado en cookie.
+
+        Lo usa el panel al recargar la pagina para no pedir la contrasena otra
+        vez mientras el refresh (30 dias) siga vigente. Si el refresh ya no
+        sirve lanza `SesionExpirada`.
+        """
+        self.refresh_token = (refresh_token or "").strip() or None
+        self.admin_email = (email or "").strip().lower() or None
+        self._refresh()
+        try:
+            self.ping()
+        except ApiError as exc:
+            self.logout()
+            if exc.status in (401, 403):
+                raise SesionExpirada(
+                    "Tu sesión expiró. Vuelve a iniciar sesión.",
+                    status=exc.status)
+            raise
+
     def logout(self) -> None:
         self.access_token = None
         self.refresh_token = None

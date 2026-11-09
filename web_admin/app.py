@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+import time
+from datetime import date, datetime, timedelta
+from typing import Optional
 
 # Permite `streamlit run app.py` desde cualquier directorio y que los imports
 # relativos del paquete (`config`, `api_client`, `tabs...`) resuelvan.
@@ -41,12 +43,94 @@ ui.inyectar_css()
 
 
 # ===================== SESION =====================
+#
+# El access token dura 2 h. Ademas del refresco transparente de `ApiClient`
+# (401 -> POST /auth/refresh), el refresh token se guarda en una cookie para
+# que un F5 no obligue al administrador a escribir la contrasena otra vez.
+
+_COOKIE_REFRESH = "rapitaxi_refresh"
+_COOKIE_ADMIN = "rapitaxi_admin"
+_COOKIE_DIAS = 30
+
+
+def _cookie_manager():
+    """Componente que escribe cookies. Si el paquete no esta, el panel sigue
+    funcionando solo con la sesion en memoria."""
+    try:
+        import extra_streamlit_components as stx
+    except Exception:
+        return None
+    try:
+        return stx.CookieManager(key="rapitaxi_cookies")
+    except Exception:
+        return None
+
+
+def _guardar_cookies(api: ApiClient) -> None:
+    gestor = _cookie_manager()
+    if gestor is None or not api.refresh_token:
+        return
+    expira = datetime.now() + timedelta(days=_COOKIE_DIAS)
+    try:
+        gestor.set(_COOKIE_REFRESH, api.refresh_token,
+                   expires_at=expira, path="/")
+        if api.admin_email:
+            gestor.set(_COOKIE_ADMIN, api.admin_email,
+                       expires_at=expira, path="/")
+    except Exception:
+        pass
+
+
+def _borrar_cookies() -> None:
+    gestor = _cookie_manager()
+    if gestor is None:
+        return
+    for nombre in (_COOKIE_REFRESH, _COOKIE_ADMIN):
+        try:
+            gestor.delete(nombre, path="/")
+        except TypeError:
+            try:
+                gestor.delete(nombre)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    # El borrado lo ejecuta JS en el navegador: se le da un instante antes de
+    # que el llamador haga st.rerun() y desmonte el componente.
+    time.sleep(0.25)
+
+
+def _restaurar_sesion() -> Optional[ApiClient]:
+    """Recupera la sesion desde la cookie de refresh, sin pedir contrasena."""
+    try:
+        cookies = st.context.cookies
+        refresh = (cookies.get(_COOKIE_REFRESH) or "").strip()
+    except Exception:
+        return None
+    if not refresh:
+        return None
+
+    cliente = ApiClient(get_api_base_url())
+    try:
+        with st.spinner("Restaurando sesión..."):
+            cliente.restaurar(refresh, cookies.get(_COOKIE_ADMIN) or "")
+    except SesionExpirada:
+        _borrar_cookies()
+        return None
+    except ApiError as exc:
+        # Un fallo de red no invalida el refresh: se conserva la cookie.
+        st.warning("No se pudo restaurar la sesión: %s" % explicar_error(exc))
+        return None
+    st.session_state["api"] = cliente
+    return cliente
+
 
 def _cerrar_sesion(api: ApiClient, aviso: str = "") -> None:
     try:
         api.logout()
     except Exception:
         pass
+    _borrar_cookies()
     st.session_state.pop("api", None)
     ui.invalidar()
     if aviso:
@@ -169,6 +253,8 @@ def _sidebar(api: ApiClient) -> None:
 
 
 def _panel(api: ApiClient) -> None:
+    # Refresca la cookie de sesion en cada carga (si el paquete esta instalado).
+    _guardar_cookies(api)
     _sidebar(api)
 
     try:
@@ -206,8 +292,10 @@ def _panel(api: ApiClient) -> None:
 def main() -> None:
     api = st.session_state.get("api")
     if api is None or not api.autenticado:
-        _login()
-        return
+        api = _restaurar_sesion()
+        if api is None:
+            _login()
+            return
     _panel(api)
 
 
