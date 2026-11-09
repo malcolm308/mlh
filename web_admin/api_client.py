@@ -116,8 +116,8 @@ class ApiClient:
         cada pestaña; es mejor decirlo en la puerta.
         """
         data = self._json(
-            "POST", "/login",
-            json={"email": email.strip(), "password": password, "app": "admin"},
+            "POST", "/admin/login",
+            json={"email": email.strip(), "password": password},
             auth=False, retry_auth=False,
         )
         access = (data or {}).get("access_token")

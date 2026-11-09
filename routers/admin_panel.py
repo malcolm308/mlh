@@ -34,6 +34,8 @@ from pydantic import BaseModel
 
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
+from db.tokens import create_access_token, create_refresh_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from datetime import datetime
 from db.Chofer.connection import chofer_db
 from db.Cliente.connection import cliente_db
 from routers.Solicitud_de_viajes_v4 import (
@@ -1071,5 +1073,59 @@ async def forzar_fin(
         "forzado_por": admin.get("email"),
         "message": "Viaje completado manualmente. Precio calculado por el backend.",
         "viaje": _json_trip(result),
+    }
+
+
+# ===================== LOGIN DEDICADO DEL PANEL =====================
+# Se usa exclusivamente por el panel web. A diferencia de `/login` (compartido
+# por pasajeros, choferes y administradores), este endpoint MIRA SOLO la base
+# de administradores: el mismo correo usado en las apps no puede desviarse a la
+# cuenta de chofer/cliente y devolver un token del tipo equivocado.
+
+
+class AdminLoginIn(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/login", response_model=None)
+async def login_admin_panel(body: AdminLoginIn):
+    email = (body.email or "").strip().lower()
+    if not email or not body.password:
+        raise HTTPException(status_code=400, detail="Escribe tu correo y tu contraseña")
+
+    admin = admin_coleccion.find_one({"email": {"$regex": "^%s$" % re.escape(email),
+                                                "$options": "i"}})
+    if not admin:
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+
+    guardada = (admin.get("password") or "")
+    try:
+        valida = bcrypt.checkpw(body.password.encode("utf-8"), guardada.encode("utf-8"))
+    except Exception:
+        valida = False
+    if not valida:
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+
+    if admin.get("Enable") is False:
+        raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
+
+    # Backfill del super (sin script de migracion).
+    rol = (admin.get("rol") or "").strip().lower()
+    if email == SUPER_EMAIL and rol != ROL_SUPER:
+        admin_coleccion.update_one(
+            {"_id": admin["_id"]},
+            {"$set": {"rol": ROL_SUPER, "updated_at": datetime.utcnow()}})
+        rol = ROL_SUPER
+
+    token_data = {"sub": admin.get("email") or email, "id": str(admin["_id"])}
+    access = create_access_token(token_data, app="admin")
+    refresh = create_refresh_token(token_data, app="admin")
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "rol": rol or "admin",
     }
 
