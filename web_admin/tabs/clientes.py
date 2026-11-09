@@ -66,7 +66,7 @@ def render(api) -> None:
             st.session_state["borrar_cliente"] = c
             st.rerun()
 
-    target = st.session_state.pop("borrar_cliente", None)
+    target = st.session_state.get("borrar_cliente")
     if target:
         st.error("¿Borrar FÍSICAMENTE la cuenta de **%s** (%s)? No se puede "
                  "deshacer." % (target.get("nombre") or "—",

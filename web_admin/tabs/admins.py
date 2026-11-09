@@ -82,7 +82,7 @@ def render(api) -> None:
                     elif es_yo:
                         st.caption("(tu cuenta)")
 
-    pendiente = st.session_state.pop("despedir_pendiente", None)
+    pendiente = st.session_state.get("despedir_pendiente")
     if pendiente:
         st.warning("¿Confirmas DESPEDIR a **%s** (%s)? Es irreversible." % (
             pendiente.get("nombre") or "—", pendiente.get("email")))
@@ -92,10 +92,12 @@ def render(api) -> None:
                 res = api.despedir_administrador(pendiente["id"])
                 ui.flash("ok", res.get("message") or "Administrador eliminado")
                 ui.invalidar("admins:lista")
+                st.session_state.pop("despedir_pendiente", None)
             except ApiError as exc:
                 ui.flash("error", explicar_error(exc))
             st.rerun()
         if c2.button("Cancelar"):
+            st.session_state.pop("despedir_pendiente", None)
             st.rerun()
 
     generada = st.session_state.get("pass_generada")
