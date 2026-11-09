@@ -354,10 +354,15 @@ async def despedir_administrador(
         raise HTTPException(
             status_code=400,
             detail="No puedes eliminar tu propia cuenta desde el panel.")
-    if (objetivo.get("rol") or "").strip().lower() == "super_admin":
+    if (objetivo.get("rol") or "").strip().lower() == ROL_SUPER and \
+            (objetivo.get("email") or "").strip().lower() == SUPER_EMAIL:
+        # El super VIGENTE no se elimina: quedaria el panel sin guardian. Los
+        # supers ANTERIORES (cuentas reemplazadas) si se pueden borrar, que es
+        # el exacto caso de cambio de correo.
         raise HTTPException(
             status_code=403,
-            detail="No se puede eliminar una cuenta super_admin.")
+            detail="No se puede eliminar: %s es el super vigente."
+            % objetivo.get("email"))
     admin_coleccion.delete_one({"_id": objetivo["_id"]})
     logger.info("Administrador eliminado: %s (%s) por %s",
                 objetivo.get("email"), user_id, admin.get("email"))
