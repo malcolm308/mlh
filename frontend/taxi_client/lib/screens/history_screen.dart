@@ -61,7 +61,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
         'completed' => 'Completado',
         'in_progress' => 'En curso',
         'accepted' => 'Chofer asignado',
-        'driver_arrived' => 'Chofer llegó',
+        // Con el paso intermedio del chofer, `driver_arrived` ya no implica
+        // que esta fisicamente en tu puerta: significa que empezo a ir por ti.
+        'driver_arrived' => 'Chofer en recogida',
         'requested' => 'Solicitado',
         'cancelled' => 'Cancelado',
         'expired' => 'Expirado',
