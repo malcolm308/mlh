@@ -86,6 +86,37 @@ async def delete_account(user: dict = Depends(get_current_user)):
     logger.info("Cuenta del pasajero %s eliminada desde la app", user_id)
     return {"message": "Cuenta eliminada correctamente"}
 
+
+@router.post("/admin/eliminar/{cliente_id}")
+async def admin_eliminar_cliente(cliente_id: str,
+                                 authorization: Optional[str] = Header(None)):
+    """Borrado FISICO de la cuenta de un pasajero, desde el panel admin.
+
+    Es el caso de emergencia "borre mi cuenta y aun asi se puede abrir": el
+    documento queda fuera de la coleccion y el auto-login de la app ya no
+    encuentra el perfil. Los viajes guardan solo el id, y los recibos de
+    facturacion viven en Postgres, no aqui.
+
+    La autenticacion EXIGE que el token sea de la app 'admin' (el claim del
+    JWT): sin ese chequeo, un token de pasajero/chofer pasaria la verificacion
+    generica y podria borrar cuentas ajenas.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Token requerido")
+    payload = verify_admin_token(authorization.split(" ", 1)[1].strip())
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token de administrador invalido")
+    if payload.get("app") != "admin":
+        raise HTTPException(status_code=403, detail="La cuenta no es de administrador")
+
+    if not ObjectId.is_valid(cliente_id):
+        raise HTTPException(status_code=400, detail="Id invalido")
+    resultado = users_coleccion.delete_one({"_id": ObjectId(cliente_id)})
+    if resultado.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    logger.info("Cuenta del pasajero %s borrada por el administrador", cliente_id)
+    return {"ok": True, "message": "Cuenta borrada"}
+
 @router.get("/me")
 async def get_my_profile(user: dict = Depends(get_current_user)):
     # Si la cuenta es anterior al sistema de referidos, el codigo se crea en
