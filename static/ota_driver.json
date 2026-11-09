@@ -2,13 +2,13 @@
   "app": "driver",
   "latest": {
     "version": "1.0.8",
-    "version_code": 4012,
+    "version_code": 4013,
     "apk": "app_chofer_latest.apk"
   },
   "releases": [
     {
       "version": "1.0.8",
-      "version_code": 4012
+      "version_code": 4013
     },
     {
       "version": "1.0.6",
@@ -43,5 +43,5 @@
       "published_at": "2026-11-08T12:58:19+00:00"
     }
   ],
-  "updated_at": "2026-11-09T15:40:05+00:00"
+  "updated_at": "2026-11-09T16:28:29+00:00"
 }
