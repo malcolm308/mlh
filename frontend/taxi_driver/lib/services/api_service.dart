@@ -56,9 +56,13 @@ class ApiService {
   /// Entra con el número de teléfono o con el correo. El backend distingue los
   /// dos por su forma: si hay dígitos y no hay arroba, lo trata como teléfono.
   /// El JWT que devuelve sigue llevando el correo, así que `jwtId` no cambia.
+  ///
+  /// `app: 'chofer'` le dice al backend que devuelva la cuenta de CHOFER de
+  /// este numero, no la de pasajero: una persona puede tener las dos cuentas
+  /// con el mismo telefono.
   Future<String> login(String telefono, String password) async {
     final j = await _map('POST', '/login',
-        body: {'email': telefono, 'password': password});
+        body: {'email': telefono, 'password': password, 'app': 'chofer'});
     final t = j['access_token']?.toString();
     if (t == null || t.isEmpty) throw ApiException('Respuesta de login inválida');
     final refresh = j['refresh_token']?.toString();
