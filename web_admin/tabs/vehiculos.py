@@ -70,6 +70,19 @@ def _galeria(api, vehiculo: dict) -> None:
             ))
 
 
+def _imagen_revision(api, url, caption: str) -> None:
+    """Pinta una imagen para la revision previa a aprobar el vehiculo."""
+    if not url:
+        st.info("Sin %s." % caption.lower())
+        return
+    try:
+        datos = ui.cargar("imagen:%s" % url, 600,
+                          lambda u=url: api.descargar_imagen(u))
+        st.image(ui.imagen_desde_bytes(datos), caption=caption, width=280)
+    except ApiError as exc:
+        st.caption("No se pudo cargar %s: %s" % (caption, explicar_error(exc)))
+
+
 def _detalle(api, vehiculo: dict) -> None:
     with st.container(border=True):
         st.markdown("#### %s · %s" % (
@@ -93,7 +106,19 @@ def _detalle(api, vehiculo: dict) -> None:
                 % ui.estado_cuenta(vehiculo.get("chofer_estado")).lower()
             )
 
-        with st.expander("📷 Fotos del vehículo", expanded=True):
+        with st.expander("📷 Exterior y licencia del chófer", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                _imagen_revision(api, vehiculo.get("foto_exterior_url"),
+                                 "Exterior del vehículo")
+            with c2:
+                _imagen_revision(api, vehiculo.get("license_front_url"),
+                                 "Licencia (frente)")
+            with c3:
+                _imagen_revision(api, vehiculo.get("license_back_url"),
+                                 "Licencia (dorso)")
+
+        with st.expander("📷 Todas las fotos del vehículo", expanded=False):
             _galeria(api, vehiculo)
 
         with st.form("decision_vehiculo"):
@@ -130,7 +155,12 @@ def _detalle(api, vehiculo: dict) -> None:
         except ApiError as exc:
             st.error(explicar_error(exc))
             return
-        ui.flash("success", resultado.get("message") or "Vehículo actualizado.")
+        mensaje = resultado.get("message") or "Vehículo actualizado."
+        # El aviso se guarda para que se vea DESPUÉS del rerun; el st.success
+        # directo lo borraria la recarga inmediata.
+        st.success(mensaje)
+        st.cache_data.clear()
+        ui.flash("success", mensaje)
         ui.invalidar("vehiculos")
         st.rerun()
 

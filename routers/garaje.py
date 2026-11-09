@@ -31,8 +31,8 @@ from typing import Optional, Tuple, Dict
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import (APIRouter, Body, File, Header, HTTPException, Response,
-                     UploadFile)
+from fastapi import (APIRouter, Body, File, Header, HTTPException, Request,
+                     Response, UploadFile)
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -59,6 +59,15 @@ ESTADO_PENDIENTE = "pendiente"
 ESTADO_APROBADO = "aprobado"
 ESTADO_RECHAZADO = "rechazado"
 ESTADOS_VALIDOS = (ESTADO_PENDIENTE, ESTADO_APROBADO, ESTADO_RECHAZADO)
+
+# Un vehiculo sin placa no compite por matricula: todos comparten el mismo
+# texto literal y el backend no lo trata como duplicado.
+SIN_CHAPA = "NO TIENE CHAPA"
+
+# Fotos de la licencia de conducir. Se guardan en `fotos` como una foto mas
+# (para poder servirla con el mismo endpoint autorizado) y ademas su URL en
+# `license_front_url` / `license_back_url`.
+LICENSE_CAMPOS = ("license_front", "license_back")
 
 
 # ============================ AUTENTICACION ============================
@@ -148,6 +157,21 @@ def _foto_exterior_url(doc: dict) -> Optional[str]:
     return None
 
 
+def _foto_campo_url(doc: dict, campo: str) -> Optional[str]:
+    """URL para pintar una foto concreta del vehiculo.
+
+    Se prefiere la ruta autorizada `/garaje/imagen/{archivo}` (sirve tanto si
+    la foto vive en Cloudinary como en disco local); si el documento solo
+    guarda la URL absoluta, se devuelve esa.
+    """
+    fotos = doc.get("fotos")
+    if isinstance(fotos, dict):
+        ref = fotos.get(campo) or {}
+        if isinstance(ref, dict) and ref.get("archivo"):
+            return "/garaje/imagen/%s" % ref["archivo"]
+    return doc.get("%s_url" % campo)
+
+
 def _vehiculo_out(doc: dict) -> dict:
     return {
         "id": str(doc["_id"]),
@@ -167,6 +191,8 @@ def _vehiculo_out(doc: dict) -> dict:
         "fotos": _fotos_salida(doc),
         "fotos_faltantes": _faltantes_de(doc),
         "foto_exterior_url": _foto_exterior_url(doc),
+        "license_front_url": _foto_campo_url(doc, "license_front"),
+        "license_back_url": _foto_campo_url(doc, "license_back"),
     }
 
 
@@ -208,12 +234,14 @@ class VehiculoEditar(BaseModel):
 
 class VehiculoAprobacion(BaseModel):
     decision: str          # 'aprobado' o 'rechazado'
-    motivo: str = ""
+    # Las apps/paneles antiguos mandan `motivo: null`; se tolera para no
+    # romper la aprobacion con un 422 (el equivalente a "sin motivo").
+    motivo: Optional[str] = ""
 
 
 class FotoRevision(BaseModel):
     decision: str          # 'aprobado' o 'rechazado'
-    motivo: str = ""
+    motivo: Optional[str] = ""
 
 
 # ============================ FOTOS DEL VEHICULO ============================
@@ -409,29 +437,95 @@ def async_backfill_vehiculos() -> None:
 
 # ============================ ENDPOINTS CHOFER ============================
 
+def _texto_form(valor) -> str:
+    return valor.strip() if isinstance(valor, str) else ""
+
+
+async def _leer_alta_vehiculo(request: Request):
+    """Lee el alta del vehiculo en JSON (apps antiguas) o multipart (nuevas).
+
+    Las versiones viejas de la app mandan JSON y suben las fotos en una
+    segunda peticion a `/driver/vehicles/{id}/fotos`; las nuevas mandan los
+    datos junto con las dos fotos de la licencia en la misma peticion
+    multipart. Se soportan las dos para no romper a quien no actualice.
+    """
+    ctype = (request.headers.get("content-type") or "").lower()
+    if ("multipart/form-data" in ctype
+            or "application/x-www-form-urlencoded" in ctype):
+        form = await request.form()
+        datos = {
+            "tipo_vehiculo": _texto_form(form.get("tipo_vehiculo")),
+            "marca": _texto_form(form.get("marca")),
+            "modelo": _texto_form(form.get("modelo")),
+            "matricula": _texto_form(form.get("matricula")),
+        }
+        archivos = {}
+        for campo in LICENSE_CAMPOS:
+            valor = form.get(campo)
+            if getattr(valor, "filename", None):
+                archivos[campo] = valor
+        return datos, archivos, True
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {
+        "tipo_vehiculo": _texto_form(data.get("tipo_vehiculo")),
+        "marca": _texto_form(data.get("marca")),
+        "modelo": _texto_form(data.get("modelo")),
+        "matricula": _texto_form(data.get("matricula")),
+    }, {}, False
+
+
 @router.post("/driver/vehicles", status_code=201)
-async def crear_vehiculo(body: VehiculoCreate,
+async def crear_vehiculo(request: Request,
                          authorization: Optional[str] = Header(None)):
-    """Registra un vehiculo nuevo para el chofer autenticado. Entra pendiente."""
+    """Registra un vehiculo nuevo para el chofer autenticado. Entra pendiente.
+
+    Acepta JSON (compatibilidad) o multipart con `license_front` y
+    `license_back`. Las licencias se suben a Cloudinary y su URL queda en
+    `license_front_url` / `license_back_url` del vehiculo.
+    """
+    datos, archivos, es_multipart = await _leer_alta_vehiculo(request)
     chofer = _chofer_actual(authorization)
-    tipo = normalizar_tipo_vehiculo(body.tipo_vehiculo)
+    tipo = normalizar_tipo_vehiculo(datos["tipo_vehiculo"])
     if not tipo:
         raise HTTPException(status_code=400, detail="Indica el tipo de vehiculo")
-    marca = (body.marca or "").strip()
-    modelo = (body.modelo or "").strip()
-    matricula = _matricula_norm(body.matricula)
+    marca = datos["marca"]
+    modelo = datos["modelo"]
+    matricula = _matricula_norm(datos["matricula"])
     if not marca:
         raise HTTPException(status_code=400, detail="Indica la marca")
     if not modelo:
         raise HTTPException(status_code=400, detail="Indica el modelo")
     if not matricula:
         raise HTTPException(status_code=400, detail="Indica la matricula")
-    if _matricula_repetida(matricula, chofer["id"]):
+    if es_multipart and set(archivos) != set(LICENSE_CAMPOS):
+        raise HTTPException(
+            status_code=400,
+            detail="Adjunta la licencia de conducir (frente y dorso)")
+    # "NO TIENE CHAPA" puede repetirse: no identifica a un vehiculo concreto.
+    if matricula != SIN_CHAPA and _matricula_repetida(matricula, chofer["id"]):
         raise HTTPException(
             status_code=409,
             detail="Esa matricula ya esta registrada por otro vehiculo")
 
+    # El id se genera antes de subir nada: el nombre de las fotos en
+    # Cloudinary/disco lleva el id del vehiculo para autorizar su descarga.
+    nuevo_id = ObjectId()
+    fotos = {}
+    urls_licencia = {}
+    for campo, upload in archivos.items():
+        ref = _guardar_foto_vehiculo(str(nuevo_id), campo, upload)
+        fotos[campo] = ref
+        urls_licencia["%s_url" % campo] = (
+            ref.get("url") or "/garaje/imagen/%s" % ref["archivo"])
+
     doc = {
+        "_id": nuevo_id,
         "driver_id": chofer["id"],
         "tipo_vehiculo": tipo,
         "marca": marca,
@@ -441,11 +535,14 @@ async def crear_vehiculo(body: VehiculoCreate,
         "es_activo": False,
         "created_at": datetime.utcnow(),
     }
-    result = coleccion.insert_one(doc)
+    if fotos:
+        doc["fotos"] = fotos
+    doc.update(urls_licencia)
+    coleccion.insert_one(doc)
     # `insert_one` deja `_id` (ObjectId) inservible en el dict: se saca para
     # que la respuesta sea jsonable.
     doc.pop("_id", None)
-    return {"id": str(result.inserted_id), **doc}
+    return {"id": str(nuevo_id), **doc}
 
 
 @router.get("/driver/vehicles")
@@ -492,8 +589,9 @@ async def editar_vehiculo(vehiculo_id: str,
         raise HTTPException(status_code=400, detail="Indica la matricula")
 
     matricula_vieja = _matricula_norm(doc.get("matricula") or "")
-    if (matricula != matricula_vieja and _matricula_repetida(
-            matricula, chofer["id"], otro_id=doc["_id"])):
+    if (matricula != SIN_CHAPA and matricula != matricula_vieja
+            and _matricula_repetida(
+                matricula, chofer["id"], otro_id=doc["_id"])):
         raise HTTPException(
             status_code=409,
             detail="Esa matricula ya esta registrada por otro vehiculo")

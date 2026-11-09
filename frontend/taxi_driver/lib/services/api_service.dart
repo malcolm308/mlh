@@ -294,19 +294,29 @@ class ApiService {
         .toList();
   }
 
+  /// Alta del vehiculo. Va multipart porque el backend exige la licencia de
+  /// conducir en la misma peticion (`license_front` / `license_back`).
+  ///
+  /// Las fotos del vehiculo se suben despues con [addVehicleFotos].
   Future<DriverVehicle> addVehicle({
     required String tipoVehiculo,
     required String marca,
     required String modelo,
     required String matricula,
+    required Map<String, String> licencias,
   }) async {
-    final j = await _map('POST', '/driver/vehicles', body: {
-      'tipo_vehiculo': tipoVehiculo,
-      'marca': marca,
-      'modelo': modelo,
-      'matricula': matricula,
-    });
-    return DriverVehicle.fromJson(j);
+    final j = await ApiClient.multipart(
+      '$base/driver/vehicles',
+      {
+        'tipo_vehiculo': tipoVehiculo,
+        'marca': marca,
+        'modelo': modelo,
+        'matricula': matricula,
+      },
+      files: licencias,
+      prefijo: '',
+    );
+    return DriverVehicle.fromJson((j as Map).cast<String, dynamic>());
   }
 
   Future<void> selectVehicle(String vehicleId) async {

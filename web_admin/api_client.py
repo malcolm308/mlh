@@ -263,16 +263,25 @@ class ApiClient:
 
     def decidir_vehiculo(self, vehiculo_id: str, decision: str,
                          motivo: str = "") -> dict:
+        # El motivo solo se manda al rechazar. Al aprobar se omite el campo
+        # (antes se enviaba `null`, que el backend rechazaba con un 422 y el
+        # boton "Aprobar" parecia no hacer nada).
+        payload = {"decision": decision}
+        if decision == "rechazado" and motivo.strip():
+            payload["motivo"] = motivo.strip()
         return self._json(
             "PUT", "/admin/vehicles/%s/approve" % quote(vehiculo_id, safe=""),
-            json={"decision": decision, "motivo": motivo.strip() or None})
+            json=payload)
 
     def revisar_foto_vehiculo(self, vehiculo_id: str, campo: str,
                               decision: str, motivo: str = "") -> dict:
+        payload = {"decision": decision}
+        if decision == "rechazado" and motivo.strip():
+            payload["motivo"] = motivo.strip()
         return self._json(
             "PUT", "/admin/vehicles/%s/fotos/%s/revisar"
             % (quote(vehiculo_id, safe=""), quote(campo, safe="")),
-            json={"decision": decision, "motivo": motivo.strip() or None})
+            json=payload)
 
     def descargar_imagen(self, archivo: str) -> bytes:
         """Foto de vehiculo/documento. Exige token de administrador."""

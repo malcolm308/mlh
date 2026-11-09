@@ -41,6 +41,8 @@ FOTO_LABELS = {
     "vehiculo_interior_frente": "Interior · frente",
     "vehiculo_interior_atras": "Interior · atrás",
     "circulacion": "Circulación",
+    "license_front": "Licencia · frente",
+    "license_back": "Licencia · dorso",
 }
 
 

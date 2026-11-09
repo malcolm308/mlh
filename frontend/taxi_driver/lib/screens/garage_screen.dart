@@ -19,6 +19,15 @@ const List<(String, String)> fotosVehiculoRequeridas = [
   ('circulacion', 'Circulación'),
 ];
 
+/// Valor literal que espera el backend cuando el vehiculo no tiene placa.
+const String matriculaSinChapa = 'NO TIENE CHAPA';
+
+/// Campos de la licencia de conducir; obligatorios en el alta.
+const List<(String, String)> fotosLicencia = [
+  ('license_front', 'Licencia (frente)'),
+  ('license_back', 'Licencia (dorso)'),
+];
+
 /// ¿El tipo de vehiculo usa fotos de interior? Mascara de los tipos sin
 /// habitáculo de pasajeros.
 bool tipoUsaInterior(String? tipo) {
@@ -135,15 +144,21 @@ class _GarageScreenState extends State<GarageScreen> {
     ).then((alta) async {
       if (alta == null) return;
       try {
+        final licencias = {
+          for (final (campo, _) in fotosLicencia) campo: alta.fotos[campo]!,
+        };
+        final fotosVehiculo = Map<String, String>.of(alta.fotos)
+          ..removeWhere((campo, _) => campo.startsWith('license_'));
         final v = await widget.api.addVehicle(
           tipoVehiculo: alta.tipo,
           marca: alta.marca,
           modelo: alta.modelo,
           matricula: alta.matricula,
+          licencias: licencias,
         );
         // El vehiculo solo sirve al administrador si trae las fotos del
         // registro y de la circulacion: se suben justo después de crearlo.
-        await widget.api.addVehicleFotos(v.id, alta.fotos);
+        await widget.api.addVehicleFotos(v.id, fotosVehiculo);
         if (!mounted) return;
         _aviso('Vehículo enviado a revisión con sus fotos');
         await _cargar();
@@ -696,6 +711,10 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
   late final TextEditingController _modelo;
   late final TextEditingController _matricula;
 
+  /// Cuando el vehiculo no tiene placa: el campo de matricula se deshabilita
+  /// y se envia el literal que acepta el backend.
+  bool _sinChapa = false;
+
   @override
   void initState() {
     super.initState();
@@ -703,6 +722,19 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
     _marca = TextEditingController(text: widget.marcaInicial ?? '');
     _modelo = TextEditingController(text: widget.modeloInicial ?? '');
     _matricula = TextEditingController(text: widget.matriculaInicial ?? '');
+    _sinChapa = _matricula.text.trim().toUpperCase() == matriculaSinChapa;
+    if (_sinChapa) _matricula.text = matriculaSinChapa;
+  }
+
+  void _cambiarSinChapa(bool valor) {
+    setState(() {
+      _sinChapa = valor;
+      if (valor) {
+        _matricula.text = matriculaSinChapa;
+      } else if (_matricula.text.trim().toUpperCase() == matriculaSinChapa) {
+        _matricula.clear();
+      }
+    });
   }
 
   @override
@@ -798,7 +830,9 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
     if (!soloFotos || soloDatos) {
       final marca = _marca.text.trim();
       final modelo = _modelo.text.trim();
-      final matricula = _matricula.text.trim().toUpperCase();
+      final matricula = _sinChapa
+          ? matriculaSinChapa
+          : _matricula.text.trim().toUpperCase();
       if (marca.isEmpty || modelo.isEmpty || matricula.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Escribe la marca, el modelo y la matricula.'),
@@ -828,6 +862,17 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
                 'Te faltan ${faltan.length} foto(s):\n${faltan.map((f) => f.$2).join(", ")}'),
+            behavior: SnackBarBehavior.floating));
+        return;
+      }
+      final faltanLicencia = fotosLicencia
+          .where((f) => !_fotos.containsKey(f.$1))
+          .toList();
+      if (faltanLicencia.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Adjunta la licencia de conducir: '
+                '${faltanLicencia.map((f) => f.$2).join(" y ")}.'),
             behavior: SnackBarBehavior.floating));
         return;
       }
@@ -902,16 +947,35 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: _matricula,
-                  decoration: const InputDecoration(
-                      labelText: 'Matricula (ej: B 123456)'),
+                  enabled: !_sinChapa,
+                  decoration: InputDecoration(
+                      labelText: _sinChapa
+                          ? 'Matricula: no tiene chapa'
+                          : 'Matricula (ej: B 123456)'),
                   textCapitalization: TextCapitalization.characters,
                 ),
-                const SizedBox(height: 14),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('No tiene chapa'),
+                  subtitle: const Text(
+                      'El vehiculo se registra sin placa y el administrador '
+                      'lo revisa igual.'),
+                  value: _sinChapa,
+                  onChanged: _cambiarSinChapa,
+                ),
+                const SizedBox(height: 6),
               ],
               const Text('Fotos obligatorias:',
                   style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               for (final (campo, etiqueta) in fotosRequeridasDe(_tipo))
                 _tileFoto(campo, etiqueta),
+              if (nuevos) ...[
+                const SizedBox(height: 10),
+                const Text('Licencia de conducir (obligatoria):',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                for (final (campo, etiqueta) in fotosLicencia)
+                  _tileFoto(campo, etiqueta),
+              ],
               if (!tipoUsaInterior(_tipo))
                 const Text(
                   'Moto y triciclo no necesitan fotos del interior: exterior y '
