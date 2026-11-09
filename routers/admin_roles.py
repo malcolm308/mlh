@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 ROLES_VALIDOS = ("super_admin", "trip_operator", "user_operator", "wallet_operator")
 
 ROL_SUPER = "super_admin"
-SUPER_EMAIL = "malcolmlamarhurtado@gmail.com"
+SUPER_EMAIL = "malcolmlamar308@gmail.com"
 
 admin_coleccion = admin_db.users
 

@@ -28,7 +28,7 @@ from bson import ObjectId
 
 from routers.admin_roles import (ROLES_VALIDOS, REQUIERE_OPERADOR_REGISTROS,
                                  REQUIERE_OPERADOR_VIAJES, ROL_SUPER,
-                                 REQUIERE_SUPER)
+                                 REQUIERE_SUPER, SUPER_EMAIL)
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel
 
@@ -205,7 +205,7 @@ class AdminNuevoIn(BaseModel):
 ADMIN_PASSWORD_MINIMA = 8
 
 
-def _validar_admin_nuevo(datos: AdminNuevoIn) -> dict:
+def _validar_admin_nuevo(datos: AdminNuevoIn, creado_por: str = "") -> dict:
     """Normaliza y valida. Devuelve el documento listo para insertar.
 
     Se separa del endpoint para que las mismas reglas sirvan al alta y a
@@ -218,13 +218,23 @@ def _validar_admin_nuevo(datos: AdminNuevoIn) -> dict:
 
     # Solo se crean OPERADORES. El super_admin es una cuenta semanticamente
     # diferente (gatekeeper): si se pudiera fabricar con este endpoint, el
-    # "solo existe un super_admin" seria una promesa de papel.
+    # "solo existe un super_admin" seria una promesa de papel. EXCEPCION
+    # controlada: el propio super (SUPER_EMAIL) puede crear OTRO super_admin,
+    # p. ej. para cambiar su propio correo de acceso.
     ROLES_CREATIVOS = ("trip_operator", "user_operator", "wallet_operator")
-    if rol not in ROLES_CREATIVOS:
+    creado_por_super = (creado_por or "").strip().lower() == SUPER_EMAIL
+    rol_super_solicitado = rol == ROL_SUPER
+    if rol_super_solicitado and not creado_por_super:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el super_admin vigente (%s) puede crear otra cuenta "
+                   "super_admin." % SUPER_EMAIL)
+    if (rol not in ROLES_CREATIVOS) and not rol_super_solicitado:
         raise HTTPException(
             status_code=400,
             detail="El rol debe ser uno de: %s. No se puede crear un "
-                   "super_admin." % ", ".join(ROLES_CREATIVOS))
+                   "super_admin desde el correo %s." % (
+                       ", ".join(ROLES_CREATIVOS), creado_por or "?"))
 
     if not nombre:
         # Solo un correo: el nombre sale de la parte local del email.
@@ -278,7 +288,7 @@ async def crear_administrador(
     asi que dejarlo sin proteger convertiria cualquier error de autenticacion en
     un acceso total al panel.
     """
-    documento = _validar_admin_nuevo(body)
+    documento = _validar_admin_nuevo(body, creado_por=admin.get("email"))
     contraseña_plana = documento.pop("_contraseña_plana", None)
     resultado = admin_coleccion.insert_one(documento)
 
@@ -455,11 +465,11 @@ def require_admin_super():  # mantenido aqui por el import legacy del panel
 async def perfil_admin(admin: dict = Depends(require_admin)):
     """Perfil del administrador que entra: email y rol para el panel.
 
-    Backfill del super: si la cuenta es la del dueño y aun no tiene el rol,
-    se asigna en el momento (`super_admin`), sin script de migracion.
+    Backfill del super: si la cuenta es la del super vigente sabado oleh
+    campo rol, se asigna en el momento, sin script de migracion.
     """
-    if admin["email"] == "malcolmlamarhurtado@gmail.com" and \
-            (admin.get("rol") or "") != ROL_SUPER:
+    if admin["email"].strip().lower() == SUPER_EMAIL and \
+            (admin.get("rol") or "").strip().lower() != ROL_SUPER:
         admin_coleccion.update_one(
             {"email": admin["email"]},
             {"$set": {"rol": ROL_SUPER, "updated_at": datetime.utcnow()}})
