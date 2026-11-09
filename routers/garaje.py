@@ -89,6 +89,8 @@ def _chofer_actual(authorization: Optional[str]) -> dict:
     chofer = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
     if not chofer:
         raise HTTPException(status_code=403, detail="Chofer no encontrado")
+    if chofer.get("eliminado"):
+        raise HTTPException(status_code=403, detail="La cuenta ya fue eliminada")
     return {"id": driver_id, "doc": chofer}
 
 

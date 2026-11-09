@@ -25,6 +25,7 @@ from routers import vehiculos
 from routers import chofer_cancelaciones
 from routers import tariffs
 from routers import garaje
+from routers import cuenta_chofer
 from routers import telegram_webhook
 from routers import favoritos
 from routers import incidencias
@@ -134,6 +135,9 @@ app.include_router(promociones.router)
 # El garaje va tambien antes que CRUD_MONGODB: ese CRUD tiene un GET
 # /admin/{id} que se tragaria los /admin/vehicles del garaje.
 app.include_router(garaje.router)
+# Cuenta del chofer (DELETE /driver/account) junto al garaje: antes del CRUD
+# por el mismo motivo, para que sus rutas no las tape otro router.
+app.include_router(cuenta_chofer.router)
 app.include_router(CRUD_MONGODB.router)
 app.include_router(Solicitud_de_viajes_v4.router)
 app.include_router(billetera.router)

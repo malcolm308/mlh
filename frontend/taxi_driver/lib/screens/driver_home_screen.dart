@@ -216,6 +216,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// Garaje" lo actualiza de vuelta al seleccionar otro vehiculo.
   String? _tipoVehiculoActivo;
 
+  /// Nombre visible del vehiculo activo (marca + modelo) para el panel de
+  /// "Mi vehiculo". Antes salia de `widget.profile.vehicleModel`, que no
+  /// cambia al elegir otro coche en el garaje.
+  String? _nombreVehiculoActivo;
+
   /// El asistente de ruta paso a paso. Con viaje activo pide `steps` del OSRM
   /// via backend y avanza pasos por radio de 30 m con cada fix del GPS.
   final AsistenteRutaService _asistente = AsistenteRutaService();
@@ -408,6 +413,9 @@ double? _rumboParaFlecha() {
     unawaited(OfertasBackgroundService.marcarPrimerPlano(true));
     _bg.configurar();
     _tipoVehiculoActivo = widget.profile.tipoVehiculo;
+    _nombreVehiculoActivo = widget.profile.vehicleModel.trim().isEmpty
+        ? null
+        : widget.profile.vehicleModel.trim();
     // Oferta empujada por el despacho: la app re-polling al instante para
     // levantar la tarjeta con TODOS sus filtros (tipo, rechazados, plazo).
     _ws.onDatos = (canal, datos) {
@@ -741,6 +749,7 @@ double? _rumboParaFlecha() {
           return;
         }
         _tipoVehiculoActivo = activo.tipoVehiculo;
+        _nombreVehiculoActivo = _nombreDeVehiculo(activo);
 
         await widget.api.setDriverStatus(widget.driverId, 'available');
         await widget.api.setDriverLocation(
@@ -3299,9 +3308,13 @@ String _fmtCoord(LatLng p) =>
   }
 
   Widget _buildControlPanel() {
-    final vehicleLabel = widget.profile.vehicleModel.isNotEmpty
-        ? widget.profile.vehicleModel
-        : (widget.profile.vehicleType ?? 'Vehículo');
+    // Todo sale del vehiculo ACTIVO del garaje, no del perfil con el que se
+    // inicio sesion: cambiar de coche en "Mi Garaje" tiene que cambiar aqui
+    // en el acto, sin reiniciar la app.
+    final tipoLabel =
+        _vehicleTypeLabel(_tipoVehiculoActivo ?? widget.profile.vehicleType);
+    final nombreActivo = (_nombreVehiculoActivo ?? '').trim();
+    final vehicleLabel = nombreActivo.isNotEmpty ? nombreActivo : tipoLabel;
     return _PanelCard(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3339,7 +3352,7 @@ String _fmtCoord(LatLng p) =>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            _vehicleTypeLabel(widget.profile.vehicleType),
+                            tipoLabel,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -3452,6 +3465,15 @@ String _fmtCoord(LatLng p) =>
         ],
       ),
     );
+  }
+
+  /// Nombre visible de un vehiculo del garaje: marca + modelo; si no hay,
+  /// la matricula.
+  String _nombreDeVehiculo(DriverVehicle v) {
+    final nombre = '${v.marca ?? ''} ${v.modelo ?? ''}'.trim();
+    final matricula = (v.matricula ?? '').trim();
+    if (nombre.isEmpty) return matricula.isEmpty ? 'Vehículo' : matricula;
+    return nombre;
   }
 
   /// Etiqueta del tipo de vehiculo, desde la configuracion del backend.
@@ -4009,14 +4031,19 @@ String _fmtCoord(LatLng p) =>
           if (mounted) _loadTodayEarnings();
         });
       },
-      onConfiguracion: () {
+      onConfiguracion: () async {
         Navigator.of(context).pop();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => DriverSettingsScreen(
-            api: widget.api,
-            driverId: widget.driverId,
+        final cuentaEliminada = await Navigator.of(context).push<bool>(
+          MaterialPageRoute(
+            builder: (_) => DriverSettingsScreen(
+              api: widget.api,
+              driverId: widget.driverId,
+            ),
           ),
-        ));
+        );
+        // La cuenta se borro en Configuracion: cerrar la sesion limpia (los
+        // servicios, el wakelock y el token) y vuelve al login.
+        if (cuentaEliminada == true && mounted) await _logout();
       },
       onGaraje: () async {
         Navigator.of(context).pop();
@@ -4032,7 +4059,20 @@ String _fmtCoord(LatLng p) =>
         // Un vehiculo distinto activado cambia el tipo que pide el sondeo:
         // se actualiza en caliente, sin reiniciar la app.
         if (seleccion != null && mounted) {
-          setState(() => _tipoVehiculoActivo = seleccion.tipoVehiculo);
+          final cambioTipo =
+              !_mismoTipo(_tipoVehiculoActivo, seleccion.tipoVehiculo);
+          setState(() {
+            _tipoVehiculoActivo = seleccion.tipoVehiculo;
+            _nombreVehiculoActivo = _nombreDeVehiculo(seleccion);
+            if (cambioTipo) {
+              // Una oferta del tipo anterior no se puede atender con el
+              // vehiculo nuevo: se quita ya, sin esperar al siguiente sondeo.
+              _selectedOffer = null;
+              _lostOffer = null;
+              _lostCountdown = 0;
+              _ofertaCache.clear();
+            }
+          });
           unawaited(OfertasBackgroundService
               .guardarTipo(seleccion.tipoVehiculo));
           unawaited(_tick());

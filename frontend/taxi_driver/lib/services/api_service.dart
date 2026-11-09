@@ -114,6 +114,15 @@ class ApiService {
     return DriverProfile.fromJson(j);
   }
 
+  /// Elimina para siempre la cuenta del chofer autenticado.
+  ///
+  /// Borrar la cuenta es irreversible: el backend borra los vehiculos y sus
+  /// fotos, anonimiza el perfil y deja el token inservible. La sesion local
+  /// hay que limpiarla en cuanto responde.
+  Future<void> deleteAccount() async {
+    await _map('DELETE', '/driver/account');
+  }
+
   // ------------------- REGISTRO -------------------
 
   /// Registra un conductor nuevo con los datos que exige POST /chofer.
