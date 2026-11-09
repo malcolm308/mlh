@@ -59,7 +59,13 @@ async def delete_account(user: dict = Depends(get_current_user)):
         {
             "$set": {
                 "email": anonymous_email,
-                "numero_de_telefono": None,
+                # Placeholder UNICO en vez de null: la coleccion tiene un
+                # indice unico con `numero_de_telefono`, y Mongo cuenta el
+                # null como valor: un segundo borrado moria con E11000
+                # (le paso a Idania). El marcador lleva el id, es unico, y
+                # `buscar_por_telefono` no lo puede confundir con un numero
+                # real porque la igualdad final es de digitos completos.
+                "numero_de_telefono": f"eliminado_{user_id}@borrado",
                 "password": secreto,
                 "Nombre": "Usuario eliminado",
                 "Apellidos": "",

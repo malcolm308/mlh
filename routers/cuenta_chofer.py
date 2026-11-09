@@ -143,7 +143,10 @@ async def eliminar_cuenta(authorization: Optional[str] = Header(None)):
         {
             "$set": {
                 "email": "deleted_%s@deleted.local" % driver_id,
-                "numero_de_telefono": None,
+                # Placeholder UNICO en vez de None: la coleccion tiene un
+                # indice unico con `numero_de_telefono`; un segundo borrado
+                # chocaria con E11000 si apenas existe otro null.
+                "numero_de_telefono": "eliminado_%s@borrado" % driver_id,
                 "password": bcrypt.hashpw(
                     secreto.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
                 "Nombre": "Chofer eliminado",
