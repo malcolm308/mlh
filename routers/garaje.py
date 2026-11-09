@@ -344,16 +344,20 @@ def _guardar_foto_vehiculo(vehiculo_id: str, campo: str,
     }
 
 
-def _marcar_fotos_aprobadas(fotos: dict, email_admin: str) -> dict:
+def _marcar_fotos_aprobadas(fotos: dict, email_admin: str,
+                            solo_pendientes: bool = False) -> dict:
     """Marca todas las fotos del vehiculo como aprobadas de una vez.
 
     Se usa al aprobar el vehiculo desde el panel: si el administrador ya dio
     el visto bueno al conjunto, no tiene sentido dejarlas en `pendiente` y
-    obligarlo a aprobarlas una por una.
+    obligarlo a aprobarlas una por una. En la auto-aprobacion por foto se
+    respetan las que esten rechazadas.
     """
     momento = datetime.utcnow().isoformat()
     for ref in (fotos or {}).values():
         if not isinstance(ref, dict):
+            continue
+        if solo_pendientes and ref.get("estado") == ESTADO_RECHAZADO:
             continue
         ref["estado"] = ESTADO_APROBADO
         ref["motivo"] = None
@@ -1024,7 +1028,7 @@ async def revisar_foto_vehiculo(vehiculo_id: str, campo: str,
     if completas and doc.get("estado") != ESTADO_APROBADO:
         # El vehiculo queda aprobado: todas sus fotos (incluidas las
         # licencias) quedan aprobadas en la misma pasada.
-        _marcar_fotos_aprobadas(fotos, email_admin)
+        _marcar_fotos_aprobadas(fotos, email_admin, solo_pendientes=True)
         cambios["fotos"] = fotos
         cambios["estado"] = ESTADO_APROBADO
         cambios["revisado_por"] = email_admin
