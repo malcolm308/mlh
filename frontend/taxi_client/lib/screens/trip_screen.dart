@@ -824,10 +824,6 @@ class _TripScreenState extends State<TripScreen> {
                   _cardBuscando()
                 else if (t.driverId != null)
                   _tarjetaChofer(t),
-                if (buscando && !cancelled)
-                  _cardBuscando()
-                else if (t.driverId != null)
-                  _tarjetaChofer(t),
                 if (cancelled) ...[
                   if (expirado)
                     const WarningBox(
@@ -995,6 +991,7 @@ class _TripScreenState extends State<TripScreen> {
   /// fondo ambar suave, punto pulsante y copia amable.
   Widget _cardBuscando() {
     return Container(
+      key: const ValueKey('searching_banner'),
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
