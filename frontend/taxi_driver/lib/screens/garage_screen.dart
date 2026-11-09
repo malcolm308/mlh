@@ -101,23 +101,33 @@ class _GarageScreenState extends State<GarageScreen> {
     super.dispose();
   }
 
-  Future<void> _cargar() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _cargar({bool mostrarCarga = true}) async {
+    if (mostrarCarga) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final lista = await widget.api.getMyVehicles();
       if (!mounted) return;
       setState(() {
         _vehiculos = lista;
         _loading = false;
+        _error = null;
       });
     } catch (e) {
       if (!mounted) return;
+      final texto = '$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), '');
+      // Si ya hay lista en pantalla, un fallo al refrescar no debe borrarla:
+      // se avisa y se deja lo que el chofer estaba viendo.
+      if (!mostrarCarga && _vehiculos.isNotEmpty) {
+        _aviso('No se pudo actualizar: $texto');
+        return;
+      }
       setState(() {
         _loading = false;
-        _error = '$e';
+        _error = texto;
       });
     }
   }
@@ -231,11 +241,36 @@ class _GarageScreenState extends State<GarageScreen> {
   /// cambia las ofertas que van a llegar.
   Future<void> _usarVehiculo(DriverVehicle v) async {
     if (_seleccionandoId != null) return;
-    if (!v.esAprobado) {
-      _aviso('Solo puedes usar un vehículo aprobado por el administrador');
+    if (v.esActivo) {
+      _aviso('Este vehículo ya está en uso.');
       return;
     }
-    if (v.esActivo) return;
+    if (!v.esAprobado) {
+      // El administrador puede haberlo aprobado en el panel después de que
+      // se abriera el garaje: se recarga antes de rendirse. Así el selector
+      // responde aunque la tarjeta estuviera mostrando un estado viejo.
+      await _cargar(mostrarCarga: false);
+      if (!mounted) return;
+      for (final actual in _vehiculos) {
+        if (actual.id == v.id) {
+          v = actual;
+          break;
+        }
+      }
+      if (!v.esAprobado) {
+        final motivo = (v.motivo ?? '').trim();
+        if (v.estado == 'rechazado') {
+          _aviso(motivo.isEmpty
+              ? 'El vehículo fue rechazado. Corrige los datos o las fotos y '
+                  'espera otra revisión.'
+              : 'El vehículo fue rechazado: $motivo');
+        } else {
+          _aviso('El vehículo aún está pendiente. El administrador debe '
+              'aprobarlo antes de usarlo.');
+        }
+        return;
+      }
+    }
     setState(() => _seleccionandoId = v.id);
     try {
       await widget.api.selectVehicle(v.id);
@@ -303,7 +338,16 @@ class _GarageScreenState extends State<GarageScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Mi Garaje')),
+      appBar: AppBar(
+        title: const Text('Mi Garaje'),
+        actions: [
+          IconButton(
+            tooltip: 'Actualizar garaje',
+            onPressed: _loading ? null : () => _cargar(mostrarCarga: false),
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _mostrarFormulario,
         icon: const Icon(Icons.add),
@@ -356,10 +400,14 @@ class _GarageScreenState extends State<GarageScreen> {
 
     final hayAprobado =
         _vehiculos.any((v) => v.esAprobado);
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
-      itemCount: _vehiculos.length,
-      itemBuilder: (context, i) => _tarjeta(_vehiculos[i], hayAprobado),
+    return RefreshIndicator(
+      onRefresh: () => _cargar(mostrarCarga: false),
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
+        itemCount: _vehiculos.length,
+        itemBuilder: (context, i) => _tarjeta(_vehiculos[i], hayAprobado),
+      ),
     );
   }
 
@@ -604,30 +652,71 @@ class _GarageScreenState extends State<GarageScreen> {
                   style: const TextStyle(
                       color: Color(0xFFB26A00), fontStyle: FontStyle.italic)),
             ],
+            if (!v.esAprobado) ...[
+              const SizedBox(height: 4),
+              Text(
+                v.estado == 'rechazado'
+                    ? 'Rechazado: corrige el motivo y espera una nueva '
+                        'revisión.'
+                    : 'Pendiente: el administrador debe aprobarlo antes de '
+                        'poder usarlo.',
+                style: TextStyle(fontSize: 12, color: colorDeEstado),
+              ),
+            ],
             const SizedBox(height: 10),
             Row(
               children: [
-                Icon(
-                  v.esActivo ? Icons.radio_button_checked : Icons.radio_button_off,
-                  size: 18,
-                  color: v.esActivo ? const Color(0xFF111827) : Colors.grey,
+                // El circulo y el texto tambien seleccionan: antes solo
+                // respondia el boton y parecia que el selector estaba roto.
+                Expanded(
+                  child: InkWell(
+                    onTap: _seleccionandoId == null
+                        ? () => _usarVehiculo(v)
+                        : null,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(
+                            v.esActivo
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_off,
+                            size: 18,
+                            color: v.esActivo
+                                ? const Color(0xFF111827)
+                                : Colors.grey,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              v.esActivo
+                                  ? 'Vehículo en uso'
+                                  : 'No está en uso',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 4),
-                Text(v.esActivo ? 'Vehículo en uso' : 'No está en uso',
-                    style: const TextStyle(fontSize: 13)),
-                const Spacer(),
+                const SizedBox(width: 8),
                 FilledButton.icon(
-                  // Unindexado en vuelo: mismo bloqueo que "Aceptar" en la
-                  // pantalla principal, para no mandar dos selects.
-                  onPressed: (_seleccionandoId != null || !v.esAprobado)
+                  // Solo se bloquea mientras hay un select en vuelo. Si el
+                  // vehiculo no esta aprobado, el boton sigue respondiendo
+                  // con el motivo (antes quedaba deshabilitado y parecia roto).
+                  onPressed: _seleccionandoId != null
                       ? null
                       : () => _usarVehiculo(v),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(40),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
                     backgroundColor: v.esActivo
                         ? const Color(0xFFE5E7EB)
                         : const Color(0xFF111827),
-                    foregroundColor: v.esActivo ? const Color(0xFF6B7280) : Colors.white,
+                    foregroundColor:
+                        v.esActivo ? const Color(0xFF6B7280) : Colors.white,
                   ),
                   icon: _seleccionandoId == v.id
                       ? const SizedBox(
