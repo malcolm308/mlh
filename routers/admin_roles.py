@@ -23,6 +23,7 @@ Uso:
 Super: malcolmlamarhurtado@gmail.com (backfill automatico en el login).
 """
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -43,9 +44,21 @@ admin_coleccion = admin_db.users
 
 
 def _admin_doc_por_email(email: Optional[str]) -> Optional[dict]:
+    """Busca el administrador por su correo del token.
+
+    Primero por igualdad exacta; si no, case-insensitive: el email vive tal
+    cual se registro y un anti caso distino con mayusculas NO debe romper el
+    auth del panel (origine del falso "La cuenta no es de administrador").
+    """
     if not email:
         return None
-    return admin_coleccion.find_one({"email": email.lower()})
+    email = email.strip().lower()
+    doc = admin_coleccion.find_one({"email": email})
+    if doc:
+        return doc
+    seguro = re.escape(text_email)
+    return admin_coleccion.find_one({"email": {"$regex":("^%s$" % seguro),
+                                               "$options": "i"}})
 
 
 def _token_admin(authorization: Optional[str]) -> dict:

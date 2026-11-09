@@ -103,6 +103,15 @@ def _guardar_cookies(api: ApiClient) -> None:
 
 
 def _borrar_cookies() -> None:
+    """Borra las cookies y marca que hay que IGNORAR la restauracion.
+
+    El delete lo ejecuta JS en el navegador y el `CookieManager` puede tardar
+    mas que el `st.rerun()`: si solo confiamos en el borrado, el siguiente
+    `st.context.cookies` AUN traeria el refresh token y el panel reentraria
+    con la sesion que acabamos de cerrar (ese era el bug de "cerrar sesion no
+    funciona"). El flag `_logout_en_curso` corta esa ventana.
+    """
+    st.session_state["_logout_en_curso"] = True
     gestor = _cookie_manager()
     if gestor is None:
         return
@@ -123,6 +132,10 @@ def _borrar_cookies() -> None:
 
 def _restaurar_sesion() -> Optional[ApiClient]:
     """Recupera la sesion desde la cookie de refresh, sin pedir contrasena."""
+    # Un cierre de sesion acaba de pasar: ni reintentar, aunque la cookie aun
+    # viva en el navegador (el borrado via JS puede correr despues del rerun).
+    if st.session_state.pop("_logout_en_curso", False):
+        return None
     try:
         cookies = st.context.cookies
         refresh = (cookies.get(_COOKIE_REFRESH) or "").strip()
