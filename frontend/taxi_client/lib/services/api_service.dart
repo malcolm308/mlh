@@ -51,9 +51,14 @@ class ApiService {
 
   // ---------------- AUTH ----------------
 
+  /// Entra con el número de teléfono o con el correo.
+  ///
+  /// `app: 'cliente'` le dice al backend que devuelva la cuenta de PASAJERO de
+  /// este numero, no la de chofer: una persona puede tener las dos cuentas con
+  /// el mismo telefono.
   Future<String> login(String email, String password) async {
     final j = await _map('POST', '/login',
-        body: {'email': email, 'password': password});
+        body: {'email': email, 'password': password, 'app': 'cliente'});
     final t = j['access_token']?.toString();
     if (t == null || t.isEmpty) throw ApiException('Respuesta de login invalida');
     final refresh = j['refresh_token']?.toString();
