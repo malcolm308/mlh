@@ -82,13 +82,16 @@ tarjeta del viaje y pulsa **Asignar**.
 Para comprobar el grupo sin esperar a que exista un viaje huérfano:
 
 ```bash
-curl -X POST "https://rapitaxi-api-fws6.onrender.com/admin/telegram/test-group" \
+curl -X POST "https://rapitaxi-api-fws6.onrender.com/admin/telegram/test-group?vehicle_type=moto" \
   -H "X-API-Key: $ORPHANED_API_KEY"
 ```
 
-Envía un mensaje `TEST-123` y devuelve el status code y el JSON exacto de
-`getChat` y `sendMessage` (200 = enviado, 400 = `chat_id` incorrecto o bot
-fuera del grupo, 403 = el bot no es administrador).
+`vehicle_type` es opcional (`basico` por defecto; también `moto`, `triciclo`,
+`confort`, `premium`). El mensaje es el mismo que publica el cron, con
+`🚘 Tipo:`, así que sirve para comprobar tanto el grupo como la etiqueta del
+vehículo. Devuelve el status code y el JSON exacto de `getChat` y
+`sendMessage` (200 = enviado, 400 = `chat_id` incorrecto o bot fuera del
+grupo, 403 = el bot no es administrador).
 
 ## Comportamiento
 

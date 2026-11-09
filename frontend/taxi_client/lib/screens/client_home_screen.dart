@@ -1070,6 +1070,14 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       ));
       _viajeEnPantalla = false;
       UpdateService.instance.viajeActivo = false;
+      if (result == 'retry' && mounted) {
+        // El viaje expiro sin chofer y el pasajero pulso "Volver a pedir
+        // viaje". NO se resetea el estado: _requestTrip reutiliza _pickup,
+        // _dropoff, _selectedVehicle y el resto de preferencias, crea un
+        // viaje nuevo en `requested` y vuelve a abrir el radar.
+        await _requestTrip();
+        return;
+      }
       // Si el pasajero cerro el recibo (o el viaje fue cancelado), volver al
       // paso 1. En `completed` el reset ocurre SOLO aqui: la pantalla del
       // recibo se queda abierta hasta que el usuario pulse "Finalizar".

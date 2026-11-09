@@ -82,20 +82,48 @@ def _precio(valor: Any) -> str:
         return "por confirmar"
 
 
+# Etiqueta visible del tipo de vehiculo. Las claves son las que devuelve
+# `normalizar_tipo_vehiculo`; cualquier tipo nuevo cae en `.capitalize()`.
+ETIQUETAS_TIPO_VEHICULO = {
+    "basico": "Básico",
+    "moto": "Moto",
+    "triciclo": "Triciclo",
+    "confort": "Confort",
+    "premium": "Premium",
+}
+
+
+def _tipo_vehiculo(valor: Any) -> str:
+    """'Basico' / 'BÁSICO' / 'basico ' -> 'Básico'."""
+    from services.tipo_vehiculo import normalizar_tipo_vehiculo
+
+    normalizado = normalizar_tipo_vehiculo(valor)
+    if not normalizado:
+        return "por confirmar"
+    return ETIQUETAS_TIPO_VEHICULO.get(normalizado, normalizado.capitalize())
+
+
 def mensaje_huerfano(trip_id: str, origen: Any, destino: Any, precio: Any,
-                     numero_whatsapp: str) -> str:
-    """Texto HTML del mensaje que se publica en el grupo."""
+                     numero_whatsapp: str, tipo_vehiculo: Any = None) -> str:
+    """Texto HTML del mensaje que se publica en el grupo.
+
+    Incluye el tipo de vehiculo que pidio el pasajero: un chofer de moto no
+    debe tomar un viaje de basico (ni al reves). El tipo se normaliza igual
+    que en el filtro de ofertas para que 'Basico', 'BÁSICO' y ' basico '
+    salgan siempre como 'Básico'.
+    """
     return (
-        "🚨 <b>VIAJE HUÉRFANO</b>\n"
-        "🆔 <b>ID:</b> <code>%s</code>\n"
-        "📍 <b>Origen:</b> %s\n"
-        "🏁 <b>Destino:</b> %s\n"
-        "💵 <b>Precio:</b> %s\n"
+        "🚕 <b>VIAJE SIN CHOFER</b> (ID: <code>%s</code>)\n"
         "\n"
-        "El chófer debe escribir al administrador por WhatsApp y decir este ID:\n"
-        "%s"
+        "🚘 <b>Tipo:</b> %s\n"
+        "📍 <b>Recogida:</b> %s\n"
+        "🏁 <b>Destino:</b> %s\n"
+        "💰 <b>Precio:</b> %s\n"
+        "\n"
+        "👉 Si deseas este viaje, haz clic aquí: %s"
         % (
             _texto(trip_id, "—"),
+            _tipo_vehiculo(tipo_vehiculo),
             _texto(origen, "—"),
             _texto(destino, "—"),
             _precio(precio),

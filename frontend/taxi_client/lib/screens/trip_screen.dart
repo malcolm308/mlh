@@ -223,21 +223,11 @@ class _TripScreenState extends State<TripScreen> {
       // La pantalla sigue viva y cambia al recibo (`_buildCompletedScreen`).
       // El estado solo se abandona cuando el pasajero pulsa "Finalizar".
       //
-      // Si el viaje fue cancelado por el chofer o expiró, notificar al home
-      if ((t.status == 'cancelled' || t.status == 'expired') && mounted && !_popped) {
-        _popped = true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(t.status == 'cancelled' 
-                ? 'El conductor ha cancelado el viaje' 
-                : 'El viaje ha expirado'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-        Navigator.of(context).pop('cancelled');
-        return;
-      }
+      // Lo mismo vale para `cancelled` y `expired`: NO se cierra la pantalla
+      // sola. Antes se hacia `pop('cancelled')` y el pasajero nunca llegaba a
+      // ver el aviso ni el boton. Ahora la hoja muestra "No encontramos
+      // choferes disponibles" + "Volver a pedir viaje" (devuelve 'retry') o
+      // "Viaje cancelado" + "Volver al inicio" (devuelve 'cancelled').
       // Respaldo del push: el backend cachea posicion/rumbo/velocidad del
       // chofer y el sondeo los entrega. Si el WebSocket cae, la camara 3D
       // sigue moviendose en vez de quedarse congelada.
@@ -738,6 +728,7 @@ class _TripScreenState extends State<TripScreen> {
     ];
     final cancelled = t.status == 'cancelled' || t.status == 'expired';
     final expirado = t.status == 'expired';
+    final cancelado = t.status == 'cancelled';
     final buscando = t.status == 'requested' || t.driverId == null;
 
     // Hoja con tope de altura: el contenido completo puede crecer (radar,
@@ -930,15 +921,29 @@ class _TripScreenState extends State<TripScreen> {
                   _botonCancelar()
                 else if (_stepIndex == 4 || cancelled)
                   PillButton(
-                    label: cancelled ? 'Volver a pedir viaje' : 'Listo',
-                    icon: cancelled
+                    // Expirado: el viaje se quedo sin chofer y el pasajero
+                    // puede volver a pedirlo con la misma recogida/destino.
+                    // 'retry' lo maneja ClientHomeScreen._requestTrip().
+                    label: expirado
+                        ? 'Volver a pedir viaje'
+                        : cancelado
+                            ? 'Volver al inicio'
+                            : 'Listo',
+                    icon: expirado
                         ? Icons.refresh_rounded
-                        : Icons.check_rounded,
+                        : cancelado
+                            ? Icons.arrow_back_rounded
+                            : Icons.check_rounded,
                     onPressed: () {
                       if (_popped) return; // Prevent double pop
                       _popped = true;
-                      // Si fue cancelado, indicar al home que resetee el estado
-                      final result = cancelled ? 'cancelled' : null;
+                      // 'cancelled' resetea el estado; 'retry' lo conserva y
+                      // vuelve a llamar al endpoint de crear viaje.
+                      final result = expirado
+                          ? 'retry'
+                          : cancelado
+                              ? 'cancelled'
+                              : null;
                       Navigator.of(context).pop(result);
                     },
                   ),

@@ -61,7 +61,6 @@ from services.telefono import buscar_por_telefono, normalizar_telefono
 from services.telegram_huerfanos import (
     TelegramError,
     configuracion as telegram_config,
-    enlace_whatsapp,
     enviar_mensaje,
     faltantes as telegram_faltantes,
     llamar_api,
@@ -260,7 +259,7 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
 
     sql = """
         SELECT trip_id, request_address, dropoff_address, precio_estimado,
-               requested_at
+               vehicle_type, requested_at
           FROM trips
          WHERE status = 'requested'
            AND driver_id IS NULL
@@ -321,6 +320,7 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
             destino=viaje.get("dropoff_address"),
             precio=viaje.get("precio_estimado"),
             numero_whatsapp=cfg["whatsapp"],
+            tipo_vehiculo=viaje.get("vehicle_type"),
         )
         try:
             await enviar_mensaje(cfg["token"], cfg["grupo"], texto)
@@ -364,13 +364,15 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
 
 @router.post("/telegram/test-group")
 async def probar_grupo_telegram(
+    vehicle_type: str = "basico",
     _: dict = Depends(require_api_key_or_test_token),
 ):
     """Envia un viaje huerfano de prueba al grupo de Telegram configurado.
 
-    Devuelve el status code y el cuerpo JSON EXACTO de Telegram para `getChat`
-    y `sendMessage`, de modo que se distinga un chat_id equivocado (400), un bot
-    sin permisos (403), etc. No toca la base de datos.
+    `?vehicle_type=moto` (o triciclo/confort/premium) permite comprobar que el
+    tipo se pinta bien. Devuelve el status code y el cuerpo JSON EXACTO de
+    Telegram para `getChat` y `sendMessage`, de modo que se distinga un chat_id
+    equivocado (400), un bot sin permisos (403), etc. No toca la base de datos.
     """
     cfg = telegram_config()
     faltan = telegram_faltantes(cfg)
@@ -384,18 +386,13 @@ async def probar_grupo_telegram(
         "getChat", cfg["token"], chat_id=cfg["grupo"])
     chat = chat_cuerpo.get("result") or {}
 
-    enlace = enlace_whatsapp(cfg["whatsapp"], "TEST-123")
-    texto = (
-        "🧪 PRUEBA DE SISTEMA\n"
-        "\n"
-        "🚕 VIAJE SIN CHOFER (ID: TEST-123)\n"
-        "\n"
-        "📍 Recogida: Calle Falsa 123\n"
-        "🏁 Destino: Avenida Siempre Viva 742\n"
-        "💰 Precio: 1500 CUP\n"
-        "\n"
-        "👉 Si deseas este viaje, haz clic aquí para escribirme: %s"
-        % enlace
+    texto = "🧪 <b>PRUEBA DE SISTEMA</b>\n\n" + mensaje_huerfano(
+        trip_id="TEST-123",
+        origen="Calle Falsa 123",
+        destino="Avenida Siempre Viva 742",
+        precio=1500,
+        numero_whatsapp=cfg["whatsapp"],
+        tipo_vehiculo=vehicle_type,
     )
     envio_status, envio_cuerpo = await llamar_api(
         "sendMessage", cfg["token"],
@@ -408,6 +405,7 @@ async def probar_grupo_telegram(
         "ok": bool(envio_status == 200 and envio_cuerpo.get("ok")),
         "chat_id_configurado": cfg["grupo"],
         "whatsapp": cfg["whatsapp"],
+        "vehicle_type": vehicle_type,
         "get_chat": {
             "status": chat_status,
             "ok": bool(chat_cuerpo.get("ok")),
