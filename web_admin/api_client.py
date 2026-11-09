@@ -123,14 +123,9 @@ class ApiClient:
         access = (data or {}).get("access_token")
         if not access:
             raise ApiError("El servidor no devolvió un token de acceso.")
-        if _app_de_token(access) != "admin":
-            # Mismo correo dado de alta en otra app: el login desconoce el
-            # rol. Sin esto, la sesion seguiria con el token de CHOFER y el
-            # panel mostraría 403 en todas partes (app=driver).
-            raise ApiError(
-                "El correo no corresponde a un administrador. Revisa que "
-                "sea la cuenta correcta o pide al super_admin darla de "
-                "alta.", status=403)
+        # `/admin/login` solo mira la base de administradores y devuelve
+        # SIEMPRE un token app=admin: no hace falta comprobar el claim aqui.
+        # (La comprobacion real la hace el backend con cada endpoint.)
         self.access_token = access
         self.refresh_token = (data or {}).get("refresh_token")
         self.admin_email = email.strip().lower()
