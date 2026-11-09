@@ -205,7 +205,8 @@ class AdminNuevoIn(BaseModel):
 ADMIN_PASSWORD_MINIMA = 8
 
 
-def _validar_admin_nuevo(datos: AdminNuevoIn, creado_por: str = "") -> dict:
+def _validar_admin_nuevo(datos: AdminNuevoIn, creado_por_email: str = "",
+                         creado_por_rol: str = "") -> dict:
     """Normaliza y valida. Devuelve el documento listo para insertar.
 
     Se separa del endpoint para que las mismas reglas sirvan al alta y a
@@ -222,7 +223,8 @@ def _validar_admin_nuevo(datos: AdminNuevoIn, creado_por: str = "") -> dict:
     # controlada: el propio super (SUPER_EMAIL) puede crear OTRO super_admin,
     # p. ej. para cambiar su propio correo de acceso.
     ROLES_CREATIVOS = ("trip_operator", "user_operator", "wallet_operator")
-    creado_por_super = (creado_por or "").strip().lower() == SUPER_EMAIL
+    creado_por_super = (creado_por_email or "").strip().lower() == SUPER_EMAIL \
+        or (creado_por_rol or "").strip().lower() == ROL_SUPER
     rol_super_solicitado = rol == ROL_SUPER
     if rol_super_solicitado and not creado_por_super:
         raise HTTPException(
@@ -234,7 +236,7 @@ def _validar_admin_nuevo(datos: AdminNuevoIn, creado_por: str = "") -> dict:
             status_code=400,
             detail="El rol debe ser uno de: %s. No se puede crear un "
                    "super_admin desde el correo %s." % (
-                       ", ".join(ROLES_CREATIVOS), creado_por or "?"))
+                       ", ".join(ROLES_CREATIVOS), creado_por_email or "?"))
 
     if not nombre:
         # Solo un correo: el nombre sale de la parte local del email.
@@ -288,7 +290,10 @@ async def crear_administrador(
     asi que dejarlo sin proteger convertiria cualquier error de autenticacion en
     un acceso total al panel.
     """
-    documento = _validar_admin_nuevo(body, creado_por=admin.get("email"))
+    documento = _validar_admin_nuevo(
+        body,
+        creado_por_email=admin.get("email"),
+        creado_por_rol=admin.get("rol"))
     contraseña_plana = documento.pop("_contraseña_plana", None)
     resultado = admin_coleccion.insert_one(documento)
 
