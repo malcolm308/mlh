@@ -2,13 +2,13 @@
   "app": "client",
   "latest": {
     "version": "1.0.7",
-    "version_code": 2008,
+    "version_code": 4008,
     "apk": "app_latest.apk"
   },
   "releases": [
     {
       "version": "1.0.7",
-      "version_code": 2008
+      "version_code": 4008
     },
     {
       "version": "1.0.6",
@@ -43,5 +43,5 @@
       "published_at": "2026-11-08T12:57:52+00:00"
     }
   ],
-  "updated_at": "2026-11-09T16:34:57+00:00"
+  "updated_at": "2026-11-09T16:44:31+00:00"
 }
