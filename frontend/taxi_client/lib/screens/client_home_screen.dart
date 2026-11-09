@@ -1153,8 +1153,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       try {
         await widget.api.deleteAccount();
         if (!mounted) return;
+        // Cerrar la sesion COMPLETA: el access/refresh viven en el almacen
+        // seguro (flutter_secure_storage), no en SharedPreferences. Si no se
+        // limpian, al abrir la app el auto-login intentaba renovar la sesion
+        // de la cuenta ya borrada y parecia que no se borro nada.
+        await TokenStore.instance.limpiar();
         final prefs = await SharedPreferences.getInstance();
-        await prefs.clear();
+        await prefs.remove('client_id');
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Cuenta eliminada')),
@@ -1163,7 +1168,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            // Legible: el backend responde "Tienes un viaje en curso..." y
+            // demas; sin el sufijo tecnico "(HTTP 409)".
+            content: Text('No se pudo eliminar: '
+                '$e'.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), '')),
+          ),
         );
       }
     }
