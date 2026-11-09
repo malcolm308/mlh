@@ -245,34 +245,40 @@ class _GarageScreenState extends State<GarageScreen> {
       _aviso('Este vehículo ya está en uso.');
       return;
     }
-    if (!v.esAprobado) {
-      // El administrador puede haberlo aprobado en el panel después de que
-      // se abriera el garaje: se recarga antes de rendirse. Así el selector
-      // responde aunque la tarjeta estuviera mostrando un estado viejo.
-      await _cargar(mostrarCarga: false);
-      if (!mounted) return;
-      for (final actual in _vehiculos) {
-        if (actual.id == v.id) {
-          v = actual;
-          break;
-        }
-      }
-      if (!v.esAprobado) {
-        final motivo = (v.motivo ?? '').trim();
-        if (v.estado == 'rechazado') {
-          _aviso(motivo.isEmpty
-              ? 'El vehículo fue rechazado. Corrige los datos o las fotos y '
-                  'espera otra revisión.'
-              : 'El vehículo fue rechazado: $motivo');
-        } else {
-          _aviso('El vehículo aún está pendiente. El administrador debe '
-              'aprobarlo antes de usarlo.');
-        }
-        return;
-      }
-    }
+
+    // Se marca en vuelo desde el principio: si hay que refrescar el estado
+    // (vehículo recién aprobado en el panel), el botón muestra el spinner y
+    // no parece que el toque se haya perdido.
     setState(() => _seleccionandoId = v.id);
+
     try {
+      if (!v.esAprobado) {
+        // El administrador puede haberlo aprobado después de que se abriera
+        // el garaje: se recarga antes de rendirse.
+        await _cargar(mostrarCarga: false);
+        if (!mounted) return;
+        for (final actual in _vehiculos) {
+          if (actual.id == v.id) {
+            v = actual;
+            break;
+          }
+        }
+        if (!v.esAprobado) {
+          setState(() => _seleccionandoId = null);
+          final motivo = (v.motivo ?? '').trim();
+          if (v.estado == 'rechazado') {
+            _aviso(motivo.isEmpty
+                ? 'El vehículo fue rechazado. Corrige los datos o las fotos y '
+                    'espera otra revisión.'
+                : 'El vehículo fue rechazado: $motivo');
+          } else {
+            _aviso('El vehículo aún está pendiente. El administrador debe '
+                'aprobarlo antes de usarlo.');
+          }
+          return;
+        }
+      }
+
       await widget.api.selectVehicle(v.id);
       if (!mounted) return;
       setState(() => _seleccionandoId = null);
@@ -997,6 +1003,11 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
   Widget build(BuildContext context) {
     final nuevos = !widget.soloFotos && !widget.soloDatos;
     final sinFotos = widget.soloDatos;
+    // Si `/vehiculos/tipos` aun no ha respondido, el desplegable quedaba sin
+    // opciones y parecia que no abria. Se pinta la lista de respaldo.
+    final tiposDisponibles = widget.tipos.tipos.isEmpty
+        ? VehicleTypesService.respaldo
+        : widget.tipos.tipos;
     return AlertDialog(
       title: Text(
         nuevos
@@ -1016,7 +1027,7 @@ class _FormularioVehiculoDialogState extends State<FormularioVehiculoDialog> {
                   decoration:
                       const InputDecoration(labelText: 'Tipo de vehiculo'),
                   items: [
-                    for (final t in widget.tipos.tipos)
+                    for (final t in tiposDisponibles)
                       DropdownMenuItem(value: t.tipo, child: Text(t.etiqueta)),
                   ],
                   onChanged: (v) => setState(() => _tipo = v ?? _tipo),
