@@ -81,6 +81,7 @@ class ClientTrip {
   /// falla (el sondeo de 3 s sigue actualizando).
   final double? driverLat;
   final double? driverLng;
+  final double? driverSpeed;
 
   /// Motivo y quien cancelo: `driver` = chofer cancelo en el paso intermedio.
   final String? cancelledBy;
