@@ -183,9 +183,11 @@ def _cerrar_sesion(api: ApiClient, aviso: str = "") -> None:
     st.session_state.pop("api", None)
     st.session_state.pop("admin_rol", None)
     # La pestana recordada es por sesion: al entrar otra cuenta no debe heredar
-    # la seccion (ni la del rol anterior ni la de la URL) del administrador que
-    # acaba de salir.
-    st.session_state.pop("pestana_activa", None)
+    # la seccion del administrador que acaba de salir. NO se borra aqui: el
+    # `st.radio` con key `pestana_activa` ya se creo en este run y Streamlit
+    # prohibe tocar su estado despues. Se marca y se limpia al inicio del
+    # siguiente run (antes de crear el widget).
+    st.session_state["_olvidar_pestana"] = True
     try:
         st.query_params.pop("tab", None)
     except Exception:
@@ -399,6 +401,11 @@ def _panel(api: ApiClient) -> None:
 # ===================== ARRANQUE =====================
 
 def main() -> None:
+    # Primer punto del run: aqui el `st.radio` de pestanas aun no existe, asi
+    # que es el unico sitio seguro para borrar su clave tras un cierre de
+    # sesion.
+    if st.session_state.pop("_olvidar_pestana", False):
+        st.session_state.pop("pestana_activa", None)
     api = st.session_state.get("api")
     if api is None or not api.autenticado:
         api = _restaurar_sesion()
