@@ -15,7 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, List, Optional
 from urllib.parse import quote
 
 import requests
@@ -440,11 +440,24 @@ class ApiClient:
             params["q"] = q
         return self._json("GET", "/admin/choferes", params=params or None)
 
+    def eliminar_chofer(self, driver_id: str) -> dict:
+        resp = self._request("DELETE", "/admin/drivers/%s" % quote(driver_id, safe=""))
+        if not resp.content:
+            return {}
+        try:
+            return resp.json()
+        except ValueError:
+            return {}
+
     def cambiar_estado_chofer(self, driver_id: str, estado: str,
-                              motivo: str = "") -> dict:
+                              motivo: str = "",
+                              missing_fields: Optional[List[str]] = None) -> dict:
+        cuerpo = {"estado": estado, "motivo": motivo.strip() or None}
+        if missing_fields:
+            cuerpo["missing_fields"] = missing_fields
         return self._json(
             "POST", "/admin/choferes/%s/estado" % quote(driver_id, safe=""),
-            json={"estado": estado, "motivo": motivo.strip() or None})
+            json=cuerpo)
 
     # ---------------- configuracion ----------------
 

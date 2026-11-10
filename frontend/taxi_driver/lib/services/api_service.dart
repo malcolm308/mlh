@@ -118,6 +118,11 @@ class ApiService {
     return DriverProfile.fromJson(j);
   }
 
+  /// Reenvía la solicitud tras corregir los datos marcados por el admin.
+  Future<void> reenviarSolicitud(String driverId) async {
+    await _map('POST', '/driver/reenviar');
+  }
+
   /// Elimina para siempre la cuenta del chofer autenticado.
   ///
   /// Borrar la cuenta es irreversible: el backend borra los vehiculos y sus

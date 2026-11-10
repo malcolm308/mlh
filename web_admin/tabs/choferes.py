@@ -133,12 +133,24 @@ def _detalle(api, chofer: dict) -> None:
                 "Motivo del rechazo (obligatorio para rechazar)",
                 key="chofer_motivo",
             )
+            # Campos que el administrador marca como faltantes/incorrectos.
+            campos_opciones = [
+                "rostro", "carnet_frente", "carnet_atras",
+                "licencia_frente", "licencia_atras", "circulacion",
+                "vehiculo_interior_frente", "vehiculo_interior_atras",
+                "vehiculo_exterior_frente", "vehiculo_exterior_atras",
+            ]
+            faltantes_sel = st.multiselect(
+                "Campos a corregir (opcional)",
+                campos_opciones,
+                key="chofer_faltantes",
+            )
             b1, b2 = st.columns(2)
             aprobar = b1.form_submit_button(
                 "✅ Aprobar chófer", type="primary",
                 disabled=not docs.get("completo"),
             )
-            rechazar = b2.form_submit_button("❌ Rechazar chófer")
+            rechazar = b2.form_submit_button("❌ Rechazar y pedir corrección")
 
         if not aprobar and not rechazar:
             return
@@ -149,10 +161,16 @@ def _detalle(api, chofer: dict) -> None:
             st.warning("Escribe el motivo del rechazo.")
             return
 
-        estado = "aprobado" if aprobar else "rechazado"
+        if aprobar:
+            estado = "aprobado"
+            missing = None
+        else:
+            estado = "needs_correction"
+            missing = faltantes_sel or None
         try:
             resultado = api.cambiar_estado_chofer(
-                chofer["driver_id"], estado, motivo)
+                chofer["driver_id"], estado, motivo,
+                missing_fields=missing)
         except ApiError as exc:
             st.error(explicar_error(exc))
             return
@@ -160,6 +178,28 @@ def _detalle(api, chofer: dict) -> None:
                  or "Estado del chófer actualizado.")
         ui.invalidar("choferes", "vehiculos", "billetera")
         st.rerun()
+
+    # ---- Zona de peligro: eliminacion definitiva ----
+    with st.expander("🗑️ Zona de peligro", expanded=False):
+        st.warning("⚠️ ¿Estás seguro? Esta acción borrará al chófer de la "
+                   "plataforma de forma permanente y no se puede deshacer.")
+        confirmar_elim = st.checkbox(
+            "Confirmo que quiero eliminar este chófer definitivamente",
+            key="chofer_confirmar_elim",
+        )
+        if st.button("🗑️ Eliminar Chófer Definitivamente", type="secondary"):
+            if not confirmar_elim:
+                st.warning("Marca la casilla de confirmación.")
+            else:
+                try:
+                    resultado = api.eliminar_chofer(chofer["driver_id"])
+                except ApiError as exc:
+                    st.error(explicar_error(exc))
+                    return
+                ui.flash("success", resultado.get("message")
+                         or "Chófer eliminado.")
+                ui.invalidar("choferes", "vehiculos", "billetera")
+                st.rerun()
 
 
 def render(api) -> None:

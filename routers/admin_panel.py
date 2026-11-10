@@ -19,7 +19,7 @@ import random
 import secrets
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 
 import bcrypt
 import re
@@ -66,7 +66,8 @@ cliente_coleccion = cliente_db.users
 ESTADO_PENDIENTE = "pendiente"
 ESTADO_APROBADO = "aprobado"
 ESTADO_RECHAZADO = "rechazado"
-ESTADOS_VALIDOS = (ESTADO_PENDIENTE, ESTADO_APROBADO, ESTADO_RECHAZADO)
+ESTADO_CORRECCION = "needs_correction"
+ESTADOS_VALIDOS = (ESTADO_PENDIENTE, ESTADO_APROBADO, ESTADO_RECHAZADO, ESTADO_CORRECCION)
 
 
 # ===================== AUTENTICACION =====================
@@ -179,6 +180,7 @@ def _chofer_out(doc: dict) -> dict:
         # de un vistazo si la cuenta puede entrar a la app.
         "enable": bool(doc.get("Enable", True)),
         "documentos": _documentos_de(doc),
+        "missing_fields": doc.get("missing_fields") or [],
         "creado": (doc.get("created_at").isoformat()
                    if isinstance(doc.get("created_at"), datetime) else None),
     }
@@ -198,6 +200,7 @@ def _validar_fecha(valor: Optional[str]) -> date:
 class EstadoChoferIn(BaseModel):
     estado: str
     motivo: Optional[str] = None
+    missing_fields: Optional[List[str]] = None
 
 
 class AdminNuevoIn(BaseModel):
@@ -593,8 +596,13 @@ async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Dep
         # NO se borra ni se anonimiza: se conservan nombre, correo y telefono
         # para auditoria y soporte.
         update["Enable"] = False
-        update["status"] = "rejected" if body.estado == ESTADO_RECHAZADO \
-            else "pending_review"
+        if body.estado == ESTADO_CORRECCION:
+            update["status"] = "needs_correction"
+            update["missing_fields"] = body.missing_fields or []
+        elif body.estado == ESTADO_RECHAZADO:
+            update["status"] = "rejected"
+        else:
+            update["status"] = "pending_review"
         update["documents_verified"] = False
 
     chofer_coleccion.update_one({"_id": doc["_id"]}, {"$set": update})
@@ -611,7 +619,34 @@ async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Dep
     }
 
 
-# ===================== VIAJES POR DIA =====================
+@router.delete("/drivers/{driver_id}")
+async def eliminar_chofer(driver_id: str, admin: dict = Depends(REQUIERE_SUPER)):
+    """Borrado definitivo (hard delete) de un chofer de la plataforma."""
+    if not ObjectId.is_valid(driver_id):
+        raise HTTPException(status_code=400, detail="Id de chofer inválido")
+    doc = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Chofer no encontrado")
+
+    from services.fotos_nube import borrar as _borrar_foto
+    # Fotos de documentos del registro.
+    for ref in (doc.get("documentos") or []):
+        if isinstance(ref, dict):
+            _borrar_foto(ref.get("nube_public_id"))
+    # Vehiculos de Mi Garaje y sus fotos.
+    for v in chofer_db["vehiculos"].find({"driver_id": str(doc["_id"])}):
+        for foto in (v.get("fotos") or {}).values():
+            if isinstance(foto, dict):
+                _borrar_foto(foto.get("public_id"))
+    chofer_db["vehiculos"].delete_many({"driver_id": str(doc["_id"])})
+    # El documento del chofer.
+    chofer_coleccion.delete_one({"_id": doc["_id"]})
+    return {
+        "ok": True,
+        "driver_id": driver_id,
+        "nombre": " ".join(filter(None, [doc.get("Nombre"), doc.get("Apellidos")])).strip(),
+        "message": "Chófer eliminado definitivamente",
+    }
 
 @router.get("/trips/diarios")
 async def viajes_diarios(dias: int = 7, hasta: Optional[str] = None,

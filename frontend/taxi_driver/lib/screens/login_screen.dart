@@ -10,6 +10,7 @@ import '../services/api_service.dart';
 import '../services/token_store.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
+import 'correction_screen.dart';
 import 'driver_home_screen.dart';
 import 'forgot_password_screen.dart';
 import 'register_screen.dart';
@@ -67,7 +68,11 @@ class _LoginScreenState extends State<LoginScreen> {
       try {
         final profile = await api.getChofer(id);
         if (!mounted) return;
-        _goHome(api, profile, id);
+        if (profile.status == 'needs_correction') {
+          _goCorrection(api, profile, id);
+        } else {
+          _goHome(api, profile, id);
+        }
       } catch (_) {
         if (!mounted) return;
         setState(() => _loading = false);
@@ -103,7 +108,11 @@ class _LoginScreenState extends State<LoginScreen> {
       await prefs.setString('driver_telefono', telefono.trim());
 
       if (!mounted) return;
-      _goHome(api, profile, id);
+      if (profile.status == 'needs_correction') {
+        _goCorrection(api, profile, id);
+      } else {
+        _goHome(api, profile, id);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -116,6 +125,16 @@ class _LoginScreenState extends State<LoginScreen> {
   void _goHome(ApiService api, DriverProfile profile, String driverId) {
     Navigator.of(context).pushReplacement(MaterialPageRoute(
       builder: (_) => DriverHomeScreen(
+        api: api,
+        profile: profile,
+        driverId: driverId,
+      ),
+    ));
+  }
+
+  void _goCorrection(ApiService api, DriverProfile profile, String driverId) {
+    Navigator.of(context).pushReplacement(MaterialPageRoute(
+      builder: (_) => CorrectionScreen(
         api: api,
         profile: profile,
         driverId: driverId,
