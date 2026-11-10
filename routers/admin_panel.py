@@ -569,6 +569,10 @@ async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Dep
     if not ObjectId.is_valid(driver_id):
         raise HTTPException(status_code=400, detail="Id de chofer inválido")
 
+    doc = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Chofer no encontrado")
+
     ahora = datetime.utcnow()
     update = {
         "estado_habilitacion": body.estado,
