@@ -273,15 +273,15 @@ def _control_manual(api) -> None:
         with col_motivo:
             motivo_cancel = st.text_input(
                 "Motivo para el pasajero (opcional)",
-                key="motivo_force_cancel",
+                key="motivo_force_cancel_%s" % viaje["trip_id"],
                 placeholder="El chófer reportó que no encontrabas el punto")
             confirmar_cancel = st.checkbox(
                 "Confirmo cancelar este viaje (no se deshace)",
-                key="confirmar_force_cancel")
+                key="confirmar_force_cancel_%s" % viaje["trip_id"])
         with col_boton:
             if st.button("Cancelar viaje", type="primary",
                          disabled=not confirmar_cancel,
-                         key="forzar_cancel"):
+                         key="forzar_cancel_%s" % viaje["trip_id"]):
                 try:
                     resultado = api.cancelar_viaje_admin(
                         viaje["trip_id"], motivo_cancel)
