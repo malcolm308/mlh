@@ -121,6 +121,18 @@ class NavigationModeService {
   /// nunca la proyectada: un punto inventado falsearia su posicion real.
   LatLng get posicionReal => _fix?.position ?? _pos;
 
+  /// `true` si ya llego al menos un fix del GPS.
+  ///
+  /// Lo usa la camara libre (sin viaje) para no centrar en el punto por defecto
+  /// antes de tener una posicion de verdad.
+  bool get tieneFix => _fix != null;
+
+  /// Velocidad del ultimo fix en km/h, sin suavizar.
+  ///
+  /// La camara libre la usa para decidir si el movimiento basta para calcular
+  /// rumbo. Durante un viaje manda la velocidad filtrada del buffer.
+  double? get velocidadRealKmh => _fix?.velocidadKmh;
+
   /// Rumbo filtrado en grados (0 = norte), o `null` si no hay dato.
   double? _rumbo;
   double? get rumbo => _rumbo;

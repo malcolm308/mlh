@@ -26,6 +26,7 @@ import '../services/update_service.dart';
 import '../services/ofertas_background_service.dart';
 import '../services/token_store.dart';
 import '../services/asistente_ruta.dart';
+import '../services/camara_libre.dart';
 import '../services/filtro_gps.dart';
 import '../services/ws_chofer.dart';
 import '../services/whatsapp_service.dart';
@@ -234,6 +235,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// Filtro de posicion: media movil + rechazo de puntos fantasma. Se aplica
   /// antes de dibujar, de avisar al asistente y de publicar la posicion.
   final FiltroGps _filtroGps = FiltroGps();
+
+  // ---------------- CAMARA LIBRE (SOLO SIN VIAJE) ----------------
+
+  /// Rumbo por movimiento GPS + Kalman. Solo se alimenta cuando
+  /// `_activeTrip == null`; durante un viaje manda la ruta de OSRM.
+  final RumboMovimiento _rumboLibre = RumboMovimiento();
+
+  /// Ultimo rumbo suavizado de la camara libre.
+  double? _bearingLibre;
+
+  /// Zoom dinamico de la camara libre, segun la velocidad.
+  double _zoomLibre = ApiConfig.zoomIdle;
+
+  /// Centro que sigue la camara libre. Se actualiza con el GPS de navegacion
+  /// (1 Hz) para que la animacion sea continua entre fixes.
+  LatLng _centroLibre = ApiConfig.defaultDriverLocation;
 
   /// WebSocket (`/ws/chofer/{id}`): envia la posicion con rumbo para el
   /// cliente y recibe la oferta empujada. El sondeo queda de respaldo.
@@ -534,8 +551,73 @@ double? _rumboParaFlecha() {
   /// de error daria desvios falsos en cada esquina, que es justo lo que el
   /// detector debe evitar.
   void _alFixGps() {
+    // Sin viaje: camara de conduccion libre (bearing por movimiento real del
+    // GPS, filtro Kalman circular, pitch 45 y zoom dinamico). Con viaje esta
+    // rama NO se ejecuta: abajo se conserva la logica de siempre, con el
+    // rumbo por la ruta de OSRM.
+    if (_activeTrip == null) {
+      _aplicarCamaraLibre();
+      return;
+    }
     if (!_nav.debeSeguir) return;
     _recalc.informarPosicion(_nav.posicion, _nav.velocidadMps);
+  }
+
+  /// Mueve la camara cuando el chofer circula libre, sin viaje activo.
+  ///
+  /// Reglas:
+  ///
+  ///  * Solo corre con `_activeTrip == null`. Con viaje el encuadre lo lleva
+  ///    `NavigationModeService` + `NavigationMapView`, sin Kalman ni nada nuevo.
+  ///  * El rumbo sale del movimiento GPS (posicion anterior → actual), nunca de
+  ///    la brujula, y pasa por un Kalman 1D circular para que el mapa no gire a
+  ///    tirones ni se descoloque en el salto de 359° a 1°.
+  ///  * Por debajo de 5 km/h se conserva el ultimo rumbo: parado en un semaforo
+  ///    el GPS no tiene direccion fiable y el mapa no debe girar solo.
+  ///  * Se anima con `animateCamera` a 900 ms, menos que el intervalo entre
+  ///    fixes (1 Hz), asi el movimiento es continuo y no un salto por muestra.
+  ///
+  /// Se pausa mientras hay una oferta en pantalla (`_selectedOffer`), porque en
+  /// ese momento `_encuadrarTrayecto` ya encuadra el trayecto a recogida; asi
+  /// las dos logicas no se pelean por la camara. Al aceptar el viaje tampoco
+  /// corre, y al volver a quedar libre se reanuda sola.
+  void _aplicarCamaraLibre() {
+    if (_activeTrip != null) return;
+    if (_selectedOffer != null || _manualPos) return;
+    final ctl = _controlador;
+    if (ctl == null || !_nav.tieneFix) return;
+
+    final pos = _nav.posicionReal;
+    final velocidad = _nav.velocidadRealKmh ?? 0.0;
+
+    final rumbo = _rumboLibre.actualizar(
+      posicion: pos,
+      velocidadKmh: velocidad,
+      ahoraMs: DateTime.now().millisecondsSinceEpoch,
+    );
+
+    // Sin medicion todavia (primer fix, o coche parado desde el arranque) el
+    // mapa se queda norte arriba; nunca se inventa un 0 que gire la vista.
+    final bearing = rumbo ?? _bearingLibre;
+    final zoom = CamaraLibre.zoomParaVelocidad(velocidad);
+
+    _bearingLibre = bearing;
+    _zoomLibre = zoom;
+    _centroLibre = pos;
+
+    ctl
+        .animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: pos,
+              zoom: zoom,
+              tilt: CamaraLibre.pitch,
+              bearing: bearing ?? 0.0,
+            ),
+          ),
+          duration: CamaraLibre.animacion,
+        )
+        .catchError((_) => false);
   }
 
   // ---------------- RECALCULO DE RUTA ----------------
@@ -1297,6 +1379,9 @@ double? _rumboParaFlecha() {
     final velocidad = velocidadKmh ?? _filtroGps.velocidadKmh;
 
     setState(() => _driverPos = suave);
+    // Con el chofer libre la camara sigue este punto filtrado; se guarda aqui
+    // para que el primer pintado ya salga centrado sin esperar al fix de 1 Hz.
+    if (_activeTrip == null && !_manualPos) _centroLibre = suave;
     _publicarRuta();
     // Ultima posicion que conoce el servicio en primer plano: si tiene que
     // relevar el sondeo (app cerrada), usa este punto.
@@ -1702,8 +1787,10 @@ final inTripPhase = active != null && active.status == 'in_progress';
       _trayectoEncuadre = null;
       NavCamera.reset();
       if (fase == null) {
-        // Sin viaje: se queda el zoom general, norte arriba y sin tilt.
+        // Sin viaje: la camara vuelve al modo libre. Se olvida el ancla del
+        // filtro para no medir el rumbo contra una posicion de hace minutos.
         _nav.apagar();
+        _rumboLibre.reiniciar();
         return;
       }
       // Cambio de fase: el servicio de navegacion toma el relevo. Se le pasa la
@@ -2711,6 +2798,10 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     // cada build porque `_activeTrip` cambia desde muchos sitios (aceptar
     // oferta, restaurar, completar, cancelar...).
     UpdateService.instance.viajeActivo = _activeTrip != null;
+    // Con el chofer libre la camara la mueve esta pantalla (bearing por
+    // movimiento GPS + Kalman). Con viaje manda `NavigationModeService` y este
+    // widget recupera su `moveCamera` de siempre.
+    final libre = _activeTrip == null;
     return Scaffold(
       key: _scaffoldKey,
       drawer: _buildDrawer(),
@@ -2728,12 +2819,27 @@ final pts = await widget.api.getTripRoute(trip.tripId);
           // inferior) queda como hermana FUERA del mapa.
           Positioned.fill(
             child: NavigationMapView(
-              tilt: _nav.tiltActual,
-              bearing: _nav.rotacionActual ?? 0.0,
-              center: _nav.centroActual ?? _driverPos,
-              zoom: _nav.zoomActual ?? ApiConfig.defaultZoom,
-              posicionVehiculo: _nav.debeSeguir ? _nav.posicion : _driverPos,
-              rumboVehiculo: _rumboParaFlecha(),
+              // Sin viaje: pitch fijo 45, bearing por movimiento y zoom
+              // dinamico. Los props son informativos porque el widget no
+              // aplica su `moveCamera` en este modo: la animacion la lanza
+              // [_aplicarCamaraLibre] con `animateCamera`.
+              tilt: libre ? CamaraLibre.pitch : _nav.tiltActual,
+              bearing:
+                  libre ? (_bearingLibre ?? 0.0) : (_nav.rotacionActual ?? 0.0),
+              center: libre
+                  ? _centroLibre
+                  : (_nav.centroActual ?? _driverPos),
+              zoom: libre
+                  ? _zoomLibre
+                  : (_nav.zoomActual ?? ApiConfig.defaultZoom),
+              // Con viaje, exactamente lo de siempre: posicion proyectada del
+              // servicio y rumbo de la ruta/sensor.
+              posicionVehiculo: libre
+                  ? (_nav.tieneFix ? _nav.posicionReal : _driverPos)
+                  : (_nav.debeSeguir ? _nav.posicion : _driverPos),
+              rumboVehiculo:
+                  libre ? (_bearingLibre ?? _rumboParaFlecha()) : _rumboParaFlecha(),
+              camaraLibre: libre,
               ruta: _rutaVisible,
               onControlador: (c) => _controlador = c,
             ),

@@ -39,6 +39,13 @@ class NavigationMapView extends StatefulWidget {
   /// Zoom de la camara.
   final double zoom;
 
+  /// `true` cuando el chófer circula libre: la cámara la mueve la pantalla con
+  /// `animateCamera` (bearing por movimiento GPS + Kalman).
+  ///
+  /// Este widget no aplica entonces su `moveCamera` de seguimiento. Con viaje
+  /// activo el valor es `false` y el comportamiento es exactamente el de antes.
+  final bool camaraLibre;
+
   /// Ruta a dibujar como lista de coordenadas, en orden.
   ///
   /// Se convierte a GeoJSON aqui y se manda a una capa del estilo. Va por
@@ -80,6 +87,7 @@ class NavigationMapView extends StatefulWidget {
     required this.bearing,
     required this.center,
     required this.zoom,
+    this.camaraLibre = false,
     this.ruta = const [],
     this.posicionVehiculo,
 this.rumboVehiculo,
@@ -196,7 +204,18 @@ int _puntosRutaEnviados = -1;
     // La camara se actualiza aqui y no en `build`, porque `moveCamera` es
     // asincrono y solo tiene sentido cuando el mapa ya esta montado.
     if (!_estiloListo) return;
-_aplicarCamara();
+    // Al pasar de camara libre (sin viaje) a camara de viaje, o al reves, la
+    // cache de lo ultimo aplicado deja de valer: la posicion real del mapa ya
+    // no es la que este widget recuerda. Se limpia para que la primera
+    // aplicacion tras el cambio sea incondicional y el viaje arranque con sus
+    // valores exactos, sin heredar tilt ni rumbo del modo libre.
+    if (old.camaraLibre != widget.camaraLibre) {
+      _centroAplicado = null;
+      _zoomAplicado = null;
+      _tiltAplicado = null;
+      _bearingAplicado = null;
+    }
+    _aplicarCamara();
     _aplicarRuta();
     _aplicarVehiculo();
   }
@@ -206,6 +225,9 @@ _aplicarCamara();
   /// Los umbrales de tolerancia evitan que el mapa se mueva por variaciones de
   /// centimas del GPS, que se ven como un temblor.
   void _aplicarCamara() {
+    // Sin viaje la camara la anima la pantalla (bearing por GPS + Kalman). Este
+    // widget no debe pisarla con su moveCamera instantaneo.
+    if (widget.camaraLibre) return;
     final ctl = _controlador;
     final centro = widget.center;
     if (ctl == null || centro == null) return;
