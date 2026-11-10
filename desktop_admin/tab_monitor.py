@@ -21,6 +21,7 @@ REFRESCO_MS = 15000
 ESTADOS = {
     "requested": ("Solicitado", "#ffc107"),
     "accepted": ("Aceptado", "#2f80ed"),
+    "driver_on_the_way": ("Chofer en camino", "#1f6fb2"),
     "driver_arrived": ("Chofer llego", "#8e44ad"),
     "in_progress": ("En curso", "#27ae60"),
 }
@@ -180,9 +181,12 @@ class TabMonitor(ttk.Frame):
                  % (tid, cliente, ESTADOS.get(estado, (estado, ""))[0]),
             fg="#cfd8e3")
         self.btn_inicio.config(
-            state="normal" if estado in ("requested", "accepted", "driver_arrived") else "disabled")
+            state="normal" if estado in ("requested", "accepted",
+                                         "driver_on_the_way",
+                                         "driver_arrived") else "disabled")
         self.btn_fin.config(
-            state="normal" if estado in ("requested", "accepted", "driver_arrived",
+            state="normal" if estado in ("requested", "accepted",
+                                         "driver_on_the_way", "driver_arrived",
                                          "in_progress") else "disabled")
 
     def _viaje_para_accion(self, accion):

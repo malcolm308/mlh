@@ -429,6 +429,7 @@ class ApiConfig {
   static double zoomParaFase({String? status}) {
     switch (status) {
       case 'accepted':
+      case 'driver_on_the_way':
         return zoomRecogida;
       case 'driver_arrived':
         return zoomEsperando;

@@ -161,7 +161,8 @@ async def app_init(rol: str, user_id: str, authorization: Optional[str] = Header
                 cur = conn.cursor()
                 cur.execute(
                     "SELECT trip_id, status FROM trips WHERE driver_id = %s "
-                    "AND status IN ('accepted','driver_arrived','in_progress') "
+                    "AND status IN ('accepted','driver_on_the_way',"
+                    "'driver_arrived','in_progress') "
                     "ORDER BY requested_at DESC LIMIT 1",
                     (user_id,),
                 )

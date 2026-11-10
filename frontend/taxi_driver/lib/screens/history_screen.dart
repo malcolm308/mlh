@@ -57,7 +57,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Color _statusColor(String status) => switch (status) {
         'completed' => const Color(0xFF1E7A3D),
         'in_progress' => AppColors.ambar,
-        'accepted' || 'driver_arrived' => const Color(0xFF1A73E8),
+        'accepted' || 'driver_on_the_way' || 'driver_arrived' =>
+          const Color(0xFF1A73E8),
         'requested' => AppColors.ambar,
         'cancelled' || 'expired' => const Color(0xFFD93840),
         _ => AppColors.secundario,
@@ -67,6 +68,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         'completed' => 'Completado',
         'in_progress' => 'En curso',
         'accepted' => 'Aceptado',
+        'driver_on_the_way' => 'En camino',
         'driver_arrived' => 'En recogida',
         'requested' => 'Solicitado',
         'cancelled' => 'Cancelado',

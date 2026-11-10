@@ -351,6 +351,7 @@ double? _rumboParaFlecha() {
   /// Un estado desconocido cae al propio valor para no dejar el titulo vacio.
   static String estadoViaje(String status) => switch (status) {
         'accepted' => 'ACEPTADO',
+        'driver_on_the_way' => 'EN CAMINO',
         'driver_arrived' => 'EN EL PUNTO',
         'in_progress' => 'EN CURSO',
         'completed' => 'COMPLETADO',
@@ -363,6 +364,7 @@ double? _rumboParaFlecha() {
   bool get _pickupPhase =>
       _activeTrip != null &&
       (_activeTrip!.status == 'accepted' ||
+          _activeTrip!.status == 'driver_on_the_way' ||
           _activeTrip!.status == 'driver_arrived');
 
   /// Fase de traslado: el chofer va hacia el destino final.
@@ -1041,6 +1043,7 @@ double? _rumboParaFlecha() {
 
     final status = offer.status;
     if (status == 'accepted' ||
+        status == 'driver_on_the_way' ||
         status == 'in_progress' ||
         status == 'driver_assigned') {
       // Un 'accepted' con nuestro driver_id es un viaje ganado por nosotros,
@@ -1638,6 +1641,7 @@ final inTripPhase = active != null && active.status == 'in_progress';
     if (t == null) return null;
     if (t.status == 'in_progress') return 'in_progress';
     if (t.status == 'driver_arrived') return 'driver_arrived';
+    if (t.status == 'driver_on_the_way') return 'accepted';
     if (t.status == 'accepted') return 'accepted';
     return 'otra';
   }
@@ -1856,9 +1860,9 @@ final inTripPhase = active != null && active.status == 'in_progress';
       // Un 'accepted' que no avanzó en demasiado tiempo es un viaje huérfano
       // (el pasajero se fue, la app de cliente se quedó sin red...): se
       // libera solo, sin tocar las cancelaciones del chofer, y no se
-      // restaura. Los estados ya encaminados (`driver_arrived`,
-      // `in_progress`) se restauran SIEMPRE: el chofer está en la carrera y
-      // esa carrera no debe expirar.
+      // restaura. Los estados ya encaminados (`driver_on_the_way`,
+      // `driver_arrived`, `in_progress`) se restauran SIEMPRE: el chofer ya
+      // confirmó y está en la carrera, que no debe expirar.
       if (viaje.status == 'accepted' && await _esViajeObsoleto(viaje)) {
         try {
           await widget.api.releaseTrip(viaje.tripId);
@@ -2088,9 +2092,12 @@ final inTripPhase = active != null && active.status == 'in_progress';
     try {
       switch (trip.status) {
         case 'accepted':
-          // Marca la ubicación real de recogida: desde aquí se cuentan los kilómetros.
+          // Confirma el viaje y marca la ubicación real de recogida: desde
+          // aquí se cuentan los kilómetros. El viaje queda en `driver_on_the_way`.
           await widget.api.setPickup(trip.tripId, _driverPos.latitude,
               _driverPos.longitude);
+          await widget.api.updateTripStatus(trip.tripId, 'driver_on_the_way');
+        case 'driver_on_the_way':
           await widget.api.updateTripStatus(trip.tripId, 'driver_arrived');
         case 'driver_arrived':
           await widget.api.updateTripStatus(trip.tripId, 'in_progress');
@@ -3237,11 +3244,13 @@ String _fmtCoord(LatLng p) =>
     }
     final trip = _activeTrip;
     if (trip != null) {
-      // PASO INTERMEDIO (aceptado): antes de ir al punto de recogida, la app
-      // muestra la tarjeta "Ir a buscar al cliente" con los datos del
-      // pasajero, Llamar/WhatsApp y el deslizable. Al deslizar pasa a
-      // driver_arrived y vuelve el panel de viaje de siempre.
-      if (trip.status == 'accepted') {
+      // FASE DE RECOGIDA: `accepted` (confirmar viaje) y `driver_on_the_way`
+      // (ya va a buscar al cliente) comparten la tarjeta con los datos del
+      // pasajero, Llamar/WhatsApp y el deslizable. Al deslizar en
+      // `driver_on_the_way` pasa a `driver_arrived` y vuelve el panel de viaje
+      // de siempre.
+      if (trip.status == 'accepted' ||
+          trip.status == 'driver_on_the_way') {
         return _buildRecogidaCard(trip);
       }
       // Panel del viaje en curso: una hoja arrastrable que se abre COLAPSADA
@@ -3270,16 +3279,17 @@ String _fmtCoord(LatLng p) =>
     );
   }
 
-  /// Tarjeta del PASO INTERMEDIO: el viaje esta `accepted` y el chofer tiene
-  /// que IR A BUSCAR al cliente.
+  /// Tarjeta de la FASE DE RECOGIDA: `accepted` (confirmar) o
+  /// `driver_on_the_way` (ya va a buscar al cliente).
   ///
   /// Muestra los datos del pasajero (nombre, recogida, tipo de vehiculo),
   /// botones de contacto rapido (Llamar con `tel:`, WhatsApp con el servicio
-  /// ya existente) y el deslizable que marca la LLEGADA al punto:
-  /// `_advanceTrip` en 'accepted' envia `setPickup` + pasa a
-  /// `driver_arrived`, y con eso vuelve el panel de viaje de siempre.
+  /// ya existente) y el deslizable del paso:
+  ///  * `accepted` -> "Confirmar viaje" -> `driver_on_the_way`.
+  ///  * `driver_on_the_way` -> "Llegué al punto de recogida" -> `driver_arrived`.
   Widget _buildRecogidaCard(TripOffer trip) {
     const muted = Color(0xFF6B7280);
+    final confirmando = trip.status == 'accepted';
     final nombre = trip.clientName?.trim();
     final telefono = trip.clientPhone?.trim() ?? '';
     // La direccion de recogida la trae el backend (`request_address`).
@@ -3295,10 +3305,12 @@ String _fmtCoord(LatLng p) =>
           children: [
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Vas a buscar al cliente',
-                    style: TextStyle(
+                    confirmando
+                        ? 'Confirma el viaje'
+                        : 'Vas a buscar al cliente',
+                    style: const TextStyle(
                         color: AppColors.tinta,
                         fontSize: 18,
                         fontWeight: FontWeight.w800),
@@ -3369,21 +3381,25 @@ String _fmtCoord(LatLng p) =>
               ],
             ),
             const SizedBox(height: 12),
-            // El mapa de atras ya trae la ruta hacia la recogida: al deslizar
-            // se marca la llegada (driver_arrived) y arranque la navegacion
-            // paso a paso.
+            // `accepted` confirma el viaje y arranca la marcha; el siguiente
+            // desliz marca la llegada real al punto de recogida.
             SlideToConfirm(
-              label: 'Desliza para ir a buscar al cliente',
-              icon: Icons.location_on_rounded,
+              label: confirmando
+                  ? 'Confirmar viaje'
+                  : 'Llegué al punto de recogida',
+              icon: confirmando
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.location_on_rounded,
               color: AppColors.acento,
               foregroundColor: AppColors.tinta,
               loading: _loading,
               onConfirmed: _advanceTrip,
             ),
             const SizedBox(height: 6),
-            // Cancelar en este paso NO consume las 3 del dia: quien falto fue
-            // el cliente. Es un TextButton rojo, no otro deslizable, para que
-            // no se confunda con el de arriba.
+            // Cancelar en `accepted`/`driver_on_the_way` NO consume las 3 del
+            // dia: aun no llego al punto (quien falto fue el cliente). Es un
+            // TextButton rojo, no otro deslizable, para que no se confunda
+            // con el de arriba.
             TextButton.icon(
               onPressed: _loading ? null : () => _cancelarRecogida(trip),
               style: TextButton.styleFrom(
@@ -3391,8 +3407,11 @@ String _fmtCoord(LatLng p) =>
                 minimumSize: const Size.fromHeight(36),
               ),
               icon: const Icon(Icons.cancel_outlined, size: 16),
-              label: const Text('Cancelar viaje (cliente no aparece)',
-                  style: TextStyle(fontSize: 12)),
+              label: Text(
+                  confirmando
+                      ? 'Cancelar viaje'
+                      : 'Cancelar viaje (cliente no aparece)',
+                  style: const TextStyle(fontSize: 12)),
             ),
           ],
         ),
@@ -3713,12 +3732,14 @@ String _fmtCoord(LatLng p) =>
     final trip = _activeTrip!;
     final pickup = trip.pickup;
     final nextStep = switch (trip.status) {
-      'accepted' => 'Desliza para ir a buscar al cliente',
-      'driver_arrived' => 'Desliza para iniciar el viaje',
-      'in_progress' => 'Desliza para completar el viaje',
+      'accepted' => 'Confirmar viaje',
+      'driver_on_the_way' => 'Llegué al punto de recogida',
+      'driver_arrived' => 'Iniciar viaje',
+      'in_progress' => 'Completar viaje',
       _ => null,
     };
-    final enRecogida = trip.status == 'accepted';
+    final enRecogida = trip.status == 'accepted' ||
+        trip.status == 'driver_on_the_way';
     final enViaje = trip.status == 'in_progress';
     final km = enRecogida ? _toPickupKm : (enViaje ? _tripKm : null);
     final min = enRecogida ? _toPickupMin : (enViaje ? _tripMin : null);

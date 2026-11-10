@@ -66,7 +66,8 @@ def _viaje_activo_de(driver_id: str) -> Optional[str]:
             cur = conn.cursor()
             cur.execute(
                 "SELECT trip_id FROM trips WHERE driver_id = %s AND status IN "
-                "('accepted','driver_arrived','in_progress') LIMIT 1",
+                "('accepted','driver_on_the_way','driver_arrived','in_progress') "
+                "LIMIT 1",
                 (str(driver_id),),
             )
             fila = cur.fetchone()

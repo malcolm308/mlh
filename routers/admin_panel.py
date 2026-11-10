@@ -619,7 +619,7 @@ async def viajes_diarios(dias: int = 7, hasta: Optional[str] = None,
             COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelados,
             COUNT(*) FILTER (WHERE status = 'expired')     AS expirados,
             COUNT(*) FILTER (WHERE status = 'requested')   AS solicitados,
-            COUNT(*) FILTER (WHERE status IN ('accepted', 'driver_arrived')) AS asignados,
+            COUNT(*) FILTER (WHERE status IN ('accepted', 'driver_on_the_way', 'driver_arrived')) AS asignados,
             COUNT(*) FILTER (WHERE status = 'in_progress')  AS en_curso,
             COALESCE(SUM(total_fare) FILTER (WHERE status = 'completed'), 0) AS facturado,
             COALESCE(AVG(total_fare) FILTER (WHERE status = 'completed'), 0) AS ticket_promedio,
@@ -761,7 +761,7 @@ async def resumen_del_dia(fecha: Optional[str] = None, admin: dict = Depends(req
             COUNT(*) FILTER (WHERE status = 'cancelled')          AS cancelados,
             COUNT(*) FILTER (WHERE status = 'expired')            AS expirados,
             COUNT(*) FILTER (WHERE status = 'requested')          AS solicitados,
-            COUNT(*) FILTER (WHERE status IN ('accepted','driver_arrived','in_progress')) AS activos,
+            COUNT(*) FILTER (WHERE status IN ('accepted','driver_on_the_way','driver_arrived','in_progress')) AS activos,
             COALESCE(SUM(total_fare) FILTER (WHERE status = 'completed'), 0) AS facturado,
             COALESCE(SUM(distance_km) FILTER (WHERE status = 'completed'), 0) AS km,
             COUNT(DISTINCT driver_id)                             AS choferes,
@@ -816,7 +816,8 @@ async def choferes_top(fecha: Optional[str] = None, limite: int = 10,
 
 # ===================== MONITOR / CONTROL MANUAL DE VIAJES =====================
 
-ESTADOS_ACTIVOS = ("requested", "accepted", "driver_arrived", "in_progress")
+ESTADOS_ACTIVOS = ("requested", "accepted", "driver_on_the_way",
+                   "driver_arrived", "in_progress")
 
 
 def _nombre_persona(doc: Optional[dict]) -> Optional[str]:
@@ -947,7 +948,8 @@ async def viajes_activos(admin: dict = Depends(require_admin)):
                ST_Y(dropoff_location::geometry) AS dropoff_lat,
                ST_X(dropoff_location::geometry) AS dropoff_lng
           FROM trips
-         WHERE status IN ('requested', 'accepted', 'driver_arrived', 'in_progress')
+         WHERE status IN ('requested', 'accepted', 'driver_on_the_way',
+                          'driver_arrived', 'in_progress')
          ORDER BY requested_at DESC
          LIMIT 200
     """
@@ -987,7 +989,8 @@ async def forzar_inicio(trip_id: str, admin: dict = Depends(REQUIERE_OPERADOR_VI
             return {"trip_id": trip_id, "status": "in_progress",
                     "message": "El viaje ya estaba en curso"}
 
-        if trip["status"] not in ("requested", "accepted", "driver_arrived"):
+        if trip["status"] not in ("requested", "accepted", "driver_on_the_way",
+                                  "driver_arrived"):
             cur.close()
             raise HTTPException(
                 status_code=400,

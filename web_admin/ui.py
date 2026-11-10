@@ -22,6 +22,7 @@ import streamlit as st
 ESTADOS_VIAJE = {
     "requested": "Solicitado",
     "accepted": "Aceptado",
+    "driver_on_the_way": "Chofer en camino",
     "driver_arrived": "Chofer llegó",
     "in_progress": "En curso",
     "completed": "Completado",

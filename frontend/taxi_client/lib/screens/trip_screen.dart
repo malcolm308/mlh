@@ -146,9 +146,17 @@ class _TripScreenState extends State<TripScreen> {
         // `driver_arrived` ("he llegado") tambien cambia el panel y la copia
         // de la pantalla: antes se ignoraba y el cliente no se enteraba hasta
         // el siguiente sondeo de 3 s.
-        case 'driver_arrived' ||
+        // `trip_status_updated` es el evento GENERICO que publica el backend
+        // en CADA cambio de estado (accepted -> driver_on_the_way ->
+        // driver_arrived -> in_progress -> completed). Con el, el stepper y el
+        // panel inferior se mueven al instante sin esperar al sondeo de 3 s.
+        // Los eventos especificos se mantienen por compatibilidad con apps
+        // viejas y como respaldo.
+        case 'driver_on_the_way' ||
+              'driver_arrived' ||
               'trip_accepted' ||
               'trip_started' ||
+              'trip_status_updated' ||
               'trip_cancelled' ||
               'trip_cancelled_by_driver' ||
               'trip_expired' ||
@@ -264,7 +272,7 @@ class _TripScreenState extends State<TripScreen> {
 
   /// Llenado de la ruta segun el estado del viaje:
   ///
-  ///  * `requested` / `accepted` / `driver_arrived`: ruta PLANEADA por calles
+  ///  * `requested` / `accepted` / `driver_on_the_way` / `driver_arrived`: ruta PLANEADA por calles
   ///    entre recogida y destino (OSRM). En `requested` tambien: el pasajero
   ///    ya contenido la ruta real mientras espera, no una recta inventada.
   ///  * `in_progress`: NO se usa el Traccar suelto ni rectas: se recarga la
@@ -349,7 +357,9 @@ class _TripScreenState extends State<TripScreen> {
     final vehiculo = _driverPos;
     if (t == null ||
         vehiculo == null ||
-        (t.status != 'accepted' && t.status != 'in_progress')) {
+        (t.status != 'accepted' &&
+            t.status != 'driver_on_the_way' &&
+            t.status != 'in_progress')) {
       return;
     }
     final rumbo = _rumboParaCamara();
@@ -452,7 +462,9 @@ class _TripScreenState extends State<TripScreen> {
     }
 
     final rumbo = _rumboParaCamara();
-    final activo = t.status == 'accepted' || t.status == 'in_progress';
+    final activo = t.status == 'accepted' ||
+        t.status == 'driver_on_the_way' ||
+        t.status == 'in_progress';
 
     // Mientras el chofer rueda: vista 3D, que es la emulacion pedida. La
     // direccion (bearing) la manda él y el motor cancela la animacion previa.
@@ -595,6 +607,7 @@ class _TripScreenState extends State<TripScreen> {
     final status = _trip?.status ?? 'requested';
     switch (status) {
       case 'accepted':
+      case 'driver_on_the_way':
         return 1;
       case 'driver_arrived':
         return 2;
@@ -1318,6 +1331,20 @@ class _TripScreenState extends State<TripScreen> {
       if (modelo != null && modelo.isNotEmpty) modelo,
       if (placa != null && placa.isNotEmpty) 'Matrícula $placa',
     ].join(' • ');
+    // Texto del panel inferior: cambia con CADA deslizada del chofer. El
+    // stepper mueve el indicador y esta franja explica que esta pasando.
+    final estadoTexto = switch (t.status) {
+      'accepted' => 'Tu chófer fue asignado',
+      'driver_on_the_way' => 'Tu chófer está en camino',
+      'driver_arrived' => 'Tu chófer ha llegado',
+      'in_progress' => 'Viaje en curso',
+      _ => null,
+    };
+    final estadoIcono = switch (t.status) {
+      'driver_arrived' => Icons.location_on_rounded,
+      'in_progress' => Icons.navigation_rounded,
+      _ => Icons.directions_car_rounded,
+    };
 
     return Container(
       width: double.infinity,
@@ -1331,6 +1358,33 @@ class _TripScreenState extends State<TripScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (estadoTexto != null) ...[
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.acentoSuave,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(estadoIcono, size: 16, color: AppColors.ambar),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      estadoTexto,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.tinta,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           Row(
             children: [
               // Anillo amarillo de marca alrededor de la foto facial.

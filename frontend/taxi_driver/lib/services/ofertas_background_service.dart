@@ -450,6 +450,7 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
 /// Estados en los que el chofer ya tiene un viaje encima.
 const Set<String> _estadosVivos = {
   'accepted',
+  'driver_on_the_way',
   'driver_arrived',
   'in_progress',
 };

@@ -47,13 +47,13 @@ router = APIRouter(tags=["Tiempo real"])
 
 
 def _viaje_activo_de(driver_id: str) -> Optional[str]:
-    """trip del viaje activo del chofer (accepted/arrived/in_progress)."""
+    """trip del viaje activo del chofer (accepted/on_the_way/arrived/in_progress)."""
     try:
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
                 "SELECT trip_id FROM trips WHERE driver_id = %s AND status IN "
-                "('accepted','driver_arrived','in_progress') "
+                "('accepted','driver_on_the_way','driver_arrived','in_progress') "
                 "ORDER BY requested_at DESC LIMIT 1",
                 (driver_id,),
             )

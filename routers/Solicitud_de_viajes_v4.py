@@ -1073,7 +1073,7 @@ def get_trip(trip_id: str) -> Optional[dict]:
 
 
 def update_trip_status(trip_id: str, status: str) -> bool:
-    valid_statuses = ["requested", "accepted", "driver_arrived", "in_progress", "completed", "cancelled"]
+    valid_statuses = ["requested", "accepted", "driver_on_the_way", "driver_arrived", "in_progress", "completed", "cancelled"]
     if status not in valid_statuses:
         raise ValueError(f"Status invalido. Opciones validas: {valid_statuses}")
 
@@ -3129,17 +3129,29 @@ async def api_get_driver_photo(trip_id: str):
 @router.patch("/trips/{trip_id}/status")
 async def api_update_trip_status(trip_id: str, body: TripStatusUpdate):
     try:
+        # Estado anterior: el evento generico lo lleva para que la app pueda
+        # distinguir un cambio real de un reintento idempotente.
+        previo = get_trip(trip_id)
+        estado_previo = (previo or {}).get("status")
+
         ok = update_trip_status(trip_id, body.status)  # funcion sincrona original
         if not ok:
             raise HTTPException(status_code=404, detail="Viaje no encontrado")
 
         # Obtener driver_id para actualizar Garnet (puede ser None si viaje sin chofer asignado)
         trip = get_trip(trip_id)
+        driver_id = (trip or {}).get("driver_id")
+
         if trip:
-            driver_id = trip.get("driver_id")
             if body.status == "accepted" and driver_id:
                 await set_driver_status(driver_id, "busy")  # ya esta asignado, lo mantenemos
                 await publish_trip_event(trip_id, "trip_accepted")
+            elif body.status == "driver_on_the_way" and driver_id:
+                # Paso nuevo: el chofer confirmo el viaje y sale hacia el punto
+                # de recogida. El cliente mueve el stepper con este evento (y
+                # con el generico de abajo).
+                await set_driver_status(driver_id, "busy")
+                await publish_trip_event(trip_id, "driver_on_the_way")
             elif body.status == "driver_arrived" and driver_id:
                 await publish_trip_event(trip_id, "driver_arrived")
             elif body.status == "in_progress" and driver_id:
@@ -3154,6 +3166,17 @@ async def api_update_trip_status(trip_id: str, body: TripStatusUpdate):
                 # Normalmente se completa en otro endpoint, pero por si acaso
                 await set_driver_status(driver_id, "available")
                 await publish_trip_event(trip_id, "trip_completed")
+
+            # Evento UNICO que escucha el cliente para sincronizar el stepper
+            # de 5 pasos y el panel inferior. Se publica SIEMPRE, aunque el
+            # viaje no tenga chofer (por ejemplo, una cancelacion expirada).
+            # Los eventos especificos de arriba se conservan para las apps
+            # viejas que todavia no conocen `trip_status_updated`.
+            await publish_trip_event(trip_id, "trip_status_updated", {
+                "status": body.status,
+                "previous_status": estado_previo,
+                "driver_id": driver_id,
+            })
         return {"message": f"Estado actualizado a '{body.status}'"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3181,7 +3204,8 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
     # que navegar a el. Un doble toque o un reintento tras un timeout de red
     # dejan de ser un error y pasan a ser una operacion idempotente.
     if trip.get("driver_id") == driver_id:
-        if estado in ("accepted", "driver_arrived", "in_progress"):
+        if estado in ("accepted", "driver_on_the_way", "driver_arrived",
+                      "in_progress"):
             return {
                 "trip_id": trip_id,
                 "driver_id": driver_id,
@@ -3275,7 +3299,7 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
         # "otro conductor" casi siempre era su propio segundo toque.
         actual = get_trip(trip_id)
         if actual and actual.get("driver_id") == driver_id and actual.get("status") in (
-            "accepted", "driver_arrived", "in_progress",
+            "accepted", "driver_on_the_way", "driver_arrived", "in_progress",
         ):
             return {
                 "trip_id": trip_id,
@@ -3532,15 +3556,15 @@ def _asegurar_columnas_cancelacion():
 async def api_driver_cancel_trip(trip_id: str,
                                  body: Optional[dict] = None,
                                  authorization: Optional[str] = Header(None)):
-    """El CHOFER cancela en el paso intermedio "ir a buscar" (estado accepted).
+    """El CHOFER cancela en el paso intermedio "ir a buscar" (aun no llego).
 
     Reglas del flujo:
       * Solo el chofer ASIGNADO (el del token): un driver_id en el body no
         sirve, porque el body no autoriza.
-      * Solo estando en `accepted`: si el viaje ya paso a `driver_arrived`, la
-        cancelacion SI gasta una de las 3 del dia y va por `/trips/{id}/cancel`
-        (con `driver_id`); si ya no le quedan, solo el operador de viajes puede
-        cancelarlo desde el panel.
+      * Solo estando en `accepted` o `driver_on_the_way`: si el viaje ya paso a
+        `driver_arrived`, la cancelacion SI gasta una de las 3 del dia y va por
+        `/trips/{id}/cancel` (con `driver_id`); si ya no le quedan, solo el
+        operador de viajes puede cancelarlo desde el panel.
       * NO cuenta de las 3 cancelaciones diarias: aqui quien no aparecio es
         el cliente antes de la recogida.
       * Libera al chofer (available) para que la proxima oferta llegue ya y
@@ -3561,7 +3585,7 @@ async def api_driver_cancel_trip(trip_id: str,
             status_code=403,
             detail="Solo el chofer asignado puede cancelar este viaje")
     estado_previo = trip_actual.get("status")
-    if estado_previo != "accepted":
+    if estado_previo not in ("accepted", "driver_on_the_way"):
         raise HTTPException(
             status_code=409,
             detail="Este paso ya no se cancela por aca (el viaje esta en "
@@ -3578,7 +3602,7 @@ async def api_driver_cancel_trip(trip_id: str,
         cur.execute(
             "UPDATE trips SET status = 'cancelled', cancelled_by = 'driver', "
             "cancellation_reason = %s, completed_at = %s "
-            "WHERE trip_id = %s AND status = 'accepted'",
+            "WHERE trip_id = %s AND status IN ('accepted','driver_on_the_way')",
             (motivo, datetime.utcnow(), trip_id))
         cancelado = cur.rowcount
         conn.commit()

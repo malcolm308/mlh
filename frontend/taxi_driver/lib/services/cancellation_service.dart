@@ -8,7 +8,12 @@ import 'api_client.dart';
 ///
 /// Todo lo demas (`cancelled`, `completed`, `expired`) significa que el chofer
 /// ya no tiene nada que hacer con el.
-const Set<String> estadosViajeVivos = {'accepted', 'driver_arrived', 'in_progress'};
+const Set<String> estadosViajeVivos = {
+  'accepted',
+  'driver_on_the_way',
+  'driver_arrived',
+  'in_progress',
+};
 
 /// Estado de la consulta al backend sobre el viaje en curso.
 ///

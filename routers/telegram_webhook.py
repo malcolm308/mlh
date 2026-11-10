@@ -72,7 +72,8 @@ STAGING_DIR = os.path.join(BASE_DIR, "uploads", "telegram_staging")
 INDICE_TELEGRAM = "telegram_chat_id_unico"
 
 # Estados de viaje en los que el chofer todavia tiene algo que hacer.
-ESTADOS_VIAJES_ACTIVOS = ("requested", "accepted", "driver_arrived", "in_progress")
+ESTADOS_VIAJES_ACTIVOS = ("requested", "accepted", "driver_on_the_way",
+                          "driver_arrived", "in_progress")
 
 # Numeros de relleno que se han visto en la base. Si uno llega al bot es un
 # dato de prueba, no una persona: se trata como numero no valido.

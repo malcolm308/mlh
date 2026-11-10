@@ -79,7 +79,8 @@ chofer_coleccion = chofer_db.users
 cliente_coleccion = cliente_db.users
 
 ESTADO_APROBADO = "aprobado"
-ESTADOS_ACTIVOS = ("requested", "accepted", "driver_arrived")
+ESTADOS_ACTIVOS = ("requested", "accepted", "driver_on_the_way",
+                   "driver_arrived")
 
 # Un viaje es huerfano cuando ha consumido mas de la mitad del tiempo que la
 # oferta permanece viva (OFFER_TTL_SECS, 60 s por defecto). El 100 % es el
@@ -200,7 +201,8 @@ async def alertas_pendientes(admin: dict = Depends(require_admin)):
                ST_Y(request_location::geometry) AS request_lat,
                ST_X(request_location::geometry) AS request_lng
           FROM trips
-         WHERE status IN ('requested', 'accepted', 'driver_arrived')
+         WHERE status IN ('requested', 'accepted', 'driver_on_the_way',
+                          'driver_arrived')
            AND driver_id IS NULL
          ORDER BY requested_at ASC
          LIMIT 200
@@ -495,7 +497,8 @@ def _chofer_tiene_viaje_activo(driver_id: str) -> Optional[str]:
         SELECT trip_id
           FROM trips
          WHERE driver_id = %s
-           AND status IN ('accepted', 'driver_arrived', 'in_progress')
+           AND status IN ('accepted', 'driver_on_the_way', 'driver_arrived',
+                          'in_progress')
          LIMIT 1
     """
     with get_connection() as conn:
@@ -592,7 +595,8 @@ async def forzar_asignacion(
                        alerta_enviada = TRUE
                  WHERE trip_id = %s
                    AND driver_id IS NULL
-                   AND status IN ('requested', 'accepted', 'driver_arrived')
+                   AND status IN ('requested', 'accepted', 'driver_on_the_way',
+                                  'driver_arrived')
                 RETURNING trip_id, status
                 """,
                 (driver_id, trip_id),

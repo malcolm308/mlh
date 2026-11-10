@@ -40,6 +40,16 @@ class SesionExpirada(ApiError):
     """El refresh token ya no sirve: hay que volver a entrar."""
 
 
+class ErrorDeRed(ApiError):
+    """No se pudo hablar con el servidor (timeout, DNS, conexión caída).
+
+    Es una subclase de [ApiError] para que el resto del panel lo siga tratando
+    como un error normal, pero permite que las acciones críticas (crear un
+    operador) muestren el mensaje corto que pide el usuario:
+    "Error de conexión. Intenta de nuevo."
+    """
+
+
 def _detalle(resp: requests.Response) -> str:
     """Saca el mensaje mas util de una respuesta de error de FastAPI."""
     crudo = resp.text or ""
@@ -269,18 +279,18 @@ class ApiClient:
                 timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
             )
         except requests.Timeout:
-            raise ApiError(
+            raise ErrorDeRed(
                 "El servidor tardó más de %d s en responder.\n\n"
                 "En el plan gratuito de Render la instancia se duerme a los "
                 "15 min sin uso y la primera petición del día tarda 30-60 s "
                 "en despertarla. Inténtalo otra vez." % READ_TIMEOUT)
         except requests.ConnectionError as exc:
-            raise ApiError(
+            raise ErrorDeRed(
                 "No se pudo conectar con el servidor.\n\n%s\n\n"
                 "Revisa la conexión a internet y la variable API_BASE_URL."
                 % exc)
         except requests.RequestException as exc:
-            raise ApiError("Error inesperado de red: %s" % exc)
+            raise ErrorDeRed("Error inesperado de red: %s" % exc)
 
         if resp.status_code == 401 and auth and retry_auth and self.refresh_token:
             # El access caduco. Se renueva y se repite la peticion original una
