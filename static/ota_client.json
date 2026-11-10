@@ -1,11 +1,15 @@
 {
   "app": "client",
   "latest": {
-    "version": "1.0.16",
-    "version_code": 4017,
+    "version": "1.0.17",
+    "version_code": 4018,
     "apk": "app_latest.apk"
   },
   "releases": [
+    {
+      "version": "1.0.17",
+      "version_code": 4018
+    },
     {
       "version": "1.0.16",
       "version_code": 4017
@@ -21,13 +25,16 @@
     {
       "version": "1.0.13",
       "version_code": 4014
-    },
-    {
-      "version": "1.0.12",
-      "version_code": 4013
     }
   ],
   "patches": [
+    {
+      "version": "1.0.17-p1",
+      "target_version_code": 4017,
+      "file": "patch_latest.zip",
+      "md5": "2214f7d3ea22f9d4a05cc0ea8302a01b",
+      "published_at": "2026-11-10T17:18:10+00:00"
+    },
     {
       "version": "1.0.16-p1",
       "target_version_code": 4016,
@@ -106,5 +113,5 @@
       "published_at": "2026-11-08T12:57:52+00:00"
     }
   ],
-  "updated_at": "2026-11-10T16:24:42+00:00"
+  "updated_at": "2026-11-10T17:18:10+00:00"
 }
