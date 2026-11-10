@@ -32,8 +32,8 @@
       "version": "1.0.14-p1",
       "target_version_code": 4018,
       "file": "patch_chofer_latest.zip",
-      "md5": "d72b8d13340b50dc3d806d4baf6c3fb6",
-      "published_at": "2026-11-10T13:47:59+00:00"
+      "md5": "a60e9039f127bc40ac4e8333ac261bdf",
+      "published_at": "2026-11-10T13:54:08+00:00"
     },
     {
       "version": "1.0.13-p1",
@@ -85,5 +85,5 @@
       "published_at": "2026-11-08T12:58:19+00:00"
     }
   ],
-  "updated_at": "2026-11-10T13:47:59+00:00"
+  "updated_at": "2026-11-10T13:54:08+00:00"
 }

@@ -2802,6 +2802,9 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     // movimiento GPS + Kalman). Con viaje manda `NavigationModeService` y este
     // widget recupera su `moveCamera` de siempre.
     final libre = _activeTrip == null;
+    // La camara libre solo corre si ademas no hay oferta en pantalla ni pin
+    // movido a mano: en esos casos el mapa lo encuadra `_encuadrarTrayecto`.
+    final libreActiva = libre && _selectedOffer == null && !_manualPos;
     return Scaffold(
       key: _scaffoldKey,
       drawer: _buildDrawer(),
@@ -2837,8 +2840,9 @@ final pts = await widget.api.getTripRoute(trip.tripId);
               posicionVehiculo: libre
                   ? (_nav.tieneFix ? _nav.posicionReal : _driverPos)
                   : (_nav.debeSeguir ? _nav.posicion : _driverPos),
-              rumboVehiculo:
-                  libre ? (_bearingLibre ?? _rumboParaFlecha()) : _rumboParaFlecha(),
+              rumboVehiculo: libreActiva
+                  ? (_bearingLibre ?? _rumboParaFlecha())
+                  : _rumboParaFlecha(),
               camaraLibre: libre,
               ruta: _rutaVisible,
               onControlador: (c) => _controlador = c,
