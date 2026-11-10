@@ -169,6 +169,9 @@ class ApiClient:
                 "con tu correo de administrador.", status=401)
         try:
             self.ping()
+        except ErrorDeRed:
+            # Red caida al restaurar: no se invalida el refresh.
+            raise
         except ApiError as exc:
             self.logout()
             if exc.status in (401, 403):
@@ -248,10 +251,18 @@ class ApiClient:
                 json={"refresh_token": self.refresh_token},
                 auth=False, retry_auth=False,
             )
-        except ApiError:
-            self.logout()
-            raise SesionExpirada(
-                "Tu sesión expiró. Vuelve a iniciar sesión.", status=401)
+        except ErrorDeRed:
+            # Un fallo de red transitorio NO cierra la sesion: se propaga para
+            # que el panel muestre "sin conexion" y reintente luego.
+            raise
+        except ApiError as exc:
+            # Solo un 401 del backend invalida el refresh. Otros errores (5xx,
+            # etc.) no deben cerrar la sesion.
+            if exc.status == 401:
+                self.logout()
+                raise SesionExpirada(
+                    "Tu sesión expiró. Vuelve a iniciar sesión.", status=401)
+            raise
 
         access = (data or {}).get("access_token")
         if not access:

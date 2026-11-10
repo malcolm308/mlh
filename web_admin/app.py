@@ -151,21 +151,46 @@ def _restaurar_sesion() -> Optional[ApiClient]:
     if st.session_state.pop("_logout_en_curso", False):
         st.session_state["_debug_restore"] = "logout_en_curso=True"
         return None
+
+    gestor = _cookie_manager()
+    refresh = ""
+    admin_email = ""
+    cookie_keys = []
+
+    # Camino rapido: Streamlit expone las cookies del request inicial. En Render
+    # suele estar vacio, pero se intenta primero porque es sincrono.
     try:
         cookies = st.context.cookies
-        st.session_state["_debug_cookies"] = ",".join(sorted(cookies.keys()))
+        cookie_keys = sorted(cookies.keys())
         refresh = (cookies.get(_COOKIE_REFRESH) or "").strip()
+        admin_email = (cookies.get(_COOKIE_ADMIN) or "").strip()
     except Exception as exc:
         st.session_state["_debug_restore"] = "excepcion cookies: %s" % exc
-        return None
+
+    # Camino lento (el que funciona en Render): el CookieManager carga la cookie
+    # de forma asincrona. La primera llamada devuelve None y programa un rerun;
+    # en el segundo run ya tenemos el valor.
+    if not refresh and gestor is not None:
+        try:
+            valor = gestor.get(_COOKIE_REFRESH)
+            if valor:
+                refresh = str(valor).strip()
+            valor_admin = gestor.get(_COOKIE_ADMIN)
+            if valor_admin:
+                admin_email = str(valor_admin).strip()
+        except Exception as exc:
+            st.session_state["_debug_restore"] = "excepcion gestor.get: %s" % exc
+
+    st.session_state["_debug_cookies"] = ",".join(cookie_keys) if cookie_keys else "(st.context vacio)"
+
     if not refresh:
-        st.session_state["_debug_restore"] = "sin cookie refresh (keys=%s)" % st.session_state.get("_debug_cookies", "")
+        st.session_state["_debug_restore"] = "sin cookie refresh (st.context keys=%s)" % ",".join(cookie_keys)
         return None
 
     cliente = ApiClient(get_api_base_url())
     try:
         with st.spinner("Restaurando sesión..."):
-            cliente.restaurar(refresh, cookies.get(_COOKIE_ADMIN) or "")
+            cliente.restaurar(refresh, admin_email)
     except SesionExpirada as exc:
         st.session_state["_debug_restore"] = "SesionExpirada: %s" % exc
         _borrar_cookies()
@@ -375,9 +400,21 @@ def _sidebar(api: ApiClient, permitidas: Optional[list[str]] = None) -> None:
             st.rerun()
 
 
+@st.fragment(run_every=240)
+def _keep_alive(api: ApiClient) -> None:
+    """Ping periodico para mantener Render despierto y renovar el access token."""
+    try:
+        api.ping()
+    except Exception:
+        pass
+
+
 def _panel(api: ApiClient) -> None:
     # Refresca la cookie de sesion en cada carga (si el paquete esta instalado).
     _guardar_cookies(api)
+    # Keep-alive: evita que Render duerma la instancia y renueva el access
+    # token de forma proactiva cada 4 min (antes de que caduque a las 2 h).
+    _keep_alive(api)
     if not st.session_state.get("admin_rol"):
         _cargar_rol(api)
 
