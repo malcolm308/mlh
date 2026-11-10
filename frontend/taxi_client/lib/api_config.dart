@@ -145,7 +145,7 @@ class ApiConfig {
   static const double mapSouth = 22.89768;
   static const double mapNorth = 23.30190;
   static const double mapWest = -82.60071;
-  static const double mapEast = -82.19971;
+  static const double mapEast = -82.05;
 
   /// `viewbox` de Nominatim (oeste, norte, este, sur) con el área del mapa.
   static String get mapViewBox =>

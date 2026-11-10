@@ -463,8 +463,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       (a.latitude - b.latitude).abs() < 1e-9 &&
       (a.longitude - b.longitude).abs() < 1e-9;
 
-  String _coordLabel(LatLng p) =>
-      '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}';
+  static const String _sinDireccion = 'Ubicación seleccionada en el mapa';
 
   bool _coordValida(LatLng p) =>
       p.latitude.isFinite &&
@@ -569,7 +568,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     setState(() {
       _buscandoCentro = false;
       _centroMapa = centro;
-      _centroAddr = texto ?? _coordLabel(centro);
+      _centroAddr = texto ?? _sinDireccion;
       _centroError =
           texto == null ? 'No se pudo obtener la dirección exacta.' : null;
     });
@@ -605,7 +604,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
           _pickupConfirmado) {
         return;
       }
-      texto = dir.vacia ? _coordLabel(centro) : dir.texto;
+      texto = dir.vacia ? _sinDireccion : dir.texto;
     }
 
     setState(() {
@@ -663,7 +662,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         !_pickupConfirmado) {
       return;
     }
-    final texto = dir.vacia ? _coordLabel(centro) : dir.texto;
+    final texto = dir.vacia ? _sinDireccion : dir.texto;
 
     final req = ++_routeReq;
     final r = await OsrmService.route(pickup, centro);
@@ -983,10 +982,10 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       builder: (ctx) => _VehicleSelectorStateful(
         pickupAddress: (_pickupAddr ?? '').trim().isNotEmpty
             ? _pickupAddr!
-            : _coordLabel(_pickup ?? _myLoc),
+            : _sinDireccion,
         dropoffAddress: (_dropoffAddr ?? '').trim().isNotEmpty
             ? _dropoffAddr!
-            : _coordLabel(_dropoff ?? _myLoc),
+            : _sinDireccion,
         distanceKm: _routeKm ?? 0,
         durationMin: _routeMin ?? 0,
         etaText: _etaText ?? '--',
@@ -1049,8 +1048,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         numPasajes: _numPasajes,
         equipaje: _equipaje,
         mascota: _mascota,
-        requestAddress: _pickupAddr ?? _coordLabel(pickup),
-        dropoffAddress: _dropoffAddr ?? _coordLabel(dropoff),
+        requestAddress: _pickupAddr ?? _sinDireccion,
+        dropoffAddress: _dropoffAddr ?? _sinDireccion,
       );
       final tripId = (res['trip_id'] ?? '').toString();
       if (tripId.isEmpty) throw ApiException('No se recibió el trip_id');

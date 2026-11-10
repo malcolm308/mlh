@@ -214,6 +214,10 @@ int _puntosRutaEnviados = -1;
       _zoomAplicado = null;
       _tiltAplicado = null;
       _bearingAplicado = null;
+      // El panel de "Pausado" es mas alto que el de navegacion: al entrar o
+      // salir de la camara libre hay que recolocar la flecha para que no
+      // quede debajo del panel blanco.
+      _aplicarPaddingConduccion();
     }
     _aplicarCamara();
     _aplicarRuta();
@@ -287,29 +291,32 @@ int _puntosRutaEnviados = -1;
   /// superior, justo al reves de lo pedido.
   ///
   /// El destino es el 65 % medido: el tercio inferior. El panel del viaje empieza
-  /// hacia el78 %, asi que queda sitio de sobra sin que la flecha se meta
-  /// debajo.
+  /// hacia el 78 %, asi que queda sitio de sobra sin que la flecha se meta
+  /// debajo del panel.
   ///
-  /// Calibrado midiendo el centroide del azul de la flecha por pixeles en el
-  /// movil, no de memoria: con `top: 0.28` salio al 60.4 %, y el modelo
-  /// (centro del rectangulo libre) predecía 64 %. Los 3.6 puntos de diferencia
-  /// son la distancia entre el ancla de la camara y el centroide del poligono,
-  /// que por la inclinacion no coincide. De ahi el 0.36.
+  /// OJO: en la pantalla principal ("Pausado") el panel es MUCHO mas alto
+  /// (empieza al ~63 % de la pantalla, medido en el movil) y con el padding de
+  /// navegacion el chevron quedaba debajo del panel blanco. Por eso el padding
+  /// depende del modo: con camara libre se sube la flecha al ~52 %.
   void _aplicarPaddingConduccion() {
     final ctl = _controlador;
     if (ctl == null) return;
-    if (_paddingAplicado) return;
-    _paddingAplicado = true;
     // Proporcion del alto, medida con el tamano real de la pantalla y no con un
     // literal: en un movil pequeno y en una tablet la proporcion que se busca
     // es la misma.
     final alto = MediaQuery.sizeOf(context).height;
     if (alto <= 0) return;
-    ctl.setPadding(top: alto * 0.36);
+    final proporcion = widget.camaraLibre ? 0.04 : 0.36;
+    final valor = alto * proporcion;
+    if (_paddingAplicado == valor) return;
+    _paddingAplicado = valor;
+    ctl.setPadding(top: valor);
   }
 
-  /// `true` cuando el padding de conduccion ya se aplico una vez.
-  bool _paddingAplicado = false;
+  /// `double` con el alto de padding aplicado actualmente (y 0 en pantalla),
+  /// para no repetir `setPadding` en cada rebuild pero SI poder cambiarlo al
+  /// pasar de la camara libre (Pausado) a la navegacion de un viaje.
+  double? _paddingAplicado;
 
   /// Zoom con el que se construyeron los vertices de la flecha por ultima vez.
   double? _zoomEnviado;
@@ -576,6 +583,9 @@ _puntosRutaEnviados = widget.ruta.length;
     _vehiculoEnviado = widget.posicionVehiculo;
 
     _aplicarCamara();
+    // Tras recargar el estilo el mapa nativo puede haber perdido el padding:
+    // se fuerza a reaplicarlo.
+    _paddingAplicado = null;
     _aplicarPaddingConduccion();
     widget.onListo?.call();
   }

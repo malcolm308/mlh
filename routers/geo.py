@@ -401,6 +401,34 @@ def _maptiler_calles_cerca(lat: float, lon: float) -> List[str]:
     return nombres
 
 
+def _es_variante_via(a: str, b: str) -> bool:
+    """True si dos nombres son la misma via o una variante (9na / 9na B).
+
+    MapTiler parte una avenida en tramos con sufijos ("9na", "9na B",
+    "476", "476 A"). Sin esto se armaria un "entre calles" falso usando dos
+    tramos de la misma via.
+    """
+    na, nb = _normaliza(a), _normaliza(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    return na.startswith(nb + " ") or nb.startswith(na + " ")
+
+
+def _maptiler_transversales(principal: Optional[str], lat: float,
+                            lon: float) -> List[str]:
+    """Calles cercanas que no son la principal ni una variante de ella."""
+    salida: List[str] = []
+    for nombre in _maptiler_calles_cerca(lat, lon):
+        if principal and _es_variante_via(nombre, principal):
+            continue
+        if any(_es_variante_via(nombre, visto) for visto in salida):
+            continue
+        salida.append(nombre)
+    return salida[:2]
+
+
 # --------------------------------------------------------------------------
 # arme de la direccion
 # --------------------------------------------------------------------------
@@ -1748,6 +1776,27 @@ def direccion(lat: float = Query(..., ge=-90, le=90),
     OpenStreetMap y son de fiar.
     """
     if not _en_mapa(lat, lon):
+        # Fuera del area de tiles (ej. Guanabo): no hay malla local, pero el
+        # geocodificador de MapTiler cubre mas area. Se intenta aqui antes de
+        # rechazar y NUNCA se devuelven coordenadas crudas.
+        clave = "%.5f,%.5f|%d" % (lat, lon, 1 if numero else 0)
+        guardada = _de_cache(clave)
+        if guardada is not None:
+            return guardada
+        mt_street, mt_barrio = _maptiler_reverse(lat, lon)
+        if mt_street:
+            cruces = _abrevia(
+                mt_street, _maptiler_transversales(mt_street, lat, lon))
+            texto = _arma_texto(mt_street, None, cruces, mt_barrio)
+            if not texto:
+                texto = mt_street
+            respuesta = {
+                "ok": True, "texto": texto, "calle": mt_street,
+                "numero": None, "barrio": mt_barrio, "entre": cruces,
+                "origen": "maptiler", "dist_calle": None, "cache": False,
+            }
+            _a_cache(clave, respuesta)
+            return respuesta
         return {"ok": False, "texto": "", "calle": None, "numero": None,
                 "barrio": None, "entre": [], "cache": False,
                 "motivo": "fuera del area del mapa"}
@@ -1776,10 +1825,7 @@ def direccion(lat: float = Query(..., ge=-90, le=90),
         if s_mt:
             mt_street = s_mt
             mt_barrio = b_mt
-            cercanas_mt = _maptiler_calles_cerca(lat, lon)
-            transversales = [x for x in cercanas_mt
-                            if _normaliza(x) != _normaliza(mt_street)]
-            mt_cruces = transversales[:2]
+            mt_cruces = _maptiler_transversales(mt_street, lat, lon)
             origen = "maptiler"
 
     principal = _principal(medidas, base["calle"])

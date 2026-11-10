@@ -3316,32 +3316,20 @@ if (o.pickup != null) ...[
     );
   }
 
-  /// Línea con la dirección en calles del punto, con coordenadas como
-  /// referencia secundaria (o como texto principal si no hay dirección).
+  /// Línea con la dirección en calles del punto.
+  ///
+  /// Nunca se muestran coordenadas crudas: si no hay dirección se dice que la
+  /// ubicación se eligió en el mapa.
   Widget _addressLine(TripOffer o, {required bool pickup}) {
-    const muted = Color(0xFF6B7280);
     const text = Color(0xFF1F2937);
     final p = pickup ? o.pickup : o.dropoff;
     if (p == null) return const SizedBox.shrink();
     final addr = _addressOf(o, pickup: pickup);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          addr ?? 'Ubicación seleccionada en el mapa',
-          style: const TextStyle(color: text, fontSize: 13),
-        ),
-        if (addr != null)
-          Text(
-            _fmtCoord(p),
-            style: const TextStyle(color: muted, fontSize: 10),
-          ),
-      ],
+    return Text(
+      addr ?? 'Ubicación seleccionada en el mapa',
+      style: const TextStyle(color: text, fontSize: 13),
     );
   }
-
-String _fmtCoord(LatLng p) =>
-      '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}';
 
   String _addrKey(LatLng p) =>
       '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
