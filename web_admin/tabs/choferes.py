@@ -204,8 +204,15 @@ def render(api) -> None:
     st.dataframe(pd.DataFrame([_fila(c) for c in choferes]),
                  hide_index=True)
 
+    # El desplegable de revision solo muestra pendientes: los rechazados/aprobados
+    # no se re-revisan desde esta pantalla (siguen visibles en la tabla superior).
+    pendientes = [c for c in choferes
+                  if (c.get("estado") or "").strip().lower() == "pendiente"]
+    if not pendientes:
+        st.info("No hay chóferes pendientes de revisión en este filtro.")
+        return
     opciones = {"%d. %s" % (i, _etiqueta(c)): c
-                for i, c in enumerate(choferes, start=1)}
+                for i, c in enumerate(pendientes, start=1)}
     elegido = st.selectbox("Chófer a revisar", list(opciones),
                            key="chofer_elegido")
     _detalle(api, opciones[elegido])

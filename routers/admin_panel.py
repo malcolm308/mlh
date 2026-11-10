@@ -566,35 +566,6 @@ async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Dep
     if not ObjectId.is_valid(driver_id):
         raise HTTPException(status_code=400, detail="Id de chofer inválido")
 
-    doc = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Chofer no encontrado")
-
-    # Rechazar = borrar del sistema (cuenta + fotos). No se conserva el
-    # registro: el administrador pidio que el rechazo elimine al usuario.
-    if body.estado == ESTADO_RECHAZADO:
-        from services.fotos_nube import borrar as _borrar_foto
-        for ref in (doc.get("documentos") or []):
-            if isinstance(ref, dict):
-                _borrar_foto(ref.get("nube_public_id"))
-        # Vehiculos de Mi Garaje (si los tuviera) y sus fotos.
-        try:
-            for v in chofer_db["vehiculos"].find({"driver_id": str(doc["_id"])}):
-                for foto in (v.get("fotos") or {}).values():
-                    if isinstance(foto, dict):
-                        _borrar_foto(foto.get("public_id"))
-            chofer_db["vehiculos"].delete_many({"driver_id": str(doc["_id"])})
-        except Exception:
-            pass
-        chofer_coleccion.delete_one({"_id": doc["_id"]})
-        return {
-            "ok": True,
-            "driver_id": driver_id,
-            "nombre": " ".join(filter(None, [doc.get("Nombre"), doc.get("Apellidos")])).strip(),
-            "estado": ESTADO_RECHAZADO,
-            "message": "Chofer rechazado y eliminado del sistema",
-        }
-
     ahora = datetime.utcnow()
     update = {
         "estado_habilitacion": body.estado,
@@ -618,7 +589,9 @@ async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Dep
         update["status"] = "active"
         update["documents_verified"] = True
     else:
-        # Rechazar o volver a pendiente deja la cuenta bloqueada para el login
+        # Rechazar o volver a pendiente deja la cuenta bloqueada para el login.
+        # NO se borra ni se anonimiza: se conservan nombre, correo y telefono
+        # para auditoria y soporte.
         update["Enable"] = False
         update["status"] = "rejected" if body.estado == ESTADO_RECHAZADO \
             else "pending_review"
