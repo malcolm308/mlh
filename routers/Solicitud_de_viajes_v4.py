@@ -2280,20 +2280,22 @@ async def filter_declined_trips(trips: list[dict], driver_id: Optional[str]) -> 
 
 # ===================== OFERTA DE VIAJE A CONDUCTORES CERCANOS =====================
 # ===================== CONFIGURACION DE OFERTA / EXPIRACION =====================
-# Tiempo que un viaje queda 'requested' esperando que un conductor lo acepte.
-# La app del conductor sondea cada 4 s y el conductor necesita tiempo a mano
-# para ver la oferta y tocarla, asi que 20 s hacia que el viaje expirara solo.
-TRIP_ACCEPT_TIMEOUT_SECS = int(os.getenv("TRIP_ACCEPT_TIMEOUT_SECS", "120"))
+# Tiempo TOTAL que un viaje queda 'requested' esperando que alguien lo acepte.
+# Pasado ese plazo el job `sweep_expired_trips` lo marca como 'expired' y el
+# pasajero ve "No encontramos choferes disponibles" + "Volver a pedir viaje".
+# 180 s: da margen real al despacho manual (Telegram) antes de rendirse.
+TRIP_ACCEPT_TIMEOUT_SECS = int(os.getenv("TRIP_ACCEPT_TIMEOUT_SECS", "180"))
 
 # Tiempo que una OFERTA concreta queda viva para un conductor, es decir lo que
 # viaja en `expires_in_secs`. La app lo usa como temporizador local del FSI: si
 # el conductor no responde en ese plazo, la oferta se cierra sola.
 #
-# 60 s y no 30: la oferta se presenta como una llamada entrante a pantalla
-# completa y el conductor necesita ver la pantalla, leer la direccion y decidir.
-# Con 30 s el FSI se cerraba antes de que el conductor llegara a reaccionar.
+# Tiene que ir ALINEADO con `TRIP_ACCEPT_TIMEOUT_SECS`: si la oferta muriera
+# antes (p. ej. a los 60 s) el viaje seguiria 'requested' y el pasajero
+# esperando 180 s sin que ningun conductor pudiera verlo ni aceptarlo. La
+# ventana en la que el viaje es visible y aceptable es la misma para todos.
 # Se puede ajustar por entorno sin tocar el codigo.
-OFFER_TTL_SECS = int(os.getenv("OFFER_TTL_SECS", "60"))
+OFFER_TTL_SECS = int(os.getenv("OFFER_TTL_SECS", str(TRIP_ACCEPT_TIMEOUT_SECS)))
 
 _DRIVER_VEHICLE_KEYS = ("vehicle_type", "type_vehicle", "type")
 
@@ -3065,6 +3067,12 @@ async def api_get_trip(trip_id: str):
     # puede cambiar en cualquier momento.
     trip["tiempo_espera_cortesia_minutos"] = _cortesia_minutos_actual()
 
+    # Segundos que le quedan a la BUSQUEDA de chofer (solo mientras el viaje
+    # sigue en `requested`). El pasajero pinta un contador sincronizado con el
+    # reloj del servidor: nunca con el del telefono, que puede ir adelantado.
+    if trip.get("status") == "requested":
+        trip["busqueda_expira_en_secs"] = _offer_secs_left(trip)
+
     # Rumbo del vehiculo para que el cliente emule la vista 3D del chofer
     # (bearing + tilt en su camara). TTL de 120 s con lo que la key de Garnet
     # caduca sola si el chofer deja de reportar.
@@ -3260,8 +3268,8 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
         if estado == "completed":
             raise HTTPException(409, "El viaje ya fue completado")
 
-    # 2. La oferta vencio (60 s desde `requested_at`). Se cierra el viaje en el
-    #    acto para que no siga apareciendo en sondeos ni reintentos.
+    # 2. La oferta vencio (`OFFER_TTL_SECS` desde `requested_at`). Se cierra el
+    #    viaje en el acto para que no siga apareciendo en sondeos ni reintentos.
     if estado == "expired" or (estado == "requested" and _offer_expired(trip)):
         if estado == "requested":
             await _expire_trip_now(trip_id)

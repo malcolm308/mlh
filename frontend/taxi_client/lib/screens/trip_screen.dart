@@ -42,6 +42,12 @@ class _TripScreenState extends State<TripScreen> {
   bool _avisoChoferCanceloMostrado = false;  // Evita mostrar el aviso dos veces
   String? _error;
   Timer? _poll;
+
+  /// Contador visible de la búsqueda. Se sincroniza en cada sondeo con
+  /// `busqueda_expira_en_secs` (reloj del servidor) y entre sondeos baja de
+  /// uno en uno. No cambia el estado: solo lo hace el backend a los 180 s.
+  int? _busquedaRestante;
+  Timer? _busquedaTimer;
   List<LatLng> _route = [];
   LatLng? _driverPos;
 
@@ -124,6 +130,12 @@ class _TripScreenState extends State<TripScreen> {
     super.initState();
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
+    _busquedaTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || _popped) return;
+      final restante = _busquedaRestante;
+      if (restante == null || restante <= 0) return;
+      setState(() => _busquedaRestante = restante - 1);
+    });
     // Push del viaje: posiciones del chofer y cambios de estado al instante.
     _ws.onDatos = (canal, datos) {
       if (!mounted) return;
@@ -194,6 +206,7 @@ class _TripScreenState extends State<TripScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _busquedaTimer?.cancel();
     _ws.detener();
     _mapController.dispose();
     super.dispose();
@@ -216,6 +229,10 @@ class _TripScreenState extends State<TripScreen> {
       setState(() {
         _trip = t;
         _error = null;
+        // Contador de busqueda: se re-sincroniza con el servidor cada 3 s y
+        // entre sondeos lo baja el timer de 1 s. Nunca decide la expiracion.
+        _busquedaRestante =
+            t.status == 'requested' ? t.busquedaExpiraEnSecs : null;
       });
       if (estadoAnterior != t.status) {
         // Nueva fase: la ruta del chofer de la fase anterior ya no sirve.
@@ -1023,11 +1040,11 @@ class _TripScreenState extends State<TripScreen> {
             ),
           ),
           const SizedBox(width: 12),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   'Buscando el chófer más cercano',
                   style: TextStyle(
                     fontSize: 14.5,
@@ -1035,17 +1052,37 @@ class _TripScreenState extends State<TripScreen> {
                     color: AppColors.ambar,
                   ),
                 ),
-                SizedBox(height: 2),
-                Text(
+                const SizedBox(height: 2),
+                const Text(
                   'Te avisaremos en cuanto uno acepte el viaje',
                   style: TextStyle(fontSize: 12, color: AppColors.secundario),
                 ),
+                // Contador sincronizado con el servidor: 3:00 al pedir y baja
+                // hasta 0:00, que es cuando el backend marca `expired`.
+                if (_busquedaRestante != null && _busquedaRestante! > 0) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    'Tiempo restante: ${_fmtBusqueda(_busquedaRestante!)}',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.ambar,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// `m:ss` del contador de búsqueda (p. ej. 180 -> "3:00").
+  String _fmtBusqueda(int secs) {
+    final m = secs ~/ 60;
+    final s = secs % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
   }
 
   /// Ficha de dato (Categoria / Solicitado): etiqueta gris, valor en

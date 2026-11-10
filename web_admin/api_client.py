@@ -292,14 +292,21 @@ class ApiClient:
         except requests.RequestException as exc:
             raise ErrorDeRed("Error inesperado de red: %s" % exc)
 
-        if resp.status_code == 401 and auth and retry_auth and self.refresh_token:
-            # El access caduco. Se renueva y se repite la peticion original una
-            # sola vez; si el refresh tambien falla, `_refresh` lanza
-            # SesionExpirada y la app vuelve al login.
-            self._refresh()
-            return self._request(
-                method, path, params=params, json=json, auth=auth,
-                retry_auth=False, accept=accept)
+        if resp.status_code == 401 and auth:
+            if retry_auth and self.refresh_token:
+                # El access caduco. Se renueva y se repite la peticion original
+                # una sola vez; si el refresh tambien falla, `_refresh` lanza
+                # SesionExpirada y la app vuelve al login.
+                self._refresh()
+                return self._request(
+                    method, path, params=params, json=json, auth=auth,
+                    retry_auth=False, accept=accept)
+            # Sin refresh token, o el reintento ya se hizo y volvio a dar 401:
+            # la sesion no sirve. Se limpia aqui para que el panel redirija al
+            # login en vez de quedarse mostrando "HTTP 401" en cada pestaña.
+            self.logout()
+            raise SesionExpirada(
+                "Tu sesión expiró. Vuelve a iniciar sesión.", status=401)
 
         if not resp.ok:
             raise ApiError(_detalle(resp), status=resp.status_code,

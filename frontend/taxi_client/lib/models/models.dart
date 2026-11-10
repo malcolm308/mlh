@@ -72,6 +72,11 @@ class ClientTrip {
   /// pintar (el reloj del telefono no interviene).
   final String? requestedAtLocal;
 
+  /// Segundos que le quedan a la búsqueda de chófer, calculados por el
+  /// servidor. Solo viene mientras el viaje sigue en `requested`; el contador
+  /// del panel inferior se sincroniza con este valor en cada sondeo.
+  final int? busquedaExpiraEnSecs;
+
   /// Rumbo del vehiculo (0 = norte, sentido horario) tal como lo reporto el
   /// chofer con su GPS. `null` = sin dato (chofer parado o sin viaje).
   final double? driverBearing;
@@ -112,6 +117,7 @@ class ClientTrip {
     this.driverVehicleModel,
     this.driverVehiclePlate,
     this.requestedAtLocal,
+    this.busquedaExpiraEnSecs,
     this.driverBearing,
     this.driverLat,
     this.driverLng,
@@ -145,6 +151,7 @@ class ClientTrip {
         driverVehicleModel: j['driver_vehicle_model']?.toString(),
         driverVehiclePlate: j['driver_vehicle_plate']?.toString(),
         requestedAtLocal: j['requested_at_local']?.toString(),
+        busquedaExpiraEnSecs: (j['busqueda_expira_en_secs'] as num?)?.toInt(),
         driverBearing: (j['driver_bearing'] as num?)?.toDouble(),
         driverLat: (j['driver_lat'] as num?)?.toDouble(),
         driverLng: (j['driver_lng'] as num?)?.toDouble(),

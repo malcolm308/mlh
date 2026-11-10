@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field
 from db.Chofer.connection import chofer_db
 from db.Cliente.connection import cliente_db
 from routers.Solicitud_de_viajes_v4 import (
-    OFFER_TTL_SECS,
+    TRIP_ACCEPT_TIMEOUT_SECS,
     _driver_vehicle_type,
     _normalize_vehicle_type,
     garnet,
@@ -82,11 +82,12 @@ ESTADO_APROBADO = "aprobado"
 ESTADOS_ACTIVOS = ("requested", "accepted", "driver_on_the_way",
                    "driver_arrived")
 
-# Un viaje es huerfano cuando ha consumido mas de la mitad del tiempo que la
-# oferta permanece viva (OFFER_TTL_SECS, 60 s por defecto). El 100 % es el
-# momento en que el viaje expira; el 50 % deja margen para que un chofer que lo
-# vio en Telegram llegue a tiempo.
-UMBRAL_HUERFANO_SECS = max(1, int(OFFER_TTL_SECS * 0.5))
+# Un viaje es huerfano cuando lleva mas de 30 s esperando y todavia no lo
+# acepto nadie. El aviso se manda en esa ventana (30 s .. 180 s) y NO despues:
+# un viaje que ya supero el tiempo total (`TRIP_ACCEPT_TIMEOUT_SECS`) esta a
+# punto de expirar y avisar por Telegram solo haria que un chofer llamara por
+# una carrera que el pasajero ya no esta esperando.
+UMBRAL_HUERFANO_SECS = max(1, int(os.getenv("ORPHAN_ALERT_SECS", "30")))
 
 
 def require_api_key(
@@ -271,13 +272,15 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
            AND driver_id IS NULL
            AND alerta_enviada = FALSE
            AND requested_at < NOW() - make_interval(secs => %s)
+           AND requested_at > NOW() - make_interval(secs => %s)
          ORDER BY requested_at ASC
          LIMIT 50
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
-            cur.execute(sql, (UMBRAL_HUERFANO_SECS,))
+            cur.execute(sql, (UMBRAL_HUERFANO_SECS,
+                              TRIP_ACCEPT_TIMEOUT_SECS))
             candidatos = [dict(r) for r in cur.fetchall()]
         finally:
             cur.close()
@@ -304,9 +307,12 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
                        AND alerta_enviada = FALSE
                        AND status = 'requested'
                        AND driver_id IS NULL
+                       AND requested_at < NOW() - make_interval(secs => %s)
+                       AND requested_at > NOW() - make_interval(secs => %s)
                     RETURNING trip_id
                     """,
-                    (trip_id,),
+                    (trip_id, UMBRAL_HUERFANO_SECS,
+                     TRIP_ACCEPT_TIMEOUT_SECS),
                 )
                 reclamado = cur.fetchone()
                 conn.commit()
@@ -359,6 +365,7 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
     return {
         "ok": True,
         "umbral_huerfano_segundos": UMBRAL_HUERFANO_SECS,
+        "ventana_alerta_hasta_segundos": TRIP_ACCEPT_TIMEOUT_SECS,
         "candidatos": len(candidatos),
         "reclamados": reclamados,
         "enviados": enviados,

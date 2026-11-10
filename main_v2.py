@@ -179,7 +179,8 @@ scheduler = AsyncIOScheduler(timezone=CUBA_TZ)
 async def sweep_expired_trips():
     """
     Marca como 'expired' los viajes 'requested' que superaron el timeout
-    de aceptacion. Se ejecuta cada 30s.
+    de aceptacion (180 s por defecto). Se ejecuta cada 15 s: asi el pasajero
+    no espera mas de ~15 s extra antes de ver «Volver a pedir viaje».
     """
     try:
         with get_connection() as conn:
@@ -380,7 +381,7 @@ async def startup_event():
                            exc_info=True)
 
     # Scheduler: expiracion de viajes + autorreparacion de tablas
-    scheduler.add_job(sweep_expired_trips, "interval", seconds=30, id="sweep_expired_trips")
+    scheduler.add_job(sweep_expired_trips, "interval", seconds=15, id="sweep_expired_trips")
     try:
         if tablas_faltantes():
             scheduler.add_job(job_reintento_bd, "interval", seconds=60, id="reintento_bd")
