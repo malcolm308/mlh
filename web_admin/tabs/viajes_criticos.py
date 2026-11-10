@@ -260,6 +260,39 @@ def _control_manual(api) -> None:
             else:
                 st.caption("Chófer: %s" % (viaje.get("driver_name") or "—"))
 
+        # Cancelacion desde el control de viajes: es la salida cuando el chofer
+        # ya agoto sus 3 del dia (o no puede hacerlo desde la app). No descuenta
+        # ninguna y deja al chofer disponible.
+        st.divider()
+        st.markdown("##### 🚫 Cancelar el viaje seleccionado")
+        st.caption(
+            "Solo el operador de viajes puede cerrar un viaje que el chófer ya "
+            "no puede cancelar. No se descuenta de sus 3 del día."
+        )
+        col_motivo, col_boton = st.columns([2.2, 1])
+        with col_motivo:
+            motivo_cancel = st.text_input(
+                "Motivo para el pasajero (opcional)",
+                key="motivo_force_cancel",
+                placeholder="El chófer reportó que no encontrabas el punto")
+            confirmar_cancel = st.checkbox(
+                "Confirmo cancelar este viaje (no se deshace)",
+                key="confirmar_force_cancel")
+        with col_boton:
+            if st.button("Cancelar viaje", type="primary",
+                         disabled=not confirmar_cancel,
+                         key="forzar_cancel"):
+                try:
+                    resultado = api.cancelar_viaje_admin(
+                        viaje["trip_id"], motivo_cancel)
+                except ApiError as exc:
+                    st.error(explicar_error(exc))
+                else:
+                    ui.flash("success", resultado.get("message")
+                             or "Viaje cancelado por el operador.")
+                    ui.invalidar("criticos")
+                    st.rerun()
+
 
 def render(api) -> None:
     st.subheader("🚨 Viajes críticos")

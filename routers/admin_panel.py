@@ -39,6 +39,7 @@ from datetime import datetime
 from db.Chofer.connection import chofer_db
 from db.Cliente.connection import cliente_db
 from routers.Solicitud_de_viajes_v4 import (
+    _asegurar_columnas_cancelacion,
     apply_daily_bonus,
     complete_trip,
     daily_trip_metrics,
@@ -858,6 +859,81 @@ class ForzarFinIn(BaseModel):
     dropoff_lat: Optional[float] = None
     dropoff_lng: Optional[float] = None
     tip: float = 0.0
+
+
+class ForzarCancelacionIn(BaseModel):
+    """Motivo visible para el pasajero en el aviso de cancelación."""
+    motivo: Optional[str] = None
+
+
+@router.post("/trips/{trip_id}/force-cancel")
+async def forzar_cancelacion(
+    trip_id: str,
+    body: Optional[ForzarCancelacionIn] = None,
+    admin: dict = Depends(REQUIERE_OPERADOR_VIAJES),
+):
+    """Cancela un viaje activo desde el control de viajes del panel.
+
+    Es la salida cuando el chofer ya agotó sus 3 cancelaciones del día (o no
+    puede hacerlo desde la app). NO descuenta ninguna de las 3: la decisión es
+    del operador. Libera al chofer y avisa al pasajero por WebSocket.
+    """
+    motivo = ((body.motivo if body else None) or "").strip() or \
+        "Cancelado por el operador de viajes"
+    _asegurar_columnas_cancelacion()
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM trips WHERE trip_id = %s FOR UPDATE",
+                    (trip_id,))
+        trip = cur.fetchone()
+        if not trip:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Viaje no encontrado")
+        if trip["status"] in ("completed", "cancelled", "expired"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede cancelar un viaje en estado '%s'"
+                       % trip["status"])
+
+        cur.execute(
+            """
+            UPDATE trips
+               SET status = 'cancelled',
+                   cancelled_by = 'admin',
+                   cancellation_reason = %s,
+                   completed_at = NOW()
+             WHERE trip_id = %s
+            """,
+            (motivo, trip_id),
+        )
+        conn.commit()
+        cur.close()
+
+    driver_id = trip.get("driver_id")
+    if driver_id:
+        try:
+            await set_driver_status(driver_id, "available")
+        except Exception as e:
+            logger.warning("force-cancel: no se pudo liberar chofer %s: %s",
+                           driver_id, e)
+    try:
+        await publish_trip_event(trip_id, "trip_cancelled", {
+            "reason": motivo,
+            "cancelled_by": "admin",
+            "forced_by": admin.get("email"),
+        })
+    except Exception as e:
+        logger.warning("force-cancel: no se pudo publicar evento: %s", e)
+
+    return {
+        "ok": True,
+        "trip_id": trip_id,
+        "status": "cancelled",
+        "message": "Viaje cancelado por el operador",
+        "motivo": motivo,
+    }
 
 
 @router.get("/trips/active")

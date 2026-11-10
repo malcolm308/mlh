@@ -328,6 +328,16 @@ class ApiClient:
             "POST", "/admin/trips/%s/force-complete" % quote(trip_id, safe=""),
             json={"tip": tip})
 
+    def cancelar_viaje_admin(self, trip_id: str, motivo: str = "") -> dict:
+        """Cancela un viaje activo desde el control de viajes del panel.
+
+        No descuenta las 3 cancelaciones del chófer: es la salida cuando ya
+        las agotó y el pasajero sigue esperando.
+        """
+        return self._json(
+            "POST", "/admin/trips/%s/force-cancel" % quote(trip_id, safe=""),
+            json={"motivo": motivo.strip() or None})
+
     def viajes_diarios(self, dias: int = 7,
                        hasta: Optional[str] = None) -> dict:
         params = {"dias": dias}
