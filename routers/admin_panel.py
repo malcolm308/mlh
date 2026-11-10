@@ -38,6 +38,9 @@ from db.Administración.connection import admin_db
 from db.tokens import create_access_token, create_refresh_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from datetime import datetime
 from db.Chofer.connection import chofer_db
+from services.tipo_vehiculo import (
+    campos_exigidos_por_tipo, resolver_tipo_vehiculo)
+from routers.documentos import CAMPOS as CAMPOS_DOCUMENTOS_BASE
 from db.Cliente.connection import cliente_db
 from routers.Solicitud_de_viajes_v4 import (
     _asegurar_columnas_cancelacion,
@@ -58,20 +61,6 @@ router = APIRouter(prefix="/admin", tags=["Administracion"])
 chofer_coleccion = chofer_db.users
 admin_coleccion = admin_db.users
 cliente_coleccion = cliente_db.users
-
-# Los 10 documentos que el chofer debe subir en el registro
-CAMPOS_DOCUMENTOS = [
-    ("rostro", "Foto frontal de la cara"),
-    ("carnet_frente", "Carnet de identidad (por delante)"),
-    ("carnet_atras", "Carnet de identidad (por detras)"),
-    ("licencia_frente", "Licencia de conducir (por delante)"),
-    ("licencia_atras", "Licencia de conducir (por detras)"),
-    ("circulacion", "Circulacion del vehiculo"),
-    ("vehiculo_interior_frente", "Vehiculo por dentro (alante)"),
-    ("vehiculo_interior_atras", "Vehiculo por dentro (atras)"),
-    ("vehiculo_exterior_frente", "Vehiculo por fuera (delante)"),
-    ("vehiculo_exterior_atras", "Vehiculo por fuera (atras)"),
-]
 
 # Estados de habilitacion de un chofer
 ESTADO_PENDIENTE = "pendiente"
@@ -117,27 +106,51 @@ def estado_de(doc: dict) -> str:
 
 
 def _documentos_de(doc: dict) -> dict:
-    """Resumen de los 10 documentos exigidos para el panel."""
+    """Resumen de los documentos exigidos para el panel, segun el tipo de vehiculo."""
     docs = doc.get("documentos") or []
     por_campo = {d.get("campo"): d for d in docs if isinstance(d, dict)}
+    tipo = resolver_tipo_vehiculo(doc)
+    # Lista de campos exigidos para este tipo (usa el mismo criterio que el
+    # registro). Si no se puede resolver el tipo, se exigen todos.
+    if tipo:
+        exigidos = {c[0] for c in campos_exigidos_por_tipo(tipo, CAMPOS_DOCUMENTOS_BASE)}
+    else:
+        exigidos = {c[0] for c in CAMPOS_DOCUMENTOS_BASE}
+    etiquetas = {c[0]: c[1] for c in CAMPOS_DOCUMENTOS_BASE}
     estado = {}
     faltan = []
-    for campo, etiqueta in CAMPOS_DOCUMENTOS:
+    for campo, etiqueta, _ in CAMPOS_DOCUMENTOS_BASE:
+        if campo not in exigidos:
+            # No aplica a este tipo de vehiculo.
+            estado[campo] = {
+                "etiqueta": etiqueta,
+                "subido": None,
+                "archivo": None,
+                "url": None,
+                "aplica": False,
+            }
+            continue
         ref = por_campo.get(campo)
+        url = None
+        if ref:
+            url = ref.get("url") or ref.get("secure_url")
         estado[campo] = {
             "etiqueta": etiqueta,
             "subido": bool(ref),
             "archivo": ref.get("archivo") if ref else None,
-            "subido_at": ref.get("subido_at") if ref else None,
+            "url": url,
+            "aplica": True,
         }
         if not ref:
             faltan.append(etiqueta)
+    aplicables = [c for c in CAMPOS_DOCUMENTOS_BASE if c[0] in exigidos]
     return {
-        "total": len(CAMPOS_DOCUMENTOS),
-        "subidos": len(CAMPOS_DOCUMENTOS) - len(faltan),
+        "total": len(aplicables),
+        "subidos": len(aplicables) - len(faltan),
         "faltan": faltan,
         "completo": not faltan,
         "detalle": estado,
+        "tipo_vehiculo": tipo,
     }
 
 

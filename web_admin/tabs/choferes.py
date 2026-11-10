@@ -76,6 +76,50 @@ def _detalle(api, chofer: dict) -> None:
                        % (chofer.get("revisado_por"),
                           ui.fecha_hora(chofer.get("revisado_at"))))
 
+        # Galeria de documentos subidos (Cloudinary). Se agrupan en desplegables
+        # para no saturar la pantalla.
+        docs = chofer.get("documentos") or {}
+        detalle = docs.get("detalle") or {}
+        if detalle:
+            st.markdown("##### 📄 Documentos subidos")
+            # Licencia y carnet en un desplegable, fotos del vehiculo en otro.
+            licencia_campos = ["rostro", "carnet_frente", "carnet_atras",
+                               "licencia_frente", "licencia_atras", "circulacion"]
+            vehiculo_campos = ["vehiculo_interior_frente", "vehiculo_interior_atras",
+                               "vehiculo_exterior_frente", "vehiculo_exterior_atras"]
+            with st.expander("📄 Ver identidad y licencia", expanded=False):
+                cols = st.columns(3)
+                i = 0
+                for campo in licencia_campos:
+                    info = detalle.get(campo) or {}
+                    if not info.get("aplica", True):
+                        continue
+                    with cols[i % 3]:
+                        url = info.get("url")
+                        if url:
+                            st.image(url, caption=info.get("etiqueta") or campo,
+                                     use_container_width=True)
+                        else:
+                            st.warning("Documento no subido: %s"
+                                       % (info.get("etiqueta") or campo))
+                    i += 1
+            with st.expander("🚗 Ver fotos del vehículo", expanded=False):
+                cols = st.columns(2)
+                i = 0
+                for campo in vehiculo_campos:
+                    info = detalle.get(campo) or {}
+                    if not info.get("aplica", True):
+                        continue
+                    with cols[i % 2]:
+                        url = info.get("url")
+                        if url:
+                            st.image(url, caption=info.get("etiqueta") or campo,
+                                     use_container_width=True)
+                        else:
+                            st.warning("Documento no subido: %s"
+                                       % (info.get("etiqueta") or campo))
+                    i += 1
+
         with st.form("decision_chofer"):
             st.caption(
                 "Aprobar habilita la cuenta para entrar a la app. Rechazar "
