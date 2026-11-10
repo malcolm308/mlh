@@ -248,11 +248,38 @@ def render(api) -> None:
     # no se re-revisan desde esta pantalla (siguen visibles en la tabla superior).
     pendientes = [c for c in choferes
                   if (c.get("estado") or "").strip().lower() == "pendiente"]
-    if not pendientes:
+    if pendientes:
+        opciones = {"%d. %s" % (i, _etiqueta(c)): c
+                    for i, c in enumerate(pendientes, start=1)}
+        elegido = st.selectbox("Chófer a revisar", list(opciones),
+                               key="chofer_elegido")
+        _detalle(api, opciones[elegido])
+    else:
         st.info("No hay chóferes pendientes de revisión en este filtro.")
-        return
-    opciones = {"%d. %s" % (i, _etiqueta(c)): c
-                for i, c in enumerate(pendientes, start=1)}
-    elegido = st.selectbox("Chófer a revisar", list(opciones),
-                           key="chofer_elegido")
-    _detalle(api, opciones[elegido])
+
+    # ---- Eliminacion definitiva (disponible para cualquier chofer) ----
+    st.divider()
+    st.markdown("#### 🗑️ Eliminar chofer definitivamente")
+    opciones_elim = {"%d. %s" % (i, _etiqueta(c)): c
+                    for i, c in enumerate(choferes, start=1)}
+    elegido_elim = st.selectbox("Chófer a eliminar", list(opciones_elim),
+                                key="chofer_eliminar")
+    c_elim = opciones_elim[elegido_elim]
+    confirmar = st.checkbox(
+        "Confirmo eliminar a %s de forma permanente"
+        % (c_elim.get("nombre") or "este chofer"),
+        key="confirmar_elim_global",
+    )
+    if st.button("🗑️ Eliminar definitivamente", type="secondary"):
+        if not confirmar:
+            st.warning("Marca la casilla de confirmación.")
+        else:
+            try:
+                resultado = api.eliminar_chofer(c_elim["driver_id"])
+            except ApiError as exc:
+                st.error(explicar_error(exc))
+                return
+            ui.flash("success", resultado.get("message")
+                     or "Chófer eliminado.")
+            ui.invalidar("choferes", "vehiculos", "billetera")
+            st.rerun()
