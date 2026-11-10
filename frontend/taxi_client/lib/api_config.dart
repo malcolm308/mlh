@@ -32,12 +32,15 @@ class ApiConfig {
   /// Es el `arm64-v8a` de `--split-per-abi` (el que usa casi todo telefono).
   static const String appDownloadUrl = '$baseUrl/static/app_latest.apk';
 
-  /// URL del estilo de MapLibre, servido por Martin desde el MBTiles.
-  /// Se sirve de [martinUrl] y no admite override aparte.
-  ///
-  /// Es `/style/taxi` (singular): `/styles/taxi` responde un 301 que MapLibre
-  /// no siempre sigue, y el mapa se quedaba en blanco.
-  static String get mapStyleUrl => '$martinUrl/style/taxi';
+  /// Clave de MapTiler. Se inyecta al compilar con
+  /// `--dart-define=MAPTILER_API_KEY=...`. Si no se pasa, queda vacia y el
+  /// estilo de MapTiler no cargara.
+  static const String mapTilerApiKey = String.fromEnvironment('MAPTILER_API_KEY');
+
+  /// URL del estilo de MapTiler (streets-v2), con cobertura completa.
+  /// Reemplaza al servidor local Martin.
+  static String get mapStyleUrl =>
+      'https://api.maptiler.com/maps/streets-v2/style.json?key=$mapTilerApiKey';
 
   // ---------------- Endpoints del backend ----------------
 

@@ -38,12 +38,16 @@ class ApiConfig {
   /// el del pasajero.
   static const String driverDownloadUrl = '$baseUrl/static/app_chofer_latest.apk';
 
-  /// URL del estilo de MapLibre, servido por Martin desde el MBTiles.
-  /// Se sirve de [martinUrl] y no admite override aparte.
-  ///
-  /// Es `/style/taxi` (singular): `/styles/taxi` responde un 301 que MapLibre
-  /// no siempre sigue, y el mapa se quedaba en blanco.
-  static String get mapStyleUrl => '$martinUrl/style/taxi';
+  /// Clave de MapTiler. Se inyecta al compilar con
+  /// `--dart-define=MAPTILER_API_KEY=...`. Si no se pasa, queda vacia y el
+  /// estilo de MapTiler no cargara: por eso el script de OTA
+  /// (`scripts/build_ota_patch.ps1`) obliga a pasarla y falla si falta.
+  static const String mapTilerApiKey = String.fromEnvironment('MAPTILER_API_KEY');
+
+  /// URL del estilo de MapTiler (streets-v2), con cobertura completa.
+  /// Reemplaza al servidor local Martin.
+  static String get mapStyleUrl =>
+      'https://api.maptiler.com/maps/streets-v2/style.json?key=$mapTilerApiKey';
 
   // ---------------- Endpoints del backend ----------------
 
