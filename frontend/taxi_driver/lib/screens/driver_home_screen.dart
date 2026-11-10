@@ -3328,7 +3328,7 @@ if (o.pickup != null) ...[
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          addr ?? _fmtCoord(p),
+          addr ?? 'Ubicación seleccionada en el mapa',
           style: const TextStyle(color: text, fontSize: 13),
         ),
         if (addr != null)

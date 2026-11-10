@@ -494,7 +494,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       label = cached;
     } else {
       final dir = await AddressService.de(point);
-      label = dir.vacia ? _coordLabel(point) : dir.texto;
+      label = dir.vacia ? 'Ubicación seleccionada en el mapa' : dir.texto;
       if (!dir.vacia) _reverseCache[key] = dir.texto;
     }
     if (!mounted) return;

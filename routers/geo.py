@@ -335,6 +335,73 @@ def _nominatim(lat: float, lon: float) -> Dict:
 
 
 # --------------------------------------------------------------------------
+# MapTiler: respaldo de la geocodificacion inversa para zonas sin malla
+# local (Guanabo, etc.). Reconstuye el formato "entre calles".
+# --------------------------------------------------------------------------
+def _maptiler_reverse(lat: float, lon: float) -> Tuple[Optional[str], Optional[str]]:
+    """Devuelve (calle_principal, barrio) desde MapTiler."""
+    if not MAPTILER_API_KEY:
+        return None, None
+    url = "https://api.maptiler.com/geocoding/%.6f,%.6f.json" % (lon, lat)
+    try:
+        with httpx.Client(timeout=GEO_TIMEOUT_S) as cliente:
+            r = cliente.get(url, params={"key": MAPTILER_API_KEY, "limit": 1,
+                                         "types": "street,road",
+                                         "language": "es"},
+                            headers={"User-Agent": USER_AGENT})
+        r.raise_for_status()
+        features = (r.json() or {}).get("features") or []
+        if not features:
+            return None, None
+        f = features[0]
+        street = (f.get("text") or "").strip() or None
+        barrio = None
+        for ctx in (f.get("context") or []):
+            if ctx.get("kind") == "place" and ctx.get("place_designation") == "suburb":
+                barrio = ctx.get("text")
+                break
+        if not barrio:
+            for ctx in (f.get("context") or []):
+                if ctx.get("kind") in ("place", "virtual_place"):
+                    barrio = ctx.get("text")
+                    break
+        if not barrio:
+            ctxs = f.get("context") or []
+            if len(ctxs) >= 2:
+                barrio = ctxs[1].get("text")
+        # Limpiar barrio: MapTiler concatena "Suburb Municipio Ciudad".
+        # Nos quedamos con el primer token (el barrio real: Guanabo, Cojimar...).
+        if barrio and " " in barrio:
+            barrio = barrio.split()[0]
+        return street, barrio
+    except Exception:
+        return None, None
+
+
+def _maptiler_calles_cerca(lat: float, lon: float) -> List[str]:
+    """Consulta MapTiler en puntos desplazados (~50 m) para encontrar las
+    calles transversales."""
+    if not MAPTILER_API_KEY:
+        return []
+    delta = 0.00045
+    cos_lat = math.cos(math.radians(lat)) or 1.0
+    puntos = [
+        (lat + delta, lon),
+        (lat - delta, lon),
+        (lat, lon + delta / cos_lat),
+        (lat, lon - delta / cos_lat),
+    ]
+    nombres = []
+    vistos = set()
+    for la, lo in puntos:
+        street, _ = _maptiler_reverse(la, lo)
+        if street and _normaliza(street) not in vistos:
+            vistos.add(_normaliza(street))
+            nombres.append(street)
+    return nombres
+
+
+# --------------------------------------------------------------------------
 # arme de la direccion
 # --------------------------------------------------------------------------
 def _principal(medidas: List[Dict], calle_nominatim: Optional[str]):
@@ -1700,24 +1767,50 @@ def direccion(lat: float = Query(..., ge=-90, le=90),
             medidas = extra
             origen = "overpass"
 
+    # MapTiler: respaldo para zonas sin malla local (Guanabo, etc.).
+    mt_street = None
+    mt_barrio = None
+    mt_cruces = []
+    if not medidas:
+        s_mt, b_mt = _maptiler_reverse(lat, lon)
+        if s_mt:
+            mt_street = s_mt
+            mt_barrio = b_mt
+            cercanas_mt = _maptiler_calles_cerca(lat, lon)
+            transversales = [x for x in cercanas_mt
+                            if _normaliza(x) != _normaliza(mt_street)]
+            mt_cruces = transversales[:2]
+            origen = "maptiler"
+
     principal = _principal(medidas, base["calle"])
     n_casa = None
     barrio = base["barrio"]
-    if principal is None:
-        # ninguna calle local sirve: lo que diga Nominatim es lo mejor que hay
+    if mt_street:
+        calle = mt_street
+        barrio = mt_barrio or base["barrio"]
+        cruces = _abrevia(calle, mt_cruces)
+        texto = _arma_texto(calle, n_casa, cruces, barrio)
+        if not texto:
+            texto = _arma_texto(mt_street, None, [], mt_barrio or base["barrio"])
+    elif principal is None:
+        calle = base["calle"]
+        cruces = []
+        texto = _arma_texto(calle, n_casa, cruces, barrio)
         origen = "nominatim"
     else:
-        # de Nominatim solo se cree si su calle es la misma que hallamos aqui
+        calle = principal["nombre"]
         calle_nom = _normaliza(base["calle"])
         if not calle_nom or calle_nom != principal["norm"]:
             barrio = None
             n_casa = None
         elif numero:
             n_casa = base["numero"]
+        cruces = _abrevia(calle, _calles_que_cruzan(lat, lon, principal, medidas))
+        texto = _arma_texto(calle, n_casa, cruces, barrio)
 
-    calle = principal["nombre"] if principal else base["calle"]
-    cruces = _abrevia(calle, _calles_que_cruzan(lat, lon, principal, medidas))
-    texto = _arma_texto(calle, n_casa, cruces, barrio)
+    # Ultimo recurso: nunca devolver coordenadas crudas.
+    if not texto:
+        texto = ""
 
     respuesta = {
         "ok": bool(texto),
