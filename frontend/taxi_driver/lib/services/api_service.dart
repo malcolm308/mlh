@@ -456,6 +456,15 @@ class ApiService {
     return TripOffer.fromJson(j);
   }
 
+  /// Recibo de un viaje ya completado (respaldo del evento WebSocket).
+  ///
+  /// Cuando el administrador fuerza el fin con el socket caído, la app detecta
+  /// `completed` en el sondeo y pide aquí el desglose para enseñar el vale.
+  Future<CompletedTrip> getTripReceipt(String tripId) async {
+    final j = await _map('GET', '/trips/$tripId/receipt');
+    return CompletedTrip.fromJson(j);
+  }
+
   Future<void> updateTripStatus(String tripId, String status) async {
     await _map('PATCH', '/trips/$tripId/status', body: {'status': status});
   }

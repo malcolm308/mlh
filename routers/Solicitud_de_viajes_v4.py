@@ -3095,6 +3095,51 @@ async def api_get_trip(trip_id: str):
     return trip
 
 
+@router.get("/trips/{trip_id}/receipt")
+async def api_get_trip_receipt(trip_id: str):
+    """Recibo de un viaje ya completado, con el desglose guardado.
+
+    Lo usa la app del chófer como respaldo: si el WebSocket estaba caído
+    cuando el administrador forzó el fin, al detectar `completed` en el
+    sondeo pide aquí el mismo recibo que le habría llegado por el evento.
+    """
+    trip = get_trip(trip_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Viaje no encontrado")
+    if trip.get("status") != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="El viaje todavía no está completado")
+
+    base = float(trip.get("base_fare") or 0)
+    distancia = float(trip.get("distance_fare") or 0)
+    propina = float(trip.get("tip") or 0)
+    total = float(trip.get("total_fare") or 0)
+    descuento = float(trip.get("descuento_cliente") or 0)
+    # El tiempo no se guarda como columna propia: se reconstruye del total.
+    tiempo = max(0.0, total - base - distancia - propina + descuento)
+    return {
+        "trip_id": trip_id,
+        "distance_km": round(float(trip.get("distance_km") or 0), 2),
+        "duration_secs": trip.get("duration_secs") or 0,
+        "base_fare": base,
+        "distance_fare": distancia,
+        "time_fare": round(tiempo, 2),
+        "tip": propina,
+        "total_fare": total,
+        "commission": float(trip.get("comision_nominal") or 0),
+        "commission_rate": 0.15,
+        "commission_label": "15%",
+        "commission_discount": False,
+        "currency": trip.get("currency") or "CUP",
+        "coeficiente_aplicado": (
+            float(trip["coeficiente_aplicado"])
+            if trip.get("coeficiente_aplicado") is not None else None),
+        "espera_segundos": trip.get("espera_secs"),
+        "excedente_espera_segundos": trip.get("excedente_espera_secs"),
+    }
+
+
 @router.get("/trips/{trip_id}/driver-photo")
 async def api_get_driver_photo(trip_id: str):
     """Sirve la foto de perfil del chofer asignado a un viaje.

@@ -14,6 +14,7 @@ Consumida por la app de escritorio `desktop_admin/`:
 Todos los endpoints exigen token de administrador.
 """
 import logging
+import json
 import random
 import secrets
 from datetime import date, datetime, timedelta
@@ -43,7 +44,9 @@ from routers.Solicitud_de_viajes_v4 import (
     apply_daily_bonus,
     complete_trip,
     daily_trip_metrics,
+    garnet,
     get_connection,
+    get_trip,
     publish_trip_event,
     set_driver_status,
 )
@@ -867,6 +870,77 @@ class ForzarCancelacionIn(BaseModel):
     motivo: Optional[str] = None
 
 
+async def _avisar_estado_admin(
+    trip_id: str,
+    trip: Optional[dict],
+    status: str,
+    previous_status: Optional[str],
+    admin_email: Optional[str],
+    extra: Optional[dict] = None,
+) -> None:
+    """Avisa un cambio forzado por el administrador a Cliente y Chófer.
+
+    Se publica en los TRES canales que existen de verdad en el backend:
+
+      * `trip:{trip_id}:events`  -> canal del viaje, lo escucha el cliente
+        suscrito (y es el que ya usaba `publish_trip_event`).
+      * `ws:cliente:{client_id}` -> canal personal del pasajero, por si el
+        cliente aún no se había suscrito al viaje.
+      * `ws:chofer:{driver_id}`  -> canal personal del chófer; su app escucha
+        aquí y así se entera de un cambio hecho desde el panel sin esperar al
+        sondeo de 4 s.
+
+    El evento es el mismo `trip_status_updated` que publica la app del chófer
+    al deslizar, de modo que el stepper y el panel inferior del cliente
+    reaccionan igual venga el cambio de donde venga.
+    """
+    viaje = trip or {}
+    client_id = viaje.get("client_id")
+    driver_id = viaje.get("driver_id")
+
+    cuerpo: dict = {
+        "trip_id": trip_id,
+        "event": "trip_status_updated",
+        "status": status,
+        "previous_status": previous_status,
+        "driver_id": driver_id,
+        "client_id": client_id,
+        "forzado_por": admin_email,
+    }
+    if extra:
+        cuerpo.update(extra)
+
+    # 1) Canal del VIAJE (cliente ya suscrito). `publish_trip_event` envuelve
+    #    el mensaje con `event`, pero el cuerpo ya trae el suyo: se publica
+    #    aquí directo para no duplicar claves.
+    try:
+        await publish_trip_event(trip_id, "trip_status_updated", cuerpo)
+    except Exception as exc:
+        logger.warning(
+            "admin: no se pudo publicar el estado %s del viaje %s: %s",
+            status, trip_id, exc)
+
+    # 2) Canal PERSONAL del cliente.
+    if client_id:
+        try:
+            await garnet.publish(
+                f"ws:cliente:{client_id}", json.dumps(cuerpo, default=str))
+        except Exception as exc:
+            logger.warning(
+                "admin: no se pudo avisar al cliente %s del viaje %s: %s",
+                client_id, trip_id, exc)
+
+    # 3) Canal PERSONAL del chófer.
+    if driver_id:
+        try:
+            await garnet.publish(
+                f"ws:chofer:{driver_id}", json.dumps(cuerpo, default=str))
+        except Exception as exc:
+            logger.warning(
+                "admin: no se pudo avisar al chofer %s del viaje %s: %s",
+                driver_id, trip_id, exc)
+
+
 @router.post("/trips/{trip_id}/force-cancel")
 async def forzar_cancelacion(
     trip_id: str,
@@ -928,6 +1002,12 @@ async def forzar_cancelacion(
     except Exception as e:
         logger.warning("force-cancel: no se pudo publicar evento: %s", e)
 
+    # El chófer también tiene que soltar el viaje: su app escucha su canal
+    # personal y el evento genérico le dice que el viaje ya no está vivo.
+    await _avisar_estado_admin(
+        trip_id, trip, "cancelled", trip.get("status"), admin.get("email"),
+        {"cancelled_by": "admin", "reason": motivo})
+
     return {
         "ok": True,
         "trip_id": trip_id,
@@ -971,6 +1051,146 @@ async def viajes_activos(admin: dict = Depends(require_admin)):
         viajes.append(item)
 
     return {"total": len(viajes), "viajes": viajes}
+
+
+@router.post("/trips/{trip_id}/force-confirm")
+async def forzar_confirmacion(
+    trip_id: str,
+    admin: dict = Depends(REQUIERE_OPERADOR_VIAJES),
+):
+    """Marca el viaje como `driver_on_the_way` (el chófer confirmó y va).
+
+    Es el paso que la app del chófer hace al deslizar «Confirmar viaje». Se
+    usa cuando el chófer se quedó sin conexión o no puede tocar el teléfono.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM trips WHERE trip_id = %s FOR UPDATE",
+                    (trip_id,))
+        trip = cur.fetchone()
+        if not trip:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Viaje no encontrado")
+
+        anterior = trip["status"]
+        if anterior == "driver_on_the_way":
+            cur.close()
+            return {"trip_id": trip_id, "status": anterior,
+                    "message": "El viaje ya estaba en camino"}
+        if anterior in ("completed", "cancelled", "expired"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede confirmar un viaje en estado '%s'" % anterior)
+        if anterior not in ("requested", "accepted"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Solo se confirma un viaje solicitado o aceptado "
+                       "(estado actual: '%s')" % anterior)
+        if not trip.get("driver_id"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="El viaje no tiene chófer asignado; asígnalo primero")
+
+        cur.execute(
+            """
+            UPDATE trips
+               SET status = 'driver_on_the_way'
+             WHERE trip_id = %s
+             RETURNING *
+            """,
+            (trip_id,),
+        )
+        actualizado = dict(cur.fetchone())
+        conn.commit()
+        cur.close()
+
+    driver_id = trip.get("driver_id")
+    if driver_id:
+        try:
+            await set_driver_status(driver_id, "busy")
+        except Exception as e:
+            logger.warning("force-confirm: no se pudo marcar chófer %s: %s",
+                           driver_id, e)
+    try:
+        await publish_trip_event(trip_id, "driver_on_the_way",
+                                 {"forced_by": admin.get("email")})
+    except Exception as e:
+        logger.warning("force-confirm: no se pudo publicar evento: %s", e)
+
+    await _avisar_estado_admin(
+        trip_id, trip, "driver_on_the_way", anterior, admin.get("email"))
+
+    return {**_json_trip(actualizado),
+            "message": "Viaje confirmado manualmente por el administrador",
+            "forzado_por": admin.get("email")}
+
+
+@router.post("/trips/{trip_id}/force-arrive")
+async def forzar_llegada(
+    trip_id: str,
+    admin: dict = Depends(REQUIERE_OPERADOR_VIAJES),
+):
+    """Marca el viaje como `driver_arrived` (el chófer llegó a recogida)."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM trips WHERE trip_id = %s FOR UPDATE",
+                    (trip_id,))
+        trip = cur.fetchone()
+        if not trip:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Viaje no encontrado")
+
+        anterior = trip["status"]
+        if anterior == "driver_arrived":
+            cur.close()
+            return {"trip_id": trip_id, "status": anterior,
+                    "message": "El viaje ya estaba marcado como llegado"}
+        if anterior in ("completed", "cancelled", "expired"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede marcar llegada en un viaje '%s'" % anterior)
+        if anterior not in ("accepted", "driver_on_the_way"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Solo se marca llegada desde un viaje aceptado o en "
+                       "camino (estado actual: '%s')" % anterior)
+        if not trip.get("driver_id"):
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="El viaje no tiene chófer asignado")
+
+        cur.execute(
+            """
+            UPDATE trips
+               SET status = 'driver_arrived',
+                   hora_llegada = COALESCE(hora_llegada, NOW())
+             WHERE trip_id = %s
+             RETURNING *
+            """,
+            (trip_id,),
+        )
+        actualizado = dict(cur.fetchone())
+        conn.commit()
+        cur.close()
+
+    try:
+        await publish_trip_event(trip_id, "driver_arrived",
+                                 {"forced_by": admin.get("email")})
+    except Exception as e:
+        logger.warning("force-arrive: no se pudo publicar evento: %s", e)
+
+    await _avisar_estado_admin(
+        trip_id, trip, "driver_arrived", anterior, admin.get("email"))
+
+    return {**_json_trip(actualizado),
+            "message": "Llegada marcada manualmente por el administrador",
+            "forzado_por": admin.get("email")}
 
 
 @router.post("/trips/{trip_id}/force-start")
@@ -1022,10 +1242,15 @@ async def forzar_inicio(trip_id: str, admin: dict = Depends(REQUIERE_OPERADOR_VI
             await set_driver_status(driver_id, "on_trip")
         except Exception as e:
             logger.warning("force-start: no se pudo marcar chofer %s: %s", driver_id, e)
-        try:
-            await publish_trip_event(trip_id, "trip_started", {"forced_by": admin.get("email")})
-        except Exception as e:
-            logger.warning("force-start: no se pudo publicar evento: %s", e)
+    try:
+        await publish_trip_event(trip_id, "trip_started", {"forced_by": admin.get("email")})
+    except Exception as e:
+        logger.warning("force-start: no se pudo publicar evento: %s", e)
+
+    # El chófer tiene que ver el deslizable en «Completar viaje» y el cliente
+    # avanzar al paso 3 aunque el cambio lo haya hecho el panel.
+    await _avisar_estado_admin(
+        trip_id, trip, "in_progress", trip.get("status"), admin.get("email"))
 
     return {**_json_trip(actualizado),
             "message": "Viaje iniciado manualmente por el administrador",
@@ -1033,6 +1258,7 @@ async def forzar_inicio(trip_id: str, admin: dict = Depends(REQUIERE_OPERADOR_VI
 
 
 @router.post("/trips/{trip_id}/force-complete")
+@router.post("/trips/{trip_id}/force-finish")
 async def forzar_fin(
     trip_id: str,
     background: BackgroundTasks,
@@ -1050,7 +1276,7 @@ async def forzar_fin(
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             """
-            SELECT trip_id, driver_id, status,
+            SELECT trip_id, client_id, driver_id, status,
                    ST_Y(COALESCE(dropoff_location, request_location)::geometry) AS lat,
                    ST_X(COALESCE(dropoff_location, request_location)::geometry) AS lng
               FROM trips WHERE trip_id = %s
@@ -1062,6 +1288,7 @@ async def forzar_fin(
             cur.close()
             raise HTTPException(status_code=404, detail="Viaje no encontrado")
 
+        estado_previo = trip["status"]
         if trip["status"] == "completed":
             cur.close()
             raise HTTPException(status_code=400, detail="El viaje ya esta completado")
@@ -1138,6 +1365,17 @@ async def forzar_fin(
                 result["bonus"] = bonus
         except Exception as e:
             logger.exception("force-complete: error aplicando bono: %s", e)
+
+    # El recibo viaja en el evento: la app del chófer lo abre tal cual, sin
+    # una segunda petición ni esperar al sondeo. `result` trae el desglose
+    # completo que devuelve `complete_trip` (base, distancia, tiempo, comisión).
+    await _avisar_estado_admin(
+        trip_id, trip, "completed", estado_previo, admin.get("email"),
+        {
+            "recibo": result,
+            "total_fare": result.get("total_fare"),
+            "currency": result.get("currency"),
+        })
 
     background.add_task(daily_trip_metrics)
 

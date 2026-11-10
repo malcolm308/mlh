@@ -234,6 +234,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// cliente y recibe la oferta empujada. El sondeo queda de respaldo.
   final WsChofer _ws = WsChofer();
 
+  /// Recibos ya mostrados: evita que el evento WS y el sondeo de 4 s abran el
+  /// mismo vale dos veces cuando el administrador fuerza el fin.
+  final Set<String> _recibosMostrados = <String>{};
+
   /// Vista previa del panel de viaje en curso, para desarrollo.
   ///
   /// Se activa solo con `flutter run --dart-define=PANEL_DEMO=true`: al abrir
@@ -429,6 +433,11 @@ double? _rumboParaFlecha() {
         // El administrador se lo asigno a mano: no es una oferta, es un viaje
         // ya aceptado. Se monta el panel y el radar deja de sondear.
         unawaited(_abrirViajeAsignado(datos));
+      } else if (evento == 'trip_status_updated') {
+        // Un paso forzado desde el panel (confirmar, llegar, iniciar, fin o
+        // cancelar). Se aplica al instante para que el deslizable cambie de
+        // texto sin esperar al sondeo de 4 s.
+        unawaited(_aplicarCambioDelPanel(datos));
       }
     };
     // El chofer es el DUEÑO de la ruta: cada trazo nuevo del asistente
@@ -2135,6 +2144,98 @@ final updated = await widget.api.getTrip(trip.tripId);
     }
   }
 
+  /// Aplica un cambio de estado hecho desde el panel del administrador.
+  ///
+  /// El backend publica `trip_status_updated` en el canal personal del chófer:
+  ///  * `driver_on_the_way` / `driver_arrived` / `in_progress`: se relee el
+  ///    viaje y se repinta el panel, con lo que el deslizable cambia solo.
+  ///  * `completed`: se cierra el viaje y se abre el recibo con el desglose
+  ///    que viaja en el propio evento (o se pide al backend si no vino).
+  ///  * `cancelled` / `expired`: se suelta el viaje y se avisa al chófer.
+  Future<void> _aplicarCambioDelPanel(Map<String, dynamic> datos) async {
+    final tripId = (datos['trip_id'] ?? '').toString();
+    final status = (datos['status'] ?? '').toString();
+    if (tripId.isEmpty || status.isEmpty) return;
+
+    if (status == 'completed') {
+      final recibo = datos['recibo'];
+      await _mostrarReciboDeViaje(tripId,
+          recibo: recibo is Map ? Map<String, dynamic>.from(recibo) : null);
+      return;
+    }
+
+    if (status == 'cancelled' || status == 'expired') {
+      if (_activeTrip?.tripId == tripId) {
+        await _alPerderElViaje(status == 'cancelled'
+            ? 'El operador canceló el viaje'
+            : 'El viaje expiró');
+      }
+      return;
+    }
+
+    if (!estadosViajeVivos.contains(status)) return;
+    try {
+      final actual = await widget.api.getTrip(tripId);
+      if (!mounted) return;
+      final mismoViaje = _activeTrip?.tripId == tripId;
+      // Si el chófer no tenía montado el viaje (p. ej. reabrió la app a mitad
+      // de carrera), el evento también se lo devuelve a la pantalla.
+      if (!mismoViaje && _activeTrip != null) return;
+      setState(() => _activeTrip = actual);
+      if (actual.status == 'in_progress') {
+        unawaited(_asistente.iniciar(
+          tripId: actual.tripId,
+          fase: 'destino',
+          origen: _driverPos,
+          destino: actual.dropoff ?? _driverPos,
+        ));
+      }
+      await _refreshRoutes();
+    } catch (_) {
+      // Sin red queda el sondeo de 4 s, que hará el mismo cambio.
+    }
+  }
+
+  /// Muestra el vale de una carrera que cerró el administrador.
+  ///
+  /// El recibo llega en el evento (`recibo`) con el mismo desglose que devuelve
+  /// el cierre normal. Si el socket venía caído, se pide a
+  /// `/trips/{id}/receipt` para que el chófer nunca se quede sin su vale.
+  Future<void> _mostrarReciboDeViaje(
+    String tripId, {
+    Map<String, dynamic>? recibo,
+  }) async {
+    if (!_recibosMostrados.add(tripId)) return;
+
+    if (_activeTrip?.tripId == tripId) {
+      _declinedTripIds.add(tripId);
+      _ofertaCache.remove(tripId);
+      await _alPerderElViaje('', mostrarAviso: false);
+    }
+
+    CompletedTrip? done;
+    if (recibo != null) {
+      try {
+        done = CompletedTrip.fromJson(recibo);
+      } catch (_) {
+        done = null;
+      }
+    }
+    if (done == null) {
+      try {
+        done = await widget.api.getTripReceipt(tripId);
+      } catch (_) {
+        done = null;
+      }
+    }
+    if (done == null || !mounted) return;
+
+    await _showCompleted(done);
+    await _tick();
+    await _loadTodayEarnings();
+    await _refrescarSaldo();
+  }
+
   /// El viaje ya no esta vivo: lo perdimos, lo cancelamos o lo completo otro.
   ///
   /// Es el unico sitio por el que se limpia un viaje en curso, y lo comparten
@@ -2332,6 +2433,12 @@ void _startTripPoller() {
       if (!mounted) return;
 
       if (!estadosViajeVivos.contains(actual.status)) {
+        // Si lo cerró el administrador (o se completó en otro dispositivo),
+        // el chófer tiene que ver su recibo aunque el evento WS no llegara.
+        if (actual.status == 'completed') {
+          await _mostrarReciboDeViaje(actual.tripId);
+          return;
+        }
         final canceladoPorPasajero =
             actual.status == 'cancelled' &&
                 (trip.clientId?.isNotEmpty ?? false);

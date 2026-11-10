@@ -329,6 +329,18 @@ class ApiClient:
             "POST", "/admin/trips/%s/force-assign" % quote(trip_id, safe=""),
             json={"driver_phone": telefono.strip()})
 
+    def forzar_confirmacion(self, trip_id: str) -> dict:
+        """Pasa el viaje a `driver_on_the_way` desde el panel."""
+        return self._json(
+            "POST",
+            "/admin/trips/%s/force-confirm" % quote(trip_id, safe=""))
+
+    def forzar_llegada(self, trip_id: str) -> dict:
+        """Pasa el viaje a `driver_arrived` desde el panel."""
+        return self._json(
+            "POST",
+            "/admin/trips/%s/force-arrive" % quote(trip_id, safe=""))
+
     def forzar_inicio(self, trip_id: str) -> dict:
         return self._json(
             "POST", "/admin/trips/%s/force-start" % quote(trip_id, safe=""))

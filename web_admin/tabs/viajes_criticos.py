@@ -21,7 +21,7 @@ import pandas as pd
 import streamlit as st
 
 import ui
-from api_client import ApiError, explicar_error
+from api_client import ApiError, ErrorDeRed, explicar_error
 from components import (
     alerta_critica,
     boton_sonido,
@@ -223,42 +223,69 @@ def _control_manual(api) -> None:
         viaje = opciones[elegido]
         tiene_chofer = bool(viaje.get("driver_id"))
 
-        columnas = st.columns([1, 1, 1.2])
-        with columnas[0]:
-            if st.button("▶️ Forzar inicio", key="forzar_inicio",
-                         disabled=not tiene_chofer):
-                try:
-                    resultado = api.forzar_inicio(viaje["trip_id"])
-                except ApiError as exc:
-                    st.error(explicar_error(exc))
-                else:
-                    ui.flash("success", resultado.get("message")
-                             or "Viaje iniciado.")
-                    ui.invalidar("criticos")
-                    st.rerun()
-        with columnas[1]:
+        # Todos los botones están SIEMPRE habilitados: si falta el chófer o el
+        # estado no permite el paso, el backend responde 400 y el panel muestra
+        # el motivo. Un botón gris no explica nada y parece "roto".
+        columnas = st.columns(3)
+        acciones = (
+            (columnas[0], "📞 Forzar confirmación", "forzar_confirmacion",
+             "Viaje confirmado: el chófer va en camino."),
+            (columnas[1], "📍 Forzar llegada", "forzar_llegada",
+             "Llegada al punto de recogida marcada."),
+            (columnas[2], "▶️ Forzar inicio", "forzar_inicio",
+             "Viaje iniciado."),
+        )
+        for columna, etiqueta, metodo, ok in acciones:
+            with columna:
+                if st.button(etiqueta, key=metodo):
+                    try:
+                        resultado = getattr(api, metodo)(viaje["trip_id"])
+                    except ErrorDeRed:
+                        st.error("Error de conexión. Intenta de nuevo.")
+                    except ApiError as exc:
+                        st.error(explicar_error(exc))
+                    except Exception:
+                        st.error("No se pudo ejecutar la acción. "
+                                 "Revisa los logs del servidor.")
+                    else:
+                        ui.flash("success",
+                                 resultado.get("message") or ok)
+                        ui.invalidar("criticos")
+                        st.rerun()
+
+        st.divider()
+        col_propina, col_fin = st.columns([1.2, 1])
+        with col_propina:
             propina = st.number_input("Propina (CUP)", min_value=0.0,
                                       step=10.0, format="%.2f",
                                       key="forzar_propina")
-            if st.button("⏹️ Forzar fin", key="forzar_fin",
-                         disabled=not tiene_chofer):
+        with col_fin:
+            st.write("")
+            if st.button("⏹️ Forzar fin", key="forzar_fin"):
                 try:
                     resultado = api.forzar_fin(viaje["trip_id"], propina)
+                except ErrorDeRed:
+                    st.error("Error de conexión. Intenta de nuevo.")
                 except ApiError as exc:
                     st.error(explicar_error(exc))
+                except Exception:
+                    st.error("No se pudo cerrar el viaje. "
+                             "Revisa los logs del servidor.")
                 else:
                     mensaje = resultado.get("message") or "Viaje completado."
-                    precio = resultado.get("precio_final") or resultado.get("total_fare")
+                    precio = (resultado.get("precio_final")
+                              or resultado.get("total_fare"))
                     if precio is not None:
                         mensaje += " Precio final: %s." % ui.dinero(precio)
                     ui.flash("success", mensaje)
                     ui.invalidar("criticos")
                     st.rerun()
-        with columnas[2]:
-            if not tiene_chofer:
-                st.caption("Sin chófer asignado no se puede iniciar ni cerrar.")
-            else:
-                st.caption("Chófer: %s" % (viaje.get("driver_name") or "—"))
+
+        if not tiene_chofer:
+            st.caption("Este viaje no tiene chófer asignado. "
+                       "Asígnalo arriba antes de forzar un paso.")
+        else:
+            st.caption("Chófer: %s" % (viaje.get("driver_name") or "—"))
 
         # Cancelacion desde el control de viajes: es la salida cuando el chofer
         # ya agoto sus 3 del dia (o no puede hacerlo desde la app). No descuenta
@@ -285,8 +312,13 @@ def _control_manual(api) -> None:
                 try:
                     resultado = api.cancelar_viaje_admin(
                         viaje["trip_id"], motivo_cancel)
+                except ErrorDeRed:
+                    st.error("Error de conexión. Intenta de nuevo.")
                 except ApiError as exc:
                     st.error(explicar_error(exc))
+                except Exception:
+                    st.error("No se pudo cancelar el viaje. "
+                             "Revisa los logs del servidor.")
                 else:
                     ui.flash("success", resultado.get("message")
                              or "Viaje cancelado por el operador.")
