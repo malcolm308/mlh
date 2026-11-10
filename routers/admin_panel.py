@@ -618,6 +618,7 @@ async def cambiar_estado(driver_id: str, body: EstadoChoferIn, admin: dict = Dep
         "message": {
             ESTADO_APROBADO: "Chofer habilitado: ya puede entrar a la app",
             ESTADO_RECHAZADO: "Chofer rechazado: no puede entrar a la app",
+            ESTADO_CORRECCION: "Chofer marcado para corrección: debe reenviar los datos",
             ESTADO_PENDIENTE: "Chofer devuelto a pendiente",
         }[body.estado],
     }
