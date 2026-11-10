@@ -12,6 +12,8 @@ sesion y la app vuelve al login.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 from typing import Any, Optional
 from urllib.parse import quote

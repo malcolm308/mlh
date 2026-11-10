@@ -149,7 +149,6 @@ def _restaurar_sesion() -> Optional[ApiClient]:
     # Un cierre de sesion acaba de pasar: ni reintentar, aunque la cookie aun
     # viva en el navegador (el borrado via JS puede correr despues del rerun).
     if st.session_state.pop("_logout_en_curso", False):
-        st.session_state["_debug_restore"] = "logout_en_curso=True"
         return None
 
     gestor = _cookie_manager()
@@ -165,7 +164,7 @@ def _restaurar_sesion() -> Optional[ApiClient]:
         refresh = (cookies.get(_COOKIE_REFRESH) or "").strip()
         admin_email = (cookies.get(_COOKIE_ADMIN) or "").strip()
     except Exception as exc:
-        st.session_state["_debug_restore"] = "excepcion cookies: %s" % exc
+        pass
 
     # Camino lento (el que funciona en Render): el CookieManager carga la cookie
     # de forma asincrona. La primera llamada devuelve None y programa un rerun;
@@ -179,12 +178,10 @@ def _restaurar_sesion() -> Optional[ApiClient]:
             if valor_admin:
                 admin_email = str(valor_admin).strip()
         except Exception as exc:
-            st.session_state["_debug_restore"] = "excepcion gestor.get: %s" % exc
+            pass
 
-    st.session_state["_debug_cookies"] = ",".join(cookie_keys) if cookie_keys else "(st.context vacio)"
 
     if not refresh:
-        st.session_state["_debug_restore"] = "sin cookie refresh (st.context keys=%s)" % ",".join(cookie_keys)
         return None
 
     cliente = ApiClient(get_api_base_url())
@@ -192,16 +189,13 @@ def _restaurar_sesion() -> Optional[ApiClient]:
         with st.spinner("Restaurando sesión..."):
             cliente.restaurar(refresh, admin_email)
     except SesionExpirada as exc:
-        st.session_state["_debug_restore"] = "SesionExpirada: %s" % exc
         _borrar_cookies()
         return None
     except ApiError as exc:
-        st.session_state["_debug_restore"] = "ApiError: %s" % exc
         st.warning("No se pudo restaurar la sesión: %s" % explicar_error(exc))
         return None
     st.session_state["api"] = cliente
     _cargar_rol(cliente)
-    st.session_state["_debug_restore"] = "OK restaurado"
     return cliente
 
 
@@ -271,10 +265,6 @@ def _login() -> None:
             entrar = st.form_submit_button("Entrar", type="primary")
 
         st.caption("Servidor: %s" % get_api_base_url())
-        if st.session_state.get("_debug_restore") or st.session_state.get("_debug_cookies"):
-            st.caption("DEBUG restore: %s | cookies: %s"
-                       % (st.session_state.get("_debug_restore", ""),
-                          st.session_state.get("_debug_cookies", "")))
         st.caption(
             "La primera petición del día puede tardar hasta 90 s: el backend "
             "gratuito de Render se duerme a los 15 min sin uso."
