@@ -104,6 +104,34 @@ def _borrar_fotos_de_vehiculos(driver_id: str) -> None:
                     doc.get("_id"), n_fotos, driver_id)
 
 
+@router.post("/driver/reenviar")
+async def reenviar_solicitud(authorization: Optional[str] = Header(None)):
+    """El chofer reenvía su solicitud tras corregir los datos marcados.
+
+    Pasa el estado de `needs_correction` a `pendiente` y limpia
+    `missing_fields`. Los datos corregidos se actualizan por separado
+    (foto por foto) antes de llamar a este endpoint.
+    """
+    chofer = _chofer_actual(authorization)
+    driver_id = chofer["id"]
+    doc = chofer["doc"]
+    if doc.get("status") not in ("needs_correction", "rejected", "pending_review"):
+        raise HTTPException(status_code=400, detail="La cuenta no requiere corrección")
+    chofer_coleccion.update_one(
+        {"_id": ObjectId(driver_id)},
+        {"$set": {
+            "estado_habilitacion": "pendiente",
+            "status": "pending_review",
+            "Enable": False,
+            "documents_verified": False,
+            "missing_fields": [],
+            "motivo_habilitacion": None,
+            "updated_at": datetime.utcnow().isoformat(),
+        }},
+    )
+    return {"ok": True, "message": "Solicitud reenviada. En revisión."}
+
+
 @router.delete("/driver/account")
 async def eliminar_cuenta(authorization: Optional[str] = Header(None)):
     """El chofer elimina SU cuenta (token requerido).
