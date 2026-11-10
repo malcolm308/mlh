@@ -44,10 +44,11 @@ class ApiConfig {
   /// (`scripts/build_ota_patch.ps1`) obliga a pasarla y falla si falta.
   static const String mapTilerApiKey = String.fromEnvironment('MAPTILER_API_KEY');
 
-  /// URL del estilo de MapTiler (streets-v2), con cobertura completa.
-  /// Reemplaza al servidor local Martin.
+  /// URL del estilo de MapTiler (basic-v2): cobertura completa de calles
+  /// (incluye Guanabo) pero sin edificios 3D ni POIs pesados, para que el
+  /// mapa no se congele en telefonos modestos. Reemplaza a streets-v2.
   static String get mapStyleUrl =>
-      'https://api.maptiler.com/maps/streets-v2/style.json?key=$mapTilerApiKey';
+      'https://api.maptiler.com/maps/basic-v2/style.json?key=$mapTilerApiKey';
 
   // ---------------- Endpoints del backend ----------------
 
