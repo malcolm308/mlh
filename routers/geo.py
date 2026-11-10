@@ -57,6 +57,12 @@ PHOTON = os.getenv("PHOTON_URL", "https://photon.komoot.io/api/")
 # resto de secretos del backend (nunca en la base ni en el repositorio).
 OPENCAGE = "https://api.opencagedata.com/geocode/v1/json"
 OPENCAGE_API_KEY = os.getenv("OPENCAGE_API_KEY", "")
+# MapTiler: mismo proveedor que el mapa (basic-v2). Se usa como tercer
+# respaldo del buscador, despues de MongoDB y Photon, para cubrir zonas como
+# Guanabo que Photon no indexa. La clave va por entorno (Render), nunca en el
+# repositorio.
+MAPTILER = "https://api.maptiler.com/geocoding/"
+MAPTILER_API_KEY = os.getenv("MAPTILER_API_KEY", "")
 # Centro y radio por defecto para sesgar los resultados hacia La Habana cuando
 # la app no manda coordenadas actuales.
 GEO_CENTRO = (23.1136, -82.3666)
@@ -657,6 +663,51 @@ def _desde_opencage(results: List[Dict]) -> List[Dict]:
         corto = ", ".join([x for x in (nombre, ciudad) if x]).strip(", ")
         largo = r.get("formatted") or corto
         salida.append(_a_resultado(lat, lng, corto or largo, largo))
+    return salida
+
+
+async def _maptiler(q: str, lat: float, lon: float, limit: int) -> List[Dict]:
+    """Tercer respaldo del buscador: MapTiler Geocoding. Lista vacia si no
+    hay clave o si falla. Se restringe con bbox a La Habana para no devolver
+    resultados de otros paises."""
+    if not MAPTILER_API_KEY:
+        return []
+    # MapTiler espera el texto en la ruta, no como query param.
+    from urllib.parse import quote
+
+    url = f"{MAPTILER}{quote(q)}.json"
+    params = {
+        "key": MAPTILER_API_KEY,
+        "limit": str(max(1, min(limit, 10))),
+        "bbox": f"{MAP_WEST},{MAP_SOUTH},{MAP_EAST},{MAP_NORTH}",
+        "language": "es",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=GEO_TIMEOUT_S) as cliente:
+            resp = await cliente.get(url, params=params,
+                                     headers={"User-Agent": USER_AGENT})
+        if resp.status_code != 200:
+            return []
+        return (resp.json() or {}).get("features") or []
+    except Exception:
+        return []
+
+
+def _desde_maptiler(features: List[Dict]) -> List[Dict]:
+    salida = []
+    for f in features:
+        geom = f.get("geometry") or {}
+        coords = geom.get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        props = f.get("properties") or {}
+        nombre = (props.get("name") or props.get("label") or "").strip()
+        lugar = (props.get("place") or props.get("locality")
+                 or props.get("municipality") or props.get("county") or "").strip()
+        corto = ", ".join([x for x in (nombre, lugar) if x]).strip(", ")
+        largo = (props.get("label") or props.get("full_address")
+                 or props.get("place_name") or corto).strip()
+        salida.append(_a_resultado(coords[1], coords[0], corto or largo, largo))
     return salida
 
 
@@ -1597,6 +1648,13 @@ async def buscar(q: str = Query(..., min_length=2),
         resultados = _desde_photon(
             await _photon(texto, centro_lat, centro_lng, limit))
         origen = "photon" if resultados else None
+
+    if not resultados:
+        # Tercer respaldo: MapTiler Geocoding (cubre Guanabo y zonas que
+        # Photon no indexa).
+        resultados = _desde_maptiler(
+            await _maptiler(texto, centro_lat, centro_lng, limit))
+        origen = "maptiler" if resultados else None
 
     if not resultados:
         resultados = _desde_opencage(
