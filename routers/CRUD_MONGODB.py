@@ -33,6 +33,7 @@ router = APIRouter()
 ESTADO_PENDIENTE = "pendiente"
 ESTADO_APROBADO = "aprobado"
 ESTADO_RECHAZADO = "rechazado"
+ESTADO_CORRECCION = "needs_correction"
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
@@ -82,6 +83,8 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str
     expires_in: int = ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    status: Optional[str] = None
+    missing_fields: Optional[list] = None
 
 class ChoferResponse(BaseModel):
     id: str = Field(alias="_id") 
@@ -289,11 +292,14 @@ async def login(request: LoginRequest):
                 raise HTTPException(
                     status_code=403,
                     detail="Tu cuenta está pendiente de aprobación por el administrador")
-            if estado == ESTADO_RECHAZADO:
+            # needs_correction y rejected pueden entrar para corregir datos.
+            # Solo se bloquea a los eliminados permanentemente o deshabilitados.
+            if cuenta.get("eliminado"):
                 raise HTTPException(
                     status_code=403,
-                    detail="Tu cuenta fue rechazada por el administrador. Contacta al soporte.")
-            if not cuenta.get("Enable", True):
+                    detail="Tu cuenta fue eliminada. Contacta al soporte.")
+            if estado not in (ESTADO_CORRECCION, ESTADO_RECHAZADO, "needs_correction", "rejected") \
+               and not cuenta.get("Enable", True):
                 raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
         if rol == "admin" and not cuenta.get("Enable", True):
             raise HTTPException(status_code=403, detail="Tu cuenta está deshabilitada")
@@ -301,9 +307,12 @@ async def login(request: LoginRequest):
                           cuenta.get("password", "").encode('utf-8')):
             token_data = {"sub": cuenta["email"], "id": str(cuenta["_id"])}
             if rol == "chofer":
-                return _respuesta_tokens(
+                resp = _respuesta_tokens(
                     token_data, create_access_token_chofer,
                     create_refresh_token_chofer)
+                resp["status"] = cuenta.get("status") or cuenta.get("estado_habilitacion") or "pendiente"
+                resp["missing_fields"] = cuenta.get("missing_fields") or []
+                return resp
             if rol == "admin":
                 return _respuesta_tokens(
                     token_data, create_access_token_admin,

@@ -68,7 +68,7 @@ class _LoginScreenState extends State<LoginScreen> {
       try {
         final profile = await api.getChofer(id);
         if (!mounted) return;
-        if (profile.status == 'needs_correction') {
+        if (profile.status == 'needs_correction' || profile.status == 'rejected') {
           _goCorrection(api, profile, id);
         } else {
           _goHome(api, profile, id);
