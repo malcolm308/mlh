@@ -3532,15 +3532,17 @@ def _asegurar_columnas_cancelacion():
 async def api_driver_cancel_trip(trip_id: str,
                                  body: Optional[dict] = None,
                                  authorization: Optional[str] = Header(None)):
-    """El CHOFER cancela un viaje aceptado (paso intermedio "ir a buscar").
+    """El CHOFER cancela en el paso intermedio "ir a buscar" (estado accepted).
 
-    Reglas del nuevo flujo:
+    Reglas del flujo:
       * Solo el chofer ASIGNADO (el del token): un driver_id en el body no
         sirve, porque el body no autoriza.
-      * Solo estando en `accepted` o `driver_arrived`: mas adelante el cliente
-        ya salio de casa.
+      * Solo estando en `accepted`: si el viaje ya paso a `driver_arrived`, la
+        cancelacion SI gasta una de las 3 del dia y va por `/trips/{id}/cancel`
+        (con `driver_id`); si ya no le quedan, solo el operador de viajes puede
+        cancelarlo desde el panel.
       * NO cuenta de las 3 cancelaciones diarias: aqui quien no aparecio es
-        el cliente; la limitacion es para abandonar viajes ya iniciados.
+        el cliente antes de la recogida.
       * Libera al chofer (available) para que la proxima oferta llegue ya y
         avisa al pasajero por WebSocket con `trip_cancelled_by_driver`.
     """
@@ -3559,11 +3561,12 @@ async def api_driver_cancel_trip(trip_id: str,
             status_code=403,
             detail="Solo el chofer asignado puede cancelar este viaje")
     estado_previo = trip_actual.get("status")
-    if estado_previo not in ("accepted", "driver_arrived"):
+    if estado_previo != "accepted":
         raise HTTPException(
             status_code=409,
             detail="Este paso ya no se cancela por aca (el viaje esta en "
-                   "%s)" % estado_previo)
+                   "%s). En driver_arrived la cancelacion gasta una de las 3 "
+                   "del dia." % estado_previo)
 
     motivo = ((body or {}).get("reason") or "").strip() or \
         "El cliente no respondio o no aparecio en el punto"
@@ -3575,7 +3578,7 @@ async def api_driver_cancel_trip(trip_id: str,
         cur.execute(
             "UPDATE trips SET status = 'cancelled', cancelled_by = 'driver', "
             "cancellation_reason = %s, completed_at = %s "
-            "WHERE trip_id = %s AND status IN ('accepted','driver_arrived')",
+            "WHERE trip_id = %s AND status = 'accepted'",
             (motivo, datetime.utcnow(), trip_id))
         cancelado = cur.rowcount
         conn.commit()

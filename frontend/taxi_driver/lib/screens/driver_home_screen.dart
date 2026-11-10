@@ -3977,6 +3977,9 @@ String _fmtCoord(LatLng p) =>
           ),
 
         // Cancelar viaje: debajo de la accion principal y en segundo plano.
+        // `driver_arrived` SI gasta una de las 3 del dia (el chofer ya llego y
+        // el viaje esta comprometido); cuando no le quedan, el boton se oculta
+        // y solo el operador de viajes puede cancelarlo desde el panel.
         const SizedBox(height: 4),
         _buildBotonCancelar(trip),
       ],
