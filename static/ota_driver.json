@@ -1,11 +1,15 @@
 {
   "app": "driver",
   "latest": {
-    "version": "1.0.17",
-    "version_code": 4022,
+    "version": "1.0.18",
+    "version_code": 4023,
     "apk": "app_chofer_latest.apk"
   },
   "releases": [
+    {
+      "version": "1.0.18",
+      "version_code": 4023
+    },
     {
       "version": "1.0.17",
       "version_code": 4022
@@ -21,13 +25,16 @@
     {
       "version": "1.0.14",
       "version_code": 4019
-    },
-    {
-      "version": "1.0.13",
-      "version_code": 4018
     }
   ],
   "patches": [
+    {
+      "version": "1.0.18-p1",
+      "target_version_code": 4022,
+      "file": "patch_chofer_latest.zip",
+      "md5": "5d85d4ebd4e6fcc340e3dde9e7bbcbd8",
+      "published_at": "2026-11-10T15:19:51+00:00"
+    },
     {
       "version": "1.0.17-p1",
       "target_version_code": 4021,
@@ -106,5 +113,5 @@
       "published_at": "2026-11-08T12:58:19+00:00"
     }
   ],
-  "updated_at": "2026-11-10T15:07:13+00:00"
+  "updated_at": "2026-11-10T15:19:51+00:00"
 }
