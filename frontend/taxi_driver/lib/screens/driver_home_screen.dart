@@ -3713,9 +3713,9 @@ String _fmtCoord(LatLng p) =>
     final trip = _activeTrip!;
     final pickup = trip.pickup;
     final nextStep = switch (trip.status) {
-      'accepted' => 'He llegado',
-      'driver_arrived' => 'Iniciar viaje',
-      'in_progress' => 'Completar viaje',
+      'accepted' => 'Desliza para ir a buscar al cliente',
+      'driver_arrived' => 'Desliza para iniciar el viaje',
+      'in_progress' => 'Desliza para completar el viaje',
       _ => null,
     };
     final enRecogida = trip.status == 'accepted';

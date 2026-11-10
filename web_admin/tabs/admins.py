@@ -66,9 +66,11 @@ def render(api) -> None:
                                           "nueva. Se muestra una sola vez."):
                             try:
                                 res = api.asignar_password_admin(a["id"])
-                                st.session_state["pass_generada"] = {
-                                    "email": a.get("email"),
-                                    "clave": res.get("password_generada")}
+                                st.session_state["nueva_password"] = \
+                                    res.get("password_generada")
+                                st.session_state["nueva_password_email"] = \
+                                    a.get("email")
+                                st.session_state["nueva_password_es_alta"] = False
                                 st.rerun()
                             except ApiError as exc:
                                 st.error(explicar_error(exc))
@@ -100,13 +102,23 @@ def render(api) -> None:
             st.session_state.pop("despedir_pendiente", None)
             st.rerun()
 
-    generada = st.session_state.get("pass_generada")
-    if generada:
-        st.success("Contraseña de **%s** — cópiala y pásala por un canal "
-                   "seguro. No se volverá a mostrar." % generada["email"])
-        st.code(generada["clave"], language="")
-        if st.button("Ya la guardé"):
-            st.session_state.pop("pass_generada", None)
+    # La clave vive en session_state: sobrevive a los reruns y llega hasta que
+    # el super_admin pulse "Ya la guardé". Si se pintara solo en el bloque del
+    # formulario, el rerun posterior la borraria y se perderia para siempre.
+    clave = st.session_state.get("nueva_password")
+    if clave:
+        email_clave = st.session_state.get("nueva_password_email") or "—"
+        if st.session_state.get("nueva_password_es_alta"):
+            st.success("¡Operador creado! Cuenta: **%s**" % email_clave)
+        else:
+            st.success("Contraseña nueva para **%s**" % email_clave)
+        st.code(clave, language="text")
+        st.warning("⚠️ Copia esta contraseña ahora. No se volverá a mostrar "
+                   "por seguridad.")
+        if st.button("Ya la guardé", key="cerrar_nueva_password"):
+            for llave in ("nueva_password", "nueva_password_email",
+                          "nueva_password_es_alta"):
+                st.session_state.pop(llave, None)
             st.rerun()
 
     st.divider()
@@ -134,12 +146,22 @@ def render(api) -> None:
             res = api.crear_administrador(
                 email=email, rol=rol, nombre=nombre, telefono=telefono,
                 password=password or None)
-            st.session_state["pass_generada"] = {
-                "email": res.get("email"),
-                "clave": res.get("password_generada") or password}
-            ui.invalidar("admins:lista")
+            nueva = res.get("password_generada") or password
+            if not nueva:
+                st.error("El backend creó la cuenta pero no devolvió la "
+                         "contraseña. Pídesela con el botón 🔑 Contraseña.")
+            else:
+                st.session_state["nueva_password"] = nueva
+                st.session_state["nueva_password_email"] = \
+                    res.get("email") or email
+                st.session_state["nueva_password_es_alta"] = True
+                ui.invalidar("admins:lista")
+                # Se relanza para que el bloque de arriba pinte la clave ya
+                # guardada; sin esto el formulario seguiría mostrando los
+                # campos y la clave no aparecería hasta el siguiente clic.
+                st.rerun()
         except ApiError as exc:
-            ui.flash("error", explicar_error(exc))
+            st.error(explicar_error(exc))
 
     st.divider()
 

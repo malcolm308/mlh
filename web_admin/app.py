@@ -53,6 +53,20 @@ TABS_POR_ROL = {
     "wallet_operator": ["💰 Billetera"],
 }
 
+# Nombre visible -> slug estable para `?tab=...`. Los emojis no van en la URL:
+# se verian escapados y el enlace dejaria de ser legible/compartible.
+TAB_SLUGS = {
+    "🚨 Viajes críticos": "criticos",
+    "🚗 Vehículos": "vehiculos",
+    "🎁 Promociones y tarifas": "promociones",
+    "🧑‍✈️ Chóferes": "choferes",
+    "💰 Billetera": "billetera",
+    "📊 Viajes": "viajes",
+    "👤 Clientes": "clientes",
+    "👥 Gestión de Admins": "admins",
+}
+SLUG_A_TAB = {slug: nombre for nombre, slug in TAB_SLUGS.items()}
+
 
 st.set_page_config(
     page_title="Rapitaxi · Administración",
@@ -168,6 +182,14 @@ def _cerrar_sesion(api: ApiClient, aviso: str = "") -> None:
     _borrar_cookies()
     st.session_state.pop("api", None)
     st.session_state.pop("admin_rol", None)
+    # La pestana recordada es por sesion: al entrar otra cuenta no debe heredar
+    # la seccion (ni la del rol anterior ni la de la URL) del administrador que
+    # acaba de salir.
+    st.session_state.pop("pestana_activa", None)
+    try:
+        st.query_params.pop("tab", None)
+    except Exception:
+        pass
     ui.invalidar()
     if aviso:
         ui.flash("warning", aviso)
@@ -279,13 +301,52 @@ def _cabecera(api: ApiClient) -> None:
     c5.metric("Chóferes", resumen.get("choferes", 0))
 
 
-def _sidebar(api: ApiClient) -> None:
+def _resolver_pestana(permitidas: list[str]) -> str:
+    """Devuelve la pestana activa y la deja en `session_state`.
+
+    Prioridad: `?tab=` de la URL (sobrevive a un F5) -> ultima pestana usada en
+    `session_state` (sobrevive a los reruns que dispara cada accion) -> la
+    primera permitida para el rol.
+
+    Se llama ANTES de crear el widget. Asi un `st.rerun()` tras crear un
+    operador o aprobar un vehiculo NO devuelve al usuario a la primera pestana.
+    """
+    por_url = SLUG_A_TAB.get((st.query_params.get("tab") or "").strip())
+    guardada = st.session_state.get("pestana_activa")
+    for candidata in (por_url, guardada):
+        if candidata in permitidas:
+            st.session_state["pestana_activa"] = candidata
+            return candidata
+    st.session_state["pestana_activa"] = permitidas[0]
+    return permitidas[0]
+
+
+def _al_cambiar_pestana() -> None:
+    """Refleja la pestana elegida en la URL para que un F5 no la pierda."""
+    slug = TAB_SLUGS.get(st.session_state.get("pestana_activa") or "")
+    if slug:
+        st.query_params["tab"] = slug
+
+
+def _sidebar(api: ApiClient, permitidas: Optional[list[str]] = None) -> None:
     with st.sidebar:
         st.markdown("## 🚕 Rapitaxi")
         st.caption("Panel de administración")
         st.markdown("**%s**" % (api.admin_email or "Administrador"))
         st.caption(get_api_base_url())
         st.divider()
+
+        # Selector de seccion: sustituye al `st.tabs` estatico, que reiniciaba
+        # a la primera pestana en cada recarga. La eleccion vive en
+        # `session_state` (reruns) y en `?tab=` (F5, enlace compartido).
+        if permitidas:
+            st.radio(
+                "Sección",
+                permitidas,
+                key="pestana_activa",
+                on_change=_al_cambiar_pestana,
+            )
+            st.divider()
 
         if st.button("🔄 Actualizar datos"):
             ui.invalidar()
@@ -305,9 +366,24 @@ def _sidebar(api: ApiClient) -> None:
 def _panel(api: ApiClient) -> None:
     # Refresca la cookie de sesion en cada carga (si el paquete esta instalado).
     _guardar_cookies(api)
-    _sidebar(api)
     if not st.session_state.get("admin_rol"):
         _cargar_rol(api)
+
+    rol = (st.session_state.get("admin_rol") or "").strip()
+    permitidas = TABS_POR_ROL.get(rol, [])
+
+    if not permitidas:
+        _sidebar(api)
+        st.error(
+            "Tu cuenta de administrador no tiene un rol operativo asignado. "
+            "Pide al **super_admin** (malcolmlamar308@gmail.com) que te asigne "
+            "uno: trip_operator, user_operator o wallet_operator."
+            if rol else
+            "No se pudo identificar el rol de tu cuenta. Inicia sesión de nuevo.")
+        return
+
+    activa = _resolver_pestana(permitidas)
+    _sidebar(api, permitidas)
 
     try:
         _cabecera(api)
@@ -316,22 +392,8 @@ def _panel(api: ApiClient) -> None:
 
     st.divider()
 
-    rol = (st.session_state.get("admin_rol") or "").strip()
-    permitidas = TABS_POR_ROL.get(rol, [])
-    if not permitidas:
-        st.error(
-            "Tu cuenta de administrador no tiene un rol operativo asignado. "
-            "Pide al **super_admin** (%s) que te asigna uno: trip_operator, "
-            "user_operator o wallet_operator." % "malcolmlamarhurtado@gmail.com"
-            if rol else
-            "No se pudo identificar el rol de tu cuenta. Inicia sesión de nuevo.")
-        return
-
-    pestanas = st.tabs(permitidas)
     render_por_nombre = dict(TABS_BASE)
-    for i, nombre in enumerate(permitidas):
-        with pestanas[i]:
-            _seguro(render_por_nombre[nombre], api)
+    _seguro(render_por_nombre[activa], api)
 
 
 # ===================== ARRANQUE =====================
