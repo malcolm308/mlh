@@ -172,6 +172,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Timer? _tripPoller;
   Timer? _earningsTimer;
   Timer? _offerTimer;
+
+  /// Reloj de 1 s del contador de cortesía. Solo corre mientras el viaje está
+  /// en `driver_arrived`; el backend sigue siendo quien decide la espera real
+  /// al cerrar el viaje.
+  Timer? _esperaTimer;
   int _offerCountdown = 0;
   DateTime? _offerDeadlineAt;
   Timer? _lostTimer;
@@ -700,6 +705,7 @@ double? _rumboParaFlecha() {
     _earningsTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _offerTimer?.cancel();
+    _esperaTimer?.cancel();
       _lostTimer?.cancel();
       _subNotif?.cancel();
       _notif.dispose();
@@ -1116,6 +1122,30 @@ double? _rumboParaFlecha() {
   void _startTicker() {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 4), (_) => _tick());
+  }
+
+  /// Mantiene al día el contador de cortesía mientras el chófer espera al
+  /// pasajero en el punto de recogida.
+  ///
+  /// Se repinta cada segundo con el reloj del servidor, no con el del teléfono:
+  /// el teléfono puede ir desfasado y la espera que se cobra la decide el
+  /// backend. Al salir de `driver_arrived` el temporizador se apaga.
+  void _mantenerRelojEspera([TripOffer? viaje]) {
+    final estado = (viaje ?? _activeTrip)?.status;
+    if (estado != 'driver_arrived') {
+      _esperaTimer?.cancel();
+      _esperaTimer = null;
+      return;
+    }
+    if (_esperaTimer?.isActive ?? false) return;
+    _esperaTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || _activeTrip?.status != 'driver_arrived') {
+        _esperaTimer?.cancel();
+        _esperaTimer = null;
+        return;
+      }
+      setState(() {});
+    });
   }
 
   Future<void> _tick() async {
@@ -2124,6 +2154,7 @@ final updated = await widget.api.getTrip(trip.tripId);
         _encuadrarTrayecto(pickup: updated.pickup);
       }
       });
+      _mantenerRelojEspera(updated);
       // Al pasar a 'in_progress' la ruta de recogida se borra al instante y
       // aparece la ruta hacia el destino. Y el ASISTENTE tambien: reset
       // completo de pasos + nueva ruta hacia el destino final (si no,
@@ -2182,6 +2213,7 @@ final updated = await widget.api.getTrip(trip.tripId);
       // de carrera), el evento también se lo devuelve a la pantalla.
       if (!mismoViaje && _activeTrip != null) return;
       setState(() => _activeTrip = actual);
+      _mantenerRelojEspera(actual);
       if (actual.status == 'in_progress') {
         unawaited(_asistente.iniciar(
           tripId: actual.tripId,
@@ -2257,6 +2289,8 @@ final updated = await widget.api.getTrip(trip.tripId);
     _aceptandoTripId = null;
     _tripPoller?.cancel();
     _tripPoller = null;
+    _esperaTimer?.cancel();
+    _esperaTimer = null;
     _recalc.detener();
     // El asistente de ruta se apaga con el viaje: ni mensajes ni peticiones
     // fantasma al proxy de navegacion.
@@ -2431,6 +2465,7 @@ void _startTripPoller() {
       // reiniciar la suya.
       final actual = await widget.api.getTrip(trip.tripId);
       if (!mounted) return;
+      _mantenerRelojEspera(actual);
 
       if (!estadosViajeVivos.contains(actual.status)) {
         // Si lo cerró el administrador (o se completó en otro dispositivo),
@@ -3800,10 +3835,16 @@ String _fmtCoord(LatLng p) =>
   Widget _lineaEspera(TripOffer trip) {
     if (!trip.esperandoPasajero) return const SizedBox.shrink();
 
-    final minutos = trip.esperaSegs ?? 0;
-    // El total se pinta en rojo en cuanto se pasa de la cortesía: a partir de ahi
-    // el pasajero está pagando y conviene que se note.
-    final excede = minutos > (trip.cortesiaMin ?? 4) * 60;
+    // Reloj del servidor: el contador baja solo cada segundo, pero la espera
+    // real y lo que se cobra los decide el backend al iniciar/cerrar el viaje.
+    final ahora = widget.api.ahoraUtc;
+    final espera = trip.esperaVivaSegs(ahora);
+    final restante = trip.cortesiaRestanteSegs(ahora);
+    final excede = restante <= 0;
+    final gratuito = trip.cortesiaTotalSegs;
+    final excedente = trip.excedenteVivo(ahora);
+    final colorTexto =
+        excede ? const Color(0xFFB91C1C) : const Color(0xFF92400E);
 
     return Padding(
       padding: const EdgeInsets.only(top: 6),
@@ -3814,25 +3855,59 @@ String _fmtCoord(LatLng p) =>
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.hourglass_top,
-                size: 16, color: excede ? const Color(0xFFB91C1C) : const Color(0xFF92400E)),
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(Icons.hourglass_top,
+                  size: 16, color: colorTexto),
+            ),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                excede
-                    ? 'Esperando ${trip.esperaLegible}. Se cobran ${(trip.excedenteEsperaVivo / 60).ceil()} min de los que lleva esperando.'
-                    : 'Esperando ${trip.esperaLegible}. ${trip.cortesiaMin ?? 4} min gratis, los de más se cobran.',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: excede ? const Color(0xFFB91C1C) : const Color(0xFF92400E),
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Cortesía: ${_mmss(restante)} de ${_mmss(gratuito)}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: colorTexto,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    excede
+                        ? 'Esperando al cliente ${_mmss(espera)}. '
+                            'Cortesía agotada: se cobran '
+                            '${(excedente / 60).ceil()} min de espera.'
+                        : 'Esperando al cliente ${_mmss(espera)}. '
+                            'Los primeros $gratuito s de espera son gratis.',
+                    style: TextStyle(fontSize: 11, color: colorTexto),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Solo espera: no se suma al tiempo del viaje.',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: colorTexto.withValues(alpha: 0.85),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// Reloj "m:ss" para el contador de cortesía.
+  String _mmss(int segundos) {
+    final total = segundos < 0 ? 0 : segundos;
+    final m = total ~/ 60;
+    final s = total % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
   }
 
   Widget _buildActiveTripPanel() {

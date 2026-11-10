@@ -322,8 +322,60 @@ this.currency = 'CUP',
     if (excedenteEsperaSegs != null) return excedenteEsperaSegs!;
     final espera = esperaSegs ?? 0;
     if (espera <= 0) return 0;
-    final gratis = (cortesiaMin ?? 4) * 60;
+    final gratis = cortesiaTotalSegs;
     final exceso = espera - gratis;
+    return exceso > 0 ? exceso : 0;
+  }
+
+  /// Segundos de cortesía que regala la plataforma en este viaje.
+  int get cortesiaTotalSegs => (cortesiaMin ?? 4) * 60;
+
+  /// `hora_llegada` interpretada como UTC.
+  ///
+  /// El backend la guarda en una columna TIMESTAMP sin zona y la serializa con
+  /// `isoformat()` sin sufijo `Z`. Si se parsea a secas, Dart la toma como hora
+  /// local y el contador se descuadra por el desfase del país.
+  DateTime? get horaLlegadaUtc {
+    final raw = horaLlegada;
+    if (raw == null || raw.trim().isEmpty) return null;
+    final parsed = DateTime.tryParse(raw.trim());
+    if (parsed == null) return null;
+    if (parsed.isUtc) return parsed;
+    return DateTime.utc(
+      parsed.year,
+      parsed.month,
+      parsed.day,
+      parsed.hour,
+      parsed.minute,
+      parsed.second,
+      parsed.millisecond,
+      parsed.microsecond,
+    );
+  }
+
+  /// Espera en vivo: usa el dato del backend cuando el viaje ya empezó y, si
+  /// el pasajero todavía no ha subido, el tiempo transcurrido desde
+  /// `hora_llegada`. El reloj que se pasa es el del servidor (`ahoraUtc`), no
+  /// el del teléfono.
+  int esperaVivaSegs(DateTime ahoraUtc) {
+    if (esperaSegs != null && esperaSegs! > 0) return esperaSegs!;
+    final llegada = horaLlegadaUtc;
+    if (llegada == null) return esperaSegs ?? 0;
+    final segundos = ahoraUtc.difference(llegada).inSeconds;
+    return segundos > 0 ? segundos : 0;
+  }
+
+  /// Segundos de cortesía que quedan. Cero cuando ya se agotó.
+  int cortesiaRestanteSegs(DateTime ahoraUtc) {
+    final restante = cortesiaTotalSegs - esperaVivaSegs(ahoraUtc);
+    return restante > 0 ? restante : 0;
+  }
+
+  /// Excedente que se está cobrando ya, calculado en vivo con la misma regla
+  /// que aplica el backend al cerrar el viaje.
+  int excedenteVivo(DateTime ahoraUtc) {
+    if (excedenteEsperaSegs != null) return excedenteEsperaSegs!;
+    final exceso = esperaVivaSegs(ahoraUtc) - cortesiaTotalSegs;
     return exceso > 0 ? exceso : 0;
   }
 
