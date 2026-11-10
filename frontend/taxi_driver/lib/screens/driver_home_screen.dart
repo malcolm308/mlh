@@ -3882,7 +3882,7 @@ String _fmtCoord(LatLng p) =>
                             'Cortesía agotada: se cobran '
                             '${(excedente / 60).ceil()} min de espera.'
                         : 'Esperando al cliente ${_mmss(espera)}. '
-                            'Los primeros $gratuito s de espera son gratis.',
+                            'Los primeros ${trip.cortesiaMin ?? 4} min de espera son gratis.',
                     style: TextStyle(fontSize: 11, color: colorTexto),
                   ),
                   const SizedBox(height: 2),
