@@ -149,28 +149,34 @@ def _restaurar_sesion() -> Optional[ApiClient]:
     # Un cierre de sesion acaba de pasar: ni reintentar, aunque la cookie aun
     # viva en el navegador (el borrado via JS puede correr despues del rerun).
     if st.session_state.pop("_logout_en_curso", False):
+        st.session_state["_debug_restore"] = "logout_en_curso=True"
         return None
     try:
         cookies = st.context.cookies
+        st.session_state["_debug_cookies"] = ",".join(sorted(cookies.keys()))
         refresh = (cookies.get(_COOKIE_REFRESH) or "").strip()
-    except Exception:
+    except Exception as exc:
+        st.session_state["_debug_restore"] = "excepcion cookies: %s" % exc
         return None
     if not refresh:
+        st.session_state["_debug_restore"] = "sin cookie refresh (keys=%s)" % st.session_state.get("_debug_cookies", "")
         return None
 
     cliente = ApiClient(get_api_base_url())
     try:
         with st.spinner("Restaurando sesión..."):
             cliente.restaurar(refresh, cookies.get(_COOKIE_ADMIN) or "")
-    except SesionExpirada:
+    except SesionExpirada as exc:
+        st.session_state["_debug_restore"] = "SesionExpirada: %s" % exc
         _borrar_cookies()
         return None
     except ApiError as exc:
-        # Un fallo de red no invalida el refresh: se conserva la cookie.
+        st.session_state["_debug_restore"] = "ApiError: %s" % exc
         st.warning("No se pudo restaurar la sesión: %s" % explicar_error(exc))
         return None
     st.session_state["api"] = cliente
     _cargar_rol(cliente)
+    st.session_state["_debug_restore"] = "OK restaurado"
     return cliente
 
 
@@ -240,6 +246,10 @@ def _login() -> None:
             entrar = st.form_submit_button("Entrar", type="primary")
 
         st.caption("Servidor: %s" % get_api_base_url())
+        if st.session_state.get("_debug_restore") or st.session_state.get("_debug_cookies"):
+            st.caption("DEBUG restore: %s | cookies: %s"
+                       % (st.session_state.get("_debug_restore", ""),
+                          st.session_state.get("_debug_cookies", "")))
         st.caption(
             "La primera petición del día puede tardar hasta 90 s: el backend "
             "gratuito de Render se duerme a los 15 min sin uso."
