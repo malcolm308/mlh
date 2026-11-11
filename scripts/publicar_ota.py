@@ -7,6 +7,10 @@ Ejemplos:
     python scripts/publicar_ota.py --app client --version 1.0.2 --version-code 3 \
         --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 
+    # Nombre distinto para saltarse la cache del navegador/telefono
+    python scripts/publicar_ota.py --app client --version 1.0.3 --version-code 4004 \
+        --apk .../app-arm64-v8a-release.apk --apk-name app_cliente_v2.apk
+
     # Parche para quien tenga el APK base 1.0.1 (versionCode 2)
     python scripts/publicar_ota.py --app client --version 1.0.2 --version-code 3 \
         --apk .../app-arm64-v8a-release.apk \
@@ -71,6 +75,12 @@ def main() -> None:
     parser.add_argument("--version", required=True, help="1.0.2 (sin +build)")
     parser.add_argument("--version-code", type=int, required=True)
     parser.add_argument("--apk", type=Path, required=True)
+    parser.add_argument(
+        "--apk-name",
+        help="Nombre del APK dentro de static/. Por defecto app_latest.apk "
+             "(cliente) o app_chofer_latest.apk (chofer). Un nombre nuevo "
+             "evita que el navegador o el telefono sirvan una copia cacheada.",
+    )
     parser.add_argument("--patch", type=Path, help="patch.zip generado por pack")
     parser.add_argument("--patch-version", help="1.0.2-p1")
     parser.add_argument("--target-version-code", type=int,
@@ -85,7 +95,10 @@ def main() -> None:
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
     # 1. APK completo.
-    destino_apk = STATIC_DIR / APK_DESTINO[args.app]
+    nombre_apk = Path(args.apk_name).name if args.apk_name else APK_DESTINO[args.app]
+    if not nombre_apk.lower().endswith(".apk"):
+        raise SystemExit("--apk-name debe terminar en .apk")
+    destino_apk = STATIC_DIR / nombre_apk
     shutil.copyfile(args.apk, destino_apk)
     print(f"[ota] APK  -> {destino_apk} ({destino_apk.stat().st_size:,} bytes)")
 
