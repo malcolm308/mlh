@@ -1,9 +1,14 @@
-"""Billetera (fondo) de los choferes.
+"""Billetera (fondo) de choferes y clientes.
 
 Servicio de recargas y movimientos del fondo. El saldo vive en el documento del
-chofer en MongoDB (campo `Fondo`), que es de donde ya descontan la comision del
-15% y de donde salen las transferencias entre choferes. Aqui queda el libro de
-movimientos (PostgreSQL) y los endpoints que consume la app de administracion.
+usuario en MongoDB (campo `Fondo`): en la coleccion de choferes es de donde
+descuentan la comision del 15%, y en la de clientes es el saldo con el que
+pagan los viajes por Billetera y las transferencias entre pasajeros. Aqui queda
+el libro de movimientos (PostgreSQL) y los endpoints que consume la app de
+administracion.
+
+El libro `wallet_movements` distingue `user_type` ('driver' | 'client') para
+que los movimientos de un chofer y de un cliente con el mismo id no se mezclen.
 
 Endpoints (todos requieren token de administrador salvo el saldo):
     GET  /billetera/saldo/{driver_id}          saldo de un chofer
@@ -12,8 +17,14 @@ Endpoints (todos requieren token de administrador salvo el saldo):
     POST /billetera/descargo                  debito manual (admin)
     GET  /billetera/movimientos               historial de movimientos
     GET  /billetera/resumen                   totales de recargas del dia
+    GET  /billetera/clientes                  lista corta de pasajeros
+    GET  /billetera/clientes/{client_id}      saldo de un pasajero
+    POST /billetera/clientes/recarga          abono al Fondo del pasajero
+    POST /billetera/clientes/descargo         debito del Fondo del pasajero
+    GET  /billetera/clientes/{id}/movimientos historial del pasajero
 """
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -24,8 +35,13 @@ from pydantic import BaseModel, Field
 
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
+from db.Cliente.connection import cliente_db
 from db.Administración.auth import verify_token as verify_admin_token
-from routers.Solicitud_de_viajes_v4 import get_connection
+from routers.Solicitud_de_viajes_v4 import (
+    _buscar_por_telefono,
+    _telefono_visible,
+    get_connection,
+)
 from routers.admin_roles import REQUIERE_OPERADOR_CARTERA
 
 logger = logging.getLogger(__name__)
@@ -33,6 +49,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billetera", tags=["Billetera"])
 
 chofer_coleccion = chofer_db.users          # los choferes viven en la BD Chofer
+cliente_coleccion = cliente_db.users        # los pasajeros viven en la BD Cliente
 admin_coleccion = admin_db.users            # administradores
 
 # Metodos de recarga que puede registrar el administrador
@@ -57,6 +74,32 @@ class DescargoIn(BaseModel):
     nota: Optional[str] = None
 
 
+class RecargaClienteIn(BaseModel):
+    """Abono al Fondo de un pasajero desde el panel de administracion.
+
+    Se puede identificar al pasajero por id, correo o telefono: el panel manda
+    el `client_id` que ya tiene de la busqueda, pero aceptar los otros dos
+    permite usar la API a mano sin depender del ObjectId de Mongo.
+    """
+
+    client_id: Optional[str] = None
+    email: Optional[str] = None
+    telefono: Optional[str] = None
+    monto: float = Field(..., gt=0)
+    metodo: str = "efectivo"
+    referencia: Optional[str] = None
+    nota: Optional[str] = None
+
+
+class DescargoClienteIn(BaseModel):
+    client_id: Optional[str] = None
+    email: Optional[str] = None
+    telefono: Optional[str] = None
+    monto: float = Field(..., gt=0)
+    metodo: str = "ajuste"
+    nota: Optional[str] = None
+
+
 # ===================== BASE DE DATOS =====================
 
 def init_wallet_db():
@@ -64,7 +107,11 @@ def init_wallet_db():
     ddl = """
         CREATE TABLE IF NOT EXISTS wallet_movements (
             movement_id SERIAL PRIMARY KEY,
+            -- Id del usuario dueno del Fondo. Se conserva el nombre historico
+            -- `driver_id` para no romper el libro ya existente; `user_type`
+            -- dice si ese id pertenece a un chofer o a un cliente.
             driver_id VARCHAR(50) NOT NULL,
+            user_type VARCHAR(10) NOT NULL DEFAULT 'driver',
             admin_id VARCHAR(50),
             admin_email VARCHAR(200),
             tipo VARCHAR(20) NOT NULL,
@@ -76,8 +123,12 @@ def init_wallet_db():
             nota TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         );
+        -- Bases creadas antes de que existieran las billeteras de clientes:
+        -- la columna se agrega sin tocar las filas viejas (quedan 'driver').
+        ALTER TABLE wallet_movements
+            ADD COLUMN IF NOT EXISTS user_type VARCHAR(10) NOT NULL DEFAULT 'driver';
         CREATE INDEX IF NOT EXISTS idx_wallet_mov_driver
-            ON wallet_movements (driver_id, created_at DESC);
+            ON wallet_movements (user_type, driver_id, created_at DESC);
     """
     try:
         with get_connection() as conn:
@@ -125,22 +176,72 @@ def _driver_doc(identifier: str):
     return chofer_coleccion.find_one({"email": ident.lower()})
 
 
+def _cliente_doc(identifier: str):
+    """Busca un pasajero por id, correo o telefono."""
+    from bson import ObjectId
+
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+
+    if ObjectId.is_valid(ident):
+        doc = cliente_coleccion.find_one({"_id": ObjectId(ident)})
+        if doc:
+            return doc
+    if "@" in ident:
+        doc = cliente_coleccion.find_one({"email": ident.lower()})
+        if doc:
+            return doc
+    return _buscar_por_telefono(cliente_coleccion, ident)
+
+
 def _saldo(doc) -> float:
     return float(doc.get("Fondo") or doc.get("fondo") or 0)
 
 
+def _nombre_cliente(doc) -> Optional[str]:
+    """Nombre legible del pasajero (soporta el perfil nuevo y el viejo)."""
+    if not doc:
+        return None
+    nombre = " ".join(filter(None, [
+        doc.get("Nombre"), doc.get("Apellidos")])).strip()
+    if nombre:
+        return nombre
+    profile = doc.get("profile") or {}
+    return ((profile.get("name") or "").strip()
+            or (doc.get("nombre") or "").strip() or None)
+
+
+def _telefono_cliente(doc) -> Optional[str]:
+    if not doc:
+        return None
+    profile = doc.get("profile") or {}
+    return _telefono_visible(
+        doc.get("numero_de_telefono") or doc.get("phone")
+        or profile.get("phone"))
+
+
+def _identificador_cliente(body) -> Optional[str]:
+    """Primer identificador no vacio del cuerpo (id, correo o telefono)."""
+    for valor in (body.client_id, body.email, body.telefono):
+        if valor and str(valor).strip():
+            return str(valor).strip()
+    return None
+
+
 def _registrar_movimiento(conn, driver_id, admin, tipo, monto, saldo_anterior,
-                          saldo_nuevo, metodo, referencia, nota) -> int:
+                          saldo_nuevo, metodo, referencia, nota,
+                          user_type: str = "driver") -> int:
     cur = conn.cursor()
     cur.execute(
         """
         INSERT INTO wallet_movements (
-            driver_id, admin_id, admin_email, tipo, monto,
+            driver_id, user_type, admin_id, admin_email, tipo, monto,
             saldo_anterior, saldo_nuevo, metodo, referencia, nota
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING movement_id
         """,
-        (driver_id, admin["id"], admin["email"], tipo, monto,
+        (driver_id, user_type, admin["id"], admin["email"], tipo, monto,
          round(saldo_anterior, 2), round(saldo_nuevo, 2), metodo,
          referencia, nota),
     )
@@ -331,11 +432,12 @@ async def movimientos(driver_id: Optional[str] = None, limit: int = 100,
         SELECT movement_id, driver_id, admin_email, tipo, monto,
                saldo_anterior, saldo_nuevo, metodo, referencia, nota, created_at
           FROM wallet_movements
+         WHERE user_type = 'driver'
     """
     params = []
     if driver_id:
         doc = _driver_doc(driver_id)
-        sql += " WHERE driver_id = %s"
+        sql += " AND driver_id = %s"
         params.append(str(doc["_id"]) if doc else driver_id)
     sql += " ORDER BY created_at DESC, movement_id DESC LIMIT %s"
     params.append(min(limit, 500))
@@ -368,7 +470,8 @@ async def resumen(admin: dict = Depends(require_admin)):
                 COUNT(*) FILTER (WHERE tipo = 'recarga')                AS num_recargas,
                 COUNT(*) FILTER (WHERE tipo = 'debito')                  AS num_debitos
               FROM wallet_movements
-             WHERE created_at::date = CURRENT_DATE
+             WHERE user_type = 'driver'
+               AND created_at::date = CURRENT_DATE
             """
         )
         row = dict(cur.fetchone() or {})
@@ -376,3 +479,221 @@ async def resumen(admin: dict = Depends(require_admin)):
     for k in ("recargado", "descontado"):
         row[k] = float(row.get(k) or 0)
     return row
+
+
+# ===================== BILLETERA DE CLIENTES =====================
+
+@router.get("/clientes")
+async def listar_clientes(q: Optional[str] = None, limit: int = 50,
+                          admin: dict = Depends(require_admin)):
+    """Lista corta de pasajeros para el buscador del panel.
+
+    Devuelve el saldo del Fondo para que el operador vea de un golpe a quien
+    va a abonar, sin una peticion extra por cada fila.
+    """
+    query = {"eliminado": {"$ne": True}}
+    if q and q.strip():
+        texto = re.escape(q.strip())
+        query["$or"] = [
+            {"email": {"$regex": texto, "$options": "i"}},
+            {"Nombre": {"$regex": texto, "$options": "i"}},
+            {"Apellidos": {"$regex": texto, "$options": "i"}},
+            {"numero_de_telefono": {"$regex": texto, "$options": "i"}},
+        ]
+    docs = list(cliente_coleccion.find(query, {"password": 0})
+                .sort([("Nombre", 1), ("Apellidos", 1)])
+                .limit(min(limit, 200)))
+    return [
+        {
+            "client_id": str(d["_id"]),
+            "nombre": _nombre_cliente(d),
+            "telefono": _telefono_cliente(d),
+            "email": d.get("email"),
+            "saldo": round(_saldo(d), 2),
+        }
+        for d in docs
+    ]
+
+
+@router.get("/clientes/{client_id}")
+async def saldo_cliente(client_id: str, admin: dict = Depends(require_admin)):
+    """Saldo actual del Fondo de un pasajero."""
+    doc = _cliente_doc(client_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    return {
+        "client_id": str(doc["_id"]),
+        "nombre": _nombre_cliente(doc),
+        "telefono": _telefono_cliente(doc),
+        "email": doc.get("email"),
+        "saldo": round(_saldo(doc), 2),
+        "currency": "CUP",
+    }
+
+
+@router.post("/clientes/recarga")
+async def recargar_cliente(body: RecargaClienteIn,
+                           admin: dict = Depends(REQUIERE_OPERADOR_CARTERA)):
+    """Abona saldo al Fondo de un pasajero (transferencia desde el panel).
+
+    El dinero entra al mismo campo `Fondo` que usa la app del cliente para
+    pagar viajes con Billetera. Cada abono queda en el libro de movimientos
+    con el administrador que lo aplico.
+    """
+    identificador = _identificador_cliente(body)
+    if not identificador:
+        raise HTTPException(
+            status_code=400,
+            detail="Indique client_id, email o telefono del cliente")
+
+    doc = _cliente_doc(identificador)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+    metodo = (body.metodo or "efectivo").strip().lower()
+    if metodo not in METODOS_RECARGA:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Metodo invalido. Opciones: {', '.join(METODOS_RECARGA)}",
+        )
+
+    client_id = str(doc["_id"])
+    monto = round(float(body.monto), 2)
+    anterior = _saldo(doc)
+    nuevo = round(anterior + monto, 2)
+
+    try:
+        resultado = cliente_coleccion.update_one(
+            {"_id": doc["_id"]}, {"$inc": {"Fondo": monto}})
+        if resultado.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        with get_connection() as conn:
+            movement_id = _registrar_movimiento(
+                conn, client_id, admin, "recarga", monto, anterior, nuevo,
+                metodo, body.referencia, body.nota, user_type="client",
+            )
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Si falla el libro, se revierte el saldo para no dejar dinero sin
+        # respaldo contable.
+        try:
+            cliente_coleccion.update_one(
+                {"_id": doc["_id"]}, {"$inc": {"Fondo": -monto}})
+        except Exception:
+            logger.exception("No se pudo revertir la recarga del cliente %s",
+                             client_id)
+        logger.exception("Fallo la recarga del cliente %s", client_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo registrar la recarga: {e}")
+
+    return {
+        "ok": True,
+        "movement_id": movement_id,
+        "client_id": client_id,
+        "nombre": _nombre_cliente(doc),
+        "telefono": _telefono_cliente(doc),
+        "monto": monto,
+        "saldo_anterior": round(anterior, 2),
+        "saldo_nuevo": nuevo,
+        "metodo": metodo,
+        "message": f"Recarga de {monto} CUP aplicada al cliente",
+    }
+
+
+@router.post("/clientes/descargo")
+async def descontar_cliente(body: DescargoClienteIn,
+                            admin: dict = Depends(REQUIERE_OPERADOR_CARTERA)):
+    """Descuenta saldo del Fondo de un pasajero (ajuste o penalizacion)."""
+    identificador = _identificador_cliente(body)
+    if not identificador:
+        raise HTTPException(
+            status_code=400,
+            detail="Indique client_id, email o telefono del cliente")
+
+    doc = _cliente_doc(identificador)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+    client_id = str(doc["_id"])
+    monto = round(float(body.monto), 2)
+    anterior = _saldo(doc)
+
+    try:
+        # El filtro `Fondo >= monto` hace el debito atomico: dos operadores
+        # simultaneos no pueden dejar el saldo en negativo.
+        resultado = cliente_coleccion.update_one(
+            {"_id": doc["_id"], "Fondo": {"$gte": monto}},
+            {"$inc": {"Fondo": -monto}})
+        if resultado.modified_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Saldo insuficiente para el débito")
+        nuevo = round(anterior - monto, 2)
+        with get_connection() as conn:
+            movement_id = _registrar_movimiento(
+                conn, client_id, admin, "debito", -monto, anterior, nuevo,
+                (body.metodo or "ajuste").lower(), None, body.nota,
+                user_type="client",
+            )
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            cliente_coleccion.update_one(
+                {"_id": doc["_id"]}, {"$inc": {"Fondo": monto}})
+        except Exception:
+            logger.exception("No se pudo revertir el debito del cliente %s",
+                             client_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo registrar el debito: {e}")
+
+    return {
+        "ok": True,
+        "movement_id": movement_id,
+        "client_id": client_id,
+        "nombre": _nombre_cliente(doc),
+        "telefono": _telefono_cliente(doc),
+        "monto": -monto,
+        "saldo_anterior": round(anterior, 2),
+        "saldo_nuevo": nuevo,
+        "message": f"Debito de {monto} CUP aplicado al cliente",
+    }
+
+
+@router.get("/clientes/{client_id}/movimientos")
+async def movimientos_cliente(client_id: str, limit: int = 100,
+                              admin: dict = Depends(require_admin)):
+    """Historial de recargas y descuentos del Fondo de un pasajero."""
+    doc = _cliente_doc(client_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT movement_id, driver_id, admin_email, tipo, monto,
+                   saldo_anterior, saldo_nuevo, metodo, referencia, nota,
+                   created_at
+              FROM wallet_movements
+             WHERE user_type = 'client' AND driver_id = %s
+             ORDER BY created_at DESC, movement_id DESC
+             LIMIT %s
+            """,
+            (str(doc["_id"]), min(limit, 500)),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+
+    for r in rows:
+        r["monto"] = float(r["monto"])
+        r["saldo_anterior"] = float(r["saldo_anterior"])
+        r["saldo_nuevo"] = float(r["saldo_nuevo"])
+        if isinstance(r.get("created_at"), datetime):
+            r["created_at"] = r["created_at"].isoformat()
+    return rows

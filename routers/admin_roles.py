@@ -56,7 +56,7 @@ def _admin_doc_por_email(email: Optional[str]) -> Optional[dict]:
     doc = admin_coleccion.find_one({"email": email})
     if doc:
         return doc
-    seguro = re.escape(text_email)
+    seguro = re.escape(email)
     return admin_coleccion.find_one({"email": {"$regex":("^%s$" % seguro),
                                                "$options": "i"}})
 

@@ -521,6 +521,47 @@ class ApiClient:
     def billetera_resumen(self) -> dict:
         return self._json("GET", "/billetera/resumen")
 
+    # ---------------- billetera de clientes ----------------
+
+    def billetera_clientes(self, q: Optional[str] = None) -> list:
+        """Pasajeros con su Fondo actual (buscador del panel)."""
+        return self._json("GET", "/billetera/clientes",
+                          params={"q": q} if q else None)
+
+    def billetera_cliente_saldo(self, client_id: str) -> dict:
+        return self._json(
+            "GET", "/billetera/clientes/%s" % quote(client_id, safe=""))
+
+    def billetera_cliente_recarga(self, client_id: str, monto: float,
+                                  metodo: str = "efectivo",
+                                  referencia: str = "",
+                                  nota: str = "") -> dict:
+        """Abono al Fondo del pasajero (transferencia desde el panel)."""
+        return self._json("POST", "/billetera/clientes/recarga", json={
+            "client_id": client_id,
+            "monto": monto,
+            "metodo": metodo,
+            "referencia": referencia.strip() or None,
+            "nota": nota.strip() or None,
+        })
+
+    def billetera_cliente_descargo(self, client_id: str, monto: float,
+                                   metodo: str = "ajuste",
+                                   nota: str = "") -> dict:
+        return self._json("POST", "/billetera/clientes/descargo", json={
+            "client_id": client_id,
+            "monto": monto,
+            "metodo": metodo,
+            "nota": nota.strip() or None,
+        })
+
+    def billetera_cliente_movimientos(self, client_id: str,
+                                      limit: int = 100) -> list:
+        return self._json(
+            "GET",
+            "/billetera/clientes/%s/movimientos" % quote(client_id, safe=""),
+            params={"limit": limit})
+
 
 def _payload_seguro(resp: requests.Response) -> Any:
     try:

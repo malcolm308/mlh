@@ -48,13 +48,23 @@ No hace falta configurar Mongo ni Postgres en este servicio.
 | Vehículos | Revisión de fotos y aprobación/rechazo del garaje. | `GET /admin/vehicles`, `PUT /admin/vehicles/{id}/approve`, `GET /garaje/imagen/{archivo}` |
 | Promociones y tarifas | Comisión, bono, descuento, referidos, caducidad, coeficientes por distancia y espera de cortesía. | `GET/PUT /admin/configuracion` |
 | Chóferes | Habilitar o rechazar cuentas y ver documentos faltantes. | `GET /admin/choferes`, `POST /admin/choferes/{id}/estado` |
-| Billetera | Saldo, recargas, descuentos y movimientos. | `GET /billetera/choferes`, `GET /billetera/saldo/{id}`, `POST /billetera/recarga`, `POST /billetera/descargo`, `GET /billetera/movimientos` |
+| Billetera | Chóferes y clientes: saldo, recargas/abonos, descuentos y movimientos. | `GET /billetera/choferes`, `GET /billetera/saldo/{id}`, `POST /billetera/recarga`, `POST /billetera/descargo`, `GET /billetera/movimientos`, `GET /billetera/clientes`, `GET /billetera/clientes/{id}`, `POST /billetera/clientes/recarga`, `POST /billetera/clientes/descargo`, `GET /billetera/clientes/{id}/movimientos` |
 | Viajes | Totales del día, evolución y detalle. | `GET /admin/trips/resumen`, `GET /admin/trips/diarios`, `GET /admin/trips/dia` |
 
 `GET/PUT /admin/configuracion`, `GET /admin/alerts/pending`,
 `POST /admin/trips/{id}/force-assign` y `POST /admin/trips/check-orphaned`
 viven en `routers/admin_web.py` y reutilizan la lógica ya existente del
 backend.
+
+### Billetera de clientes
+
+La pestaña **Billetera** tiene un selector *Chóferes / Clientes*. En la parte
+de clientes se busca al pasajero por nombre, teléfono o correo y se abona
+(recarga) o descuenta sobre su campo `Fondo` en Mongo (`Cliente.users`). Ese es
+el mismo saldo con el que la app del pasajero paga los viajes por Billetera y
+hace transferencias entre pasajeros, así que un abono desde el panel se ve al
+instante en la app. Los movimientos se guardan en `wallet_movements` con
+`user_type = 'client'`, separados de los de chóferes.
 
 ## Viajes huérfanos y Telegram
 
