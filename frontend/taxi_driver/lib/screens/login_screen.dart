@@ -96,7 +96,11 @@ class _LoginScreenState extends State<LoginScreen> {
         s.contains('tarda demasiado')) {
       return 'No se pudo conectar. Revisa tu conexión e inténtalo de nuevo.';
     }
-    return s;
+    if (s.contains('HTTP 401')) return 'El teléfono o la contraseña no son correctos.';
+    if (s.contains('HTTP 5')) {
+      return 'El servidor no está disponible. Inténtalo más tarde.';
+    }
+    return s.replaceAll(RegExp(r'\s*\(HTTP \d+\)$'), '');
   }
 
   /// Consulta la version al backend y muestra el aviso si es obligatorio.
