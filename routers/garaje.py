@@ -110,6 +110,59 @@ def _admin_actual(authorization: Optional[str]) -> str:
 
 # ============================ HELPERS ============================
 
+# Fotos del vehiculo que el chofer sube en `POST /documentos/registro`.
+CAMPOS_FOTO_VEHICULO = (
+    "vehiculo_exterior_frente", "vehiculo_exterior_atras",
+    "vehiculo_interior_frente", "vehiculo_interior_atras",
+    "circulacion", "licencia_frente", "licencia_atras",
+)
+
+# Nombre publico (el que guarda el garaje) de las tres fotos del vehiculo.
+ALIAS_FOTO_VEHICULO = {
+    "vehiculo_exterior_frente": "foto_exterior_delante",
+    "vehiculo_exterior_atras": "foto_exterior_atras",
+    "circulacion": "foto_circulacion",
+}
+
+
+# driver_id -> (timestamp, {campo: url}). Las fotos del registro casi no
+# cambian; 20 s evita repetir la lectura de Mongo al pintar una lista.
+_cache_urls_registro: Dict[str, Tuple[float, dict]] = {}
+_CACHE_URLS_TTL = 20.0
+
+
+def _urls_registro_vehiculo(driver_id) -> dict:
+    """URLs de las fotos del vehiculo que el chofer subio al registrarse.
+
+    La fuente de verdad es el documento del chofer (`documentos`): ahi estan
+    las referencias a Cloudinary (con su `secure_url`) o al archivo en disco.
+    Se usa tanto al sembrar el vehiculo como al hidratar los que ya existian
+    sin fotos (choferes creados por el backfill de arranque).
+    """
+    driver_id = str(driver_id or "")
+    if not driver_id or not ObjectId.is_valid(driver_id):
+        return {}
+    ahora = time.time()
+    tallo = _cache_urls_registro.get(driver_id)
+    if tallo and (ahora - tallo[0]) < _CACHE_URLS_TTL:
+        return dict(tallo[1])
+    chofer = chofer_coleccion.find_one({"_id": ObjectId(driver_id)})
+    if not chofer:
+        return {}
+    urls = {}
+    for ref in chofer.get("documentos") or []:
+        if not isinstance(ref, dict):
+            continue
+        campo = ref.get("campo")
+        if campo not in CAMPOS_FOTO_VEHICULO:
+            continue
+        url = _url_foto_registro(driver_id, ref)
+        if url:
+            urls[str(campo)] = url
+    _cache_urls_registro[driver_id] = (ahora, urls)
+    return dict(urls)
+
+
 def _foto_exterior_registro(doc: dict) -> Optional[dict]:
     """Foto exterior del registro clasico (`/documentos/registro`).
 
@@ -150,13 +203,17 @@ def _foto_exterior_url(doc: dict) -> Optional[str]:
     explicita = doc.get("foto_exterior_url")
     if isinstance(explicita, str) and explicita.strip():
         return explicita.strip()
-    fotos = doc.get("fotos") or {}
-    if isinstance(fotos, dict):
-        for campo in ("vehiculo_exterior_frente", "vehiculo_exterior_atras"):
-            ref = fotos.get(campo) or {}
-            archivo = ref.get("archivo") if isinstance(ref, dict) else None
-            if archivo:
-                return "/garaje/imagen/%s" % archivo
+    fotos = _fotos_salida(doc) or {}
+    for campo in ("vehiculo_exterior_frente", "vehiculo_exterior_atras"):
+        ref = fotos.get(campo) or {}
+        if not isinstance(ref, dict):
+            continue
+        archivo = ref.get("archivo")
+        if archivo:
+            return "/garaje/imagen/%s" % archivo
+        url = ref.get("url")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
     registro = _foto_exterior_registro(doc)
     if registro:
         return "/documentos/chofer/%s/foto/%s" % (
@@ -176,7 +233,26 @@ def _foto_campo_url(doc: dict, campo: str) -> Optional[str]:
         ref = fotos.get(campo) or {}
         if isinstance(ref, dict) and ref.get("archivo"):
             return "/garaje/imagen/%s" % ref["archivo"]
-    return doc.get("%s_url" % campo)
+    directa = doc.get(campo)
+    if isinstance(directa, str) and directa.strip():
+        return directa.strip()
+    url = doc.get("%s_url" % campo)
+    if url:
+        return url
+    campo_registro = {
+        "license_front": "licencia_frente",
+        "license_back": "licencia_atras",
+        "foto_exterior_delante": "vehiculo_exterior_frente",
+        "foto_exterior_atras": "vehiculo_exterior_atras",
+        "foto_circulacion": "circulacion",
+    }.get(campo, campo)
+    salida = _fotos_salida(doc) or {}
+    ref = salida.get(campo_registro) or {}
+    if isinstance(ref, dict):
+        url = ref.get("url")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
+    return None
 
 
 def _url_foto_registro(driver_id: str, ref: dict) -> Optional[str]:
@@ -221,18 +297,7 @@ def crear_vehiculo_inicial(chofer: dict) -> Optional[dict]:
         return None
 
     matricula = _matricula_norm(vehicle.get("chapa") or "")
-    campos_vehiculo = (
-        "vehiculo_exterior_frente", "vehiculo_exterior_atras",
-        "vehiculo_interior_frente", "vehiculo_interior_atras",
-        "circulacion", "licencia_frente", "licencia_atras",
-    )
-    urls = {}
-    for ref in chofer.get("documentos") or []:
-        if not isinstance(ref, dict) or ref.get("campo") not in campos_vehiculo:
-            continue
-        url = _url_foto_registro(driver_id, ref)
-        if url:
-            urls[str(ref["campo"])] = url
+    urls = _urls_registro_vehiculo(driver_id)
 
     doc = {
         "_id": ObjectId(),
@@ -253,6 +318,11 @@ def crear_vehiculo_inicial(chofer: dict) -> Optional[dict]:
                 or urls.get("vehiculo_exterior_atras"))
     if exterior:
         doc["foto_exterior_url"] = exterior
+    for campo, alias in ALIAS_FOTO_VEHICULO.items():
+        if urls.get(campo):
+            doc[alias] = urls[campo]
+            # `foto_exterior_delante`/`foto_exterior_atras` son los nombres que
+            # consume el panel; los dos apuntan a la misma URL de Cloudinary.
     if urls.get("licencia_frente"):
         doc["license_front_url"] = urls["licencia_frente"]
     if urls.get("licencia_atras"):
@@ -283,6 +353,9 @@ def _vehiculo_out(doc: dict) -> dict:
         "fotos": _fotos_salida(doc),
         "fotos_faltantes": _faltantes_de(doc),
         "foto_exterior_url": _foto_exterior_url(doc),
+        "foto_exterior_delante": _foto_campo_url(doc, "foto_exterior_delante"),
+        "foto_exterior_atras": _foto_campo_url(doc, "foto_exterior_atras"),
+        "foto_circulacion": _foto_campo_url(doc, "foto_circulacion"),
         "license_front_url": _foto_campo_url(doc, "license_front"),
         "license_back_url": _foto_campo_url(doc, "license_back"),
     }
@@ -462,11 +535,13 @@ def _fotos_salida(doc: dict) -> Optional[dict]:
     fotos = doc.get("fotos")
     if isinstance(fotos, dict) and fotos:
         return fotos
-    # Vehiculo sembrado desde el registro: sus fotos viven en el documento del
-    # chofer y solo se guardo la URL en `fotos_urls`. Se publican aqui para que
-    # la tarjeta no las pinte como "falta" aunque la miniatura ya las muestre.
+    # El vehiculo no tiene copia de las fotos en esta coleccion: viven en el
+    # documento del chofer. Se publican aqui para que la tarjeta no las pinte
+    # como "falta" aunque la miniatura ya las muestre.
     urls = doc.get("fotos_urls")
     if not isinstance(urls, dict) or not urls:
+        urls = _urls_registro_vehiculo(doc.get("driver_id"))
+    if not urls:
         return fotos if isinstance(fotos, dict) else None
     salida = dict(fotos or {})
     for campo, url in urls.items():
@@ -501,6 +576,8 @@ def _faltantes_de(doc: dict) -> list:
     # `fotos_urls`. Sin esto la app pediria "anadir fotos faltantes" a un
     # vehiculo que ya las tiene.
     urls = doc.get("fotos_urls") or {}
+    if not isinstance(urls, dict) or not urls:
+        urls = _urls_registro_vehiculo(doc.get("driver_id"))
     if not isinstance(urls, dict):
         urls = {}
     return [c for c in obligatorias
@@ -688,6 +765,29 @@ async def listar_vehiculos(authorization: Optional[str] = Header(None)):
     chofer = _chofer_actual(authorization)
     docs = list(coleccion.find(
         {"driver_id": chofer["id"]}).sort("created_at", -1))
+    for doc in docs:
+        if doc.get("fotos") or doc.get("fotos_urls"):
+            continue
+        # Vehiculo creado por el backfill de arranque (antes de que el
+        # registro creara el garaje): las fotos estan en el documento del
+        # chofer y hay que dejarlas guardadas aqui.
+        urls = _urls_registro_vehiculo(chofer["id"])
+        if not urls:
+            continue
+        cambios = {"fotos_urls": urls, "fotos_urls_at": datetime.utcnow()}
+        exterior = (urls.get("vehiculo_exterior_frente")
+                    or urls.get("vehiculo_exterior_atras"))
+        if exterior:
+            cambios["foto_exterior_url"] = exterior
+        for campo, alias in ALIAS_FOTO_VEHICULO.items():
+            if urls.get(campo):
+                cambios[alias] = urls[campo]
+        if urls.get("licencia_frente"):
+            cambios["license_front_url"] = urls["licencia_frente"]
+        if urls.get("licencia_atras"):
+            cambios["license_back_url"] = urls["licencia_atras"]
+        coleccion.update_one({"_id": doc["_id"]}, {"$set": cambios})
+        doc.update(cambios)
     if not docs:
         # Choferes registrados despues del backfill de arranque: el vehiculo
         # del registro se crea aqui, ya aprobado y activo, para que el garaje
@@ -1213,6 +1313,7 @@ def tipo_vehiculo_activo_de(driver_id: Optional[str],
 def _invalidar_cache(driver_id: Optional[str]) -> None:
     if driver_id:
         _cache_tipos.pop(str(driver_id), None)
+        _cache_urls_registro.pop(str(driver_id), None)
 
 
 # driver_id -> (timestamp, tipo). Prefiere torta: se recalcula tras _CACHE_TTL.
