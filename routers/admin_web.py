@@ -18,7 +18,7 @@ El panel de escritorio hablaba con `/admin/trips/active`, `/admin/vehicles` y
 
     POST /admin/trips/check-orphaned
         Lo llama un cron job (cron-job.org) cada minuto: publica en el grupo de
-        Telegram los viajes que siguen en `requested` entre 30 s y 240 s sin
+        Telegram los viajes que siguen en `requested` entre 30 s y 360 s sin
         chofer. Se autentica con API Key, no con JWT de administrador.
 
 Nada de esto se conecta a Mongo/Postgres desde el navegador: el panel web es
@@ -84,8 +84,8 @@ ESTADOS_ACTIVOS = ("requested", "accepted", "driver_on_the_way",
 
 # El cron externo (cron-job.org) corre cada 60 s. Avisa por Telegram de los
 # viajes 'requested' que llevan MAS de 30 s esperando y MENOS del tiempo total
-# de solicitud (240 s). El viaje sigue vivo para los choferes hasta el barrido
-# de los 240 s: el aviso no lo cierra. Pasado el total no se avisa, porque ya
+# de solicitud (360 s). El viaje sigue vivo para los choferes hasta el barrido
+# de los 360 s: el aviso no lo cierra. Pasado el total no se avisa, porque ya
 # esta a punto de expirar y el pasajero debera volver a pedirlo.
 UMBRAL_HUERFANO_SECS = max(1, int(os.getenv("ORPHAN_ALERT_SECS", "30")))
 
@@ -195,7 +195,7 @@ def _rechazo_ya_asignado() -> HTTPException:
 
 
 def _mensaje_expirada(espera: Optional[int]) -> str:
-    """Mensaje del 410 cuando la oferta ya paso los 240 s."""
+    """Mensaje del 410 cuando la oferta ya paso los 360 s."""
     if espera is None:
         return ("La oferta de este viaje ya venció. El pasajero debe "
                 "volver a pedirlo.")
@@ -551,7 +551,7 @@ async def forzar_asignacion(
     estado `available`: el administrador esta rescatando un viaje que se quedo
     sin despacho. Si se exige que la cuenta este aprobada, que no tenga otro
     viaje activo, que el tipo de vehiculo coincida y que la oferta siga dentro
-    de la ventana de 240 s.
+    de la ventana de 360 s.
     """
     doc = _buscar_chofer_para_asignar(datos)
     driver_id = str(doc["_id"])
@@ -624,7 +624,7 @@ async def forzar_asignacion(
                            % (tipo_viaje, tipo_chofer))
 
             # Asignacion atomica: solo gana quien encuentre el viaje todavia
-            # en 'requested', sin chofer y dentro de los 240 s. La condicion
+            # en 'requested', sin chofer y dentro de los 360 s. La condicion
             # temporal se evalua en la misma sentencia, con el reloj del
             # servidor, para que un admin en el segundo 121 no pueda pisar una
             # aceptacion del chofer en el segundo 120.

@@ -2489,14 +2489,15 @@ async def filter_declined_trips(trips: list[dict], driver_id: Optional[str]) -> 
 # Tiempo TOTAL que un viaje queda 'requested' esperando que alguien lo acepte.
 # Pasado ese plazo el job `sweep_expired_trips` lo marca como 'expired' y el
 # pasajero ve "No encontramos choferes disponibles" + "Volver a pedir viaje".
-# 240 s: el cron externo (cada 60 s) tiene tiempo de avisar por Telegram a los
-# 30 s y al pasajero le queda margen real antes de rendirse.
+# 360 s: el cron externo (cada 60 s) tiene tiempo de avisar por Telegram a los
+# 30 s y la administracion dispone de 6 minutos para el despacho manual antes
+# de que el viaje se cierre.
 #
 # Se fija en codigo a proposito y NO se lee del entorno: en Render quedaron
 # valores viejos (180/60) de versiones anteriores y hacian que el cliente
-# mostrara "0:58" y el chofer "53 s" aunque el codigo ya dijera 240. La regla
-# de negocio es una sola ventana de 240 s para todos.
-TRIP_ACCEPT_TIMEOUT_SECS = 240
+# mostrara "0:58" y el chofer "53 s" aunque el codigo ya dijera otra cifra. La
+# regla de negocio es una sola ventana de 360 s para todos.
+TRIP_ACCEPT_TIMEOUT_SECS = 360
 
 # Tiempo que una OFERTA concreta queda viva para un conductor, es decir lo que
 # viaja en `expires_in_secs`. La app lo usa como temporizador local del FSI: si
@@ -2504,7 +2505,7 @@ TRIP_ACCEPT_TIMEOUT_SECS = 240
 #
 # Es EXACTAMENTE la misma ventana que el viaje: si la oferta muriera antes
 # (p. ej. a los 60 s) el viaje seguiria 'requested' y el pasajero esperando
-# 240 s sin que ningun conductor pudiera verlo ni aceptarlo.
+# 360 s sin que ningun conductor pudiera verlo ni aceptarlo.
 OFFER_TTL_SECS = TRIP_ACCEPT_TIMEOUT_SECS
 
 _DRIVER_VEHICLE_KEYS = ("vehicle_type", "type_vehicle", "type")
@@ -2532,7 +2533,7 @@ async def _expire_trip_now(trip_id: str) -> bool:
     """Marca el viaje como expirado si aun sigue en 'requested'.
 
     Se usa cuando alguien intenta aceptar una oferta vencida: en vez de dejarla
-    en 'requested' hasta el barrido (cada 15 s, con la ventana de 240 s), se
+    en 'requested' hasta el barrido (cada 15 s, con la ventana de 360 s), se
     cierra en el acto.
     """
     with get_connection() as conn:
@@ -3305,8 +3306,8 @@ async def api_get_trip(trip_id: str):
     if not trip:
         raise HTTPException(status_code=404, detail="Viaje no encontrado")
 
-    # Expiracion perezosa: si el barrido de 15 s aun no paso, el primer sondeo
-    # despues de los 240 s cierra el viaje en el acto para que el pasajero vea
+    # Expiración perezosa: si el barrido de 15 s aun no paso, el primer sondeo
+    # despues de los 360 s cierra el viaje en el acto para que el pasajero vea
     # "Volver a pedir viaje" sin esperar al job.
     if trip.get("status") == "requested" and _offer_expired(trip):
         await _expire_trip_now(trip_id)
@@ -3643,7 +3644,7 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
             # La condicion temporal va en la MISMA sentencia que la del
             # driver_id: asi un chofer que pulsa Aceptar en el segundo 120
             # gana aunque el admin asigne en el 121, y un viaje que ya paso
-            # los 240 s no puede aceptarse ni por carrera.
+            # los 360 s no puede aceptarse ni por carrera.
             cur.execute("""
                 UPDATE trips SET driver_id = %s, status = 'accepted'
                 WHERE trip_id = %s

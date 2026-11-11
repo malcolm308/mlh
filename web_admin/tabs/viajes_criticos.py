@@ -49,7 +49,7 @@ def _fila_huerfano(v: dict) -> dict:
 def _es_huerfano(v: dict, umbral: int) -> bool:
     """El backend manda `es_huerfano`; si es un backend viejo, se calcula.
 
-    El umbral (30 s) y el techo (240 s) los decide el servidor para que el
+    El umbral (30 s) y el techo (360 s) los decide el servidor para que el
     panel y el cron usen exactamente el mismo criterio.
     """
     if "es_huerfano" in v:
@@ -135,7 +135,7 @@ def _viajes_en_cola(api) -> None:
     # Sin cache: un viaje sin chofer es justo lo que no puede esperar 30 s.
     datos = api.viajes_criticos()
     viajes = datos.get("viajes") or []
-    # 30 s = umbral del cron externo; techo = tiempo total de solicitud (240 s).
+    # 30 s = umbral del cron externo; techo = tiempo total de solicitud (360 s).
     # Solo se usa si el backend es anterior a este cambio y no manda el umbral.
     umbral = int(datos.get("umbral_huerfano_segundos") or 30)
     huerfanos = [v for v in viajes if _es_huerfano(v, umbral)]

@@ -87,10 +87,10 @@ class OfertasBackgroundService {
 
   /// Id del proceso de arranque de la app: el servicio ignora una oferta
   /// detectada mas de `ttlAviso` seg antes, y programa su retiro igual que la
-  /// pantalla principal. Tiene que cubrir toda la ventana de la oferta (240 s):
+  /// pantalla principal. Tiene que cubrir toda la ventana de la oferta (360 s):
   /// con 60 s el aviso de pantalla completa desaparecia mucho antes de que el
   /// viaje expirara.
-  static const int ttlAviso = 240;
+  static const int ttlAviso = 360;
 
   bool _configurado = false;
 
@@ -561,9 +561,9 @@ String _recogidaDe(Map j) {
 int _expiresDe(Map j) {
   final v = j['offer_expires_in_secs'];
   if (v is num && v > 0) return v.ceil();
-  // Sin dato del servidor se usa la misma ventana unica de solicitud (240 s).
+  // Sin dato del servidor se usa la misma ventana unica de solicitud (360 s).
   // Antes eran 60 s y el aviso en segundo plano moria antes que el viaje.
-  return 240;
+  return 360;
 }
 
 /// Panel de notificaciones del isolate del servicio.

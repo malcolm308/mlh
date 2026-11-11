@@ -76,9 +76,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   /// Respaldo del plazo de una oferta cuando el backend no manda
   /// `offer_expires_in_secs`. Es el MISMO tiempo unico de solicitud del viaje
-  /// (240 s): antes eran 20 s locales y la tarjeta se cerraba antes que la
+  /// (360 s): antes eran 20 s locales y la tarjeta se cerraba antes que la
   /// condicion real del servidor.
-  static const int _offerLimitSecs = 240;
+  static const int _offerLimitSecs = 360;
   static const int _lostCloseSecs = 5;
 
   /// Máximo de antigüedad de un viaje 'accepted' para restaurarlo al abrir.

@@ -45,12 +45,12 @@ class _TripScreenState extends State<TripScreen> {
 
   /// Contador visible de la búsqueda. Se sincroniza en cada sondeo con
   /// `busqueda_expira_en_secs` (reloj del servidor) y entre sondeos baja de
-  /// uno en uno. No cambia el estado: solo lo hace el backend a los 240 s.
+  /// uno en uno. No cambia el estado: solo lo hace el backend a los 360 s.
   int? _busquedaRestante;
 
   /// Respaldo del contador si el backend no manda `busqueda_expira_en_secs`
-  /// (version vieja o campo ausente). Es la misma ventana unica de 240 s.
-  static const int _busquedaRespaldoSecs = 240;
+  /// (version vieja o campo ausente). Es la misma ventana unica de 360 s.
+  static const int _busquedaRespaldoSecs = 360;
   Timer? _busquedaTimer;
   List<LatLng> _route = [];
   LatLng? _driverPos;
@@ -1141,7 +1141,7 @@ class _TripScreenState extends State<TripScreen> {
                   'Te avisaremos en cuanto uno acepte el viaje',
                   style: TextStyle(fontSize: 12, color: AppColors.secundario),
                 ),
-                // Contador sincronizado con el servidor: 4:00 al pedir y baja
+                // Contador sincronizado con el servidor: 6:00 al pedir y baja
                 // hasta 0:00, que es cuando el backend marca `expired`.
                 if (_busquedaRestante != null && _busquedaRestante! > 0) ...[
                   const SizedBox(height: 3),
@@ -1162,7 +1162,7 @@ class _TripScreenState extends State<TripScreen> {
     );
   }
 
-  /// `m:ss` del contador de búsqueda (p. ej. 240 -> "4:00").
+  /// `m:ss` del contador de búsqueda (p. ej. 360 -> "6:00").
   String _fmtBusqueda(int secs) {
     final m = secs ~/ 60;
     final s = secs % 60;
