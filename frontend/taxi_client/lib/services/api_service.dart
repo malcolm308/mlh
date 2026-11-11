@@ -173,6 +173,7 @@ class ApiService {
     String? requestAddress,
     String? dropoffAddress,
     String paymentMethod = 'Efectivo',
+    bool isRetry = false,
   }) async {
     return _map('POST', '/trips', body: {
       'client_id': clientId,
@@ -187,6 +188,8 @@ class ApiService {
       'request_address': requestAddress,
       'dropoff_address': dropoffAddress,
       'payment_method': paymentMethod,
+      // Reintento de un viaje expirado: el backend aplica el 10 % al precio.
+      'is_retry': isRetry,
     });
   }
 

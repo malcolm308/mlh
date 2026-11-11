@@ -1047,7 +1047,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     });
   }
 
-  Future<void> _requestTrip() async {
+  Future<void> _requestTrip({bool isRetry = false}) async {
     final pickup = _pickup;
     final dropoff = _dropoff;
     if (pickup == null || dropoff == null) {
@@ -1080,6 +1080,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         requestAddress: _pickupAddr ?? _sinDireccion,
         dropoffAddress: _dropoffAddr ?? _sinDireccion,
         paymentMethod: _paymentMethod,
+        isRetry: isRetry,
       );
       final tripId = (res['trip_id'] ?? '').toString();
       if (tripId.isEmpty) throw ApiException('No se recibió el trip_id');
@@ -1103,8 +1104,9 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         // El viaje expiro sin chofer y el pasajero pulso "Volver a pedir
         // viaje". NO se resetea el estado: _requestTrip reutiliza _pickup,
         // _dropoff, _selectedVehicle y el resto de preferencias, crea un
-        // viaje nuevo en `requested` y vuelve a abrir el radar.
-        await _requestTrip();
+        // viaje nuevo en `requested` y vuelve a abrir el radar. Se manda
+        // `is_retry: true` para que el backend aplique el recargo del 10 %.
+        await _requestTrip(isRetry: true);
         return;
       }
       // Si el pasajero cerro el recibo (o el viaje fue cancelado), volver al

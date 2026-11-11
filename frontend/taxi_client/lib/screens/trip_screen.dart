@@ -45,12 +45,12 @@ class _TripScreenState extends State<TripScreen> {
 
   /// Contador visible de la búsqueda. Se sincroniza en cada sondeo con
   /// `busqueda_expira_en_secs` (reloj del servidor) y entre sondeos baja de
-  /// uno en uno. No cambia el estado: solo lo hace el backend a los 180 s.
+  /// uno en uno. No cambia el estado: solo lo hace el backend a los 240 s.
   int? _busquedaRestante;
 
   /// Respaldo del contador si el backend no manda `busqueda_expira_en_secs`
-  /// (version vieja o campo ausente). Es la misma ventana unica de 180 s.
-  static const int _busquedaRespaldoSecs = 180;
+  /// (version vieja o campo ausente). Es la misma ventana unica de 240 s.
+  static const int _busquedaRespaldoSecs = 240;
   Timer? _busquedaTimer;
   List<LatLng> _route = [];
   LatLng? _driverPos;
@@ -860,15 +860,39 @@ class _TripScreenState extends State<TripScreen> {
                 else if (t.driverId != null)
                   _tarjetaChofer(t),
                 if (cancelled) ...[
-                  if (expirado)
+                  if (expirado) ...[
                     const WarningBox(
                       title: 'No encontramos chóferes disponibles',
                       message:
                           'Ningún chófer tomó el viaje a tiempo. Vuelve a '
                           'pedirlo: estás a un toque.',
                       icon: Icons.search_off_rounded,
-                    )
-                  else if (t.cancelledBy == 'driver')
+                    ),
+                    const SizedBox(height: 8),
+                    // Aviso obligatorio del recargo: el 10 % lo aplica el
+                    // backend al recibir `is_retry: true`, pero el pasajero
+                    // debe saberlo ANTES de tocar el boton.
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.ambar.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: AppColors.ambar.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: const Text(
+                        '⚠️ Al volver a pedir, el precio aumentará un 10%',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.tinta,
+                        ),
+                      ),
+                    ),
+                  ] else if (t.cancelledBy == 'driver')
                     WarningBox(
                       title: 'El chófer ha cancelado el viaje',
                       message: (t.cancellationReason != null &&
@@ -1062,7 +1086,7 @@ class _TripScreenState extends State<TripScreen> {
                   'Te avisaremos en cuanto uno acepte el viaje',
                   style: TextStyle(fontSize: 12, color: AppColors.secundario),
                 ),
-                // Contador sincronizado con el servidor: 3:00 al pedir y baja
+                // Contador sincronizado con el servidor: 4:00 al pedir y baja
                 // hasta 0:00, que es cuando el backend marca `expired`.
                 if (_busquedaRestante != null && _busquedaRestante! > 0) ...[
                   const SizedBox(height: 3),
@@ -1083,7 +1107,7 @@ class _TripScreenState extends State<TripScreen> {
     );
   }
 
-  /// `m:ss` del contador de búsqueda (p. ej. 180 -> "3:00").
+  /// `m:ss` del contador de búsqueda (p. ej. 240 -> "4:00").
   String _fmtBusqueda(int secs) {
     final m = secs ~/ 60;
     final s = secs % 60;

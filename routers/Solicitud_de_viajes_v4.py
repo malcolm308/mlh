@@ -512,6 +512,9 @@ def init_db():
             -- Se pone FALSE al crear el viaje; asi el mismo viaje no se repite
             -- en cada pasada del cron.
             alerta_enviada BOOLEAN NOT NULL DEFAULT FALSE,
+            -- TRUE si el pasajero volvio a pedir un viaje que expiro. El
+            -- recargo del 10 % se aplica al precio calculado en el servidor.
+            is_retry BOOLEAN NOT NULL DEFAULT FALSE,
             request_address TEXT,
             dropoff_address TEXT
         );
@@ -549,7 +552,10 @@ def init_db():
             -- Comision retenida en los pagos con billetera (0% en lanzamiento).
             ADD COLUMN IF NOT EXISTS comision_billetera NUMERIC(12,2) DEFAULT 0,
             -- Marca de la alerta de viaje huerfano enviada al grupo de Telegram.
-            ADD COLUMN IF NOT EXISTS alerta_enviada BOOLEAN NOT NULL DEFAULT FALSE;
+            ADD COLUMN IF NOT EXISTS alerta_enviada BOOLEAN NOT NULL DEFAULT FALSE,
+            -- Recargo por reintento: el viaje nuevo de un pasajero cuyo viaje
+            -- anterior expiro se cobra un 10 % mas.
+            ADD COLUMN IF NOT EXISTS is_retry BOOLEAN NOT NULL DEFAULT FALSE;
     """
 
     create_transactions_table = """
@@ -975,6 +981,11 @@ def estimate_all_vehicles(
     }
 # ===================== TRIPS =====================
 
+# Recargo por reintento: cuando un viaje expira sin chofer y el pasajero pulsa
+# "Volver a pedir", el precio calculado sube un 10 %. Lo aplica SIEMPRE el
+# backend a partir del flag `is_retry`; el telefono nunca manda el precio.
+RETRY_SURCHARGE_RATE = float(os.getenv("RETRY_SURCHARGE_RATE", "0.10"))
+
 def create_trip(
     client_id: str,
     request_lat: float,
@@ -990,6 +1001,7 @@ def create_trip(
     request_address: Optional[str] = None,
     dropoff_address: Optional[str] = None,
     payment_method: str = "Efectivo",
+    is_retry: bool = False,
 ) -> dict:
     vehicle_type = _normalize_vehicle_type(vehicle_type) or "basico"
     payment_method = _normalizar_metodo_pago(payment_method)
@@ -1020,6 +1032,18 @@ def create_trip(
                 distance_km, vehicle_type,
                 request_lat, request_lng, dropoff_lat, dropoff_lng)
             precio_base = breakdown["precio_estimado"]
+
+            # Reintento: un viaje que expiro sin chofer y se vuelve a pedir
+            # cuesta un 10 % mas sobre el precio calculado. Se aplica ANTES
+            # del recargo por transferencia para que ambos se acumulen.
+            recargo_reintento = 0.0
+            if is_retry:
+                recargo_reintento = float(
+                    (Decimal(str(precio_base))
+                     * Decimal(str(RETRY_SURCHARGE_RATE))).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP))
+                precio_base = round(
+                    float(precio_base) + recargo_reintento, 2)
 
             # Recargo por transferencia: SIEMPRE lo calcula el backend. El
             # 10% se configura en el panel; aqui solo se aplica.
@@ -1054,12 +1078,13 @@ def create_trip(
                     client_id, driver_id, status, request_location, dropoff_location,
                     equipaje, mascota, num_pasajes, vehicle_type,
                     precio_estimado, base_fare, distance_km, request_address,
-                    dropoff_address, payment_method, recargo_transferencia
+                    dropoff_address, payment_method, recargo_transferencia,
+                    is_retry
                 ) VALUES (
                     %s, %s, %s,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING trip_id;
                 """,
@@ -1070,6 +1095,7 @@ def create_trip(
                     equipaje, mascota, num_pasajes, vehicle_type,
                     precio_estimado, base_fare, round(distance_km, 3),
                     request_address, dropoff_address, payment_method, recargo,
+                    is_retry,
                 ),
             )
             trip_id = cur.fetchone()["trip_id"]
@@ -1082,6 +1108,8 @@ def create_trip(
                 "precio_estimado": precio_estimado,
                 "precio_base_estimado": float(precio_base),
                 "recargo_transferencia": recargo,
+                "recargo_reintento": recargo_reintento,
+                "is_retry": is_retry,
                 "payment_method": payment_method,
                 "distance_km": round(distance_km, 2),
                 "equipaje": equipaje,
@@ -2461,8 +2489,9 @@ async def filter_declined_trips(trips: list[dict], driver_id: Optional[str]) -> 
 # Tiempo TOTAL que un viaje queda 'requested' esperando que alguien lo acepte.
 # Pasado ese plazo el job `sweep_expired_trips` lo marca como 'expired' y el
 # pasajero ve "No encontramos choferes disponibles" + "Volver a pedir viaje".
-# 180 s: da margen real al despacho manual (Telegram) antes de rendirse.
-TRIP_ACCEPT_TIMEOUT_SECS = int(os.getenv("TRIP_ACCEPT_TIMEOUT_SECS", "180"))
+# 240 s: el cron externo (cada 60 s) tiene tiempo de avisar por Telegram a los
+# 30 s y al pasajero le queda margen real antes de rendirse.
+TRIP_ACCEPT_TIMEOUT_SECS = int(os.getenv("TRIP_ACCEPT_TIMEOUT_SECS", "240"))
 
 # Tiempo que una OFERTA concreta queda viva para un conductor, es decir lo que
 # viaja en `expires_in_secs`. La app lo usa como temporizador local del FSI: si
@@ -2470,7 +2499,7 @@ TRIP_ACCEPT_TIMEOUT_SECS = int(os.getenv("TRIP_ACCEPT_TIMEOUT_SECS", "180"))
 #
 # Tiene que ir ALINEADO con `TRIP_ACCEPT_TIMEOUT_SECS`: si la oferta muriera
 # antes (p. ej. a los 60 s) el viaje seguiria 'requested' y el pasajero
-# esperando 180 s sin que ningun conductor pudiera verlo ni aceptarlo. La
+# esperando 240 s sin que ningun conductor pudiera verlo ni aceptarlo. La
 # ventana en la que el viaje es visible y aceptable es la misma para todos.
 # Se puede ajustar por entorno sin tocar el codigo.
 OFFER_TTL_SECS = int(os.getenv("OFFER_TTL_SECS", str(TRIP_ACCEPT_TIMEOUT_SECS)))
@@ -2500,7 +2529,7 @@ async def _expire_trip_now(trip_id: str) -> bool:
     """Marca el viaje como expirado si aun sigue en 'requested'.
 
     Se usa cuando alguien intenta aceptar una oferta vencida: en vez de dejarla
-    en 'requested' hasta el barrido (cada 15 s, con la ventana de 180 s), se
+    en 'requested' hasta el barrido (cada 15 s, con la ventana de 240 s), se
     cierra en el acto.
     """
     with get_connection() as conn:
@@ -2912,6 +2941,9 @@ class TripCreate(BaseModel):
     dropoff_address: Optional[str] = None
     # Efectivo | Billetera | Transferencia. Default: el flujo historico.
     payment_method: str = "Efectivo"
+    # TRUE cuando el pasajero vuelve a pedir un viaje que expiro. El backend
+    # aplica el recargo del 10 % sobre el precio calculado.
+    is_retry: bool = False
 
 class TripEstimateRequest(BaseModel):
     request_lat: float
@@ -3026,6 +3058,7 @@ async def api_create_trip(body: TripCreate, background: BackgroundTasks):
             request_address=body.request_address,
             dropoff_address=body.dropoff_address,
             payment_method=body.payment_method,
+            is_retry=body.is_retry,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3268,6 +3301,13 @@ async def api_get_trip(trip_id: str):
     trip = get_trip(trip_id)
     if not trip:
         raise HTTPException(status_code=404, detail="Viaje no encontrado")
+
+    # Expiracion perezosa: si el barrido de 15 s aun no paso, el primer sondeo
+    # despues de los 240 s cierra el viaje en el acto para que el pasajero vea
+    # "Volver a pedir viaje" sin esperar al job.
+    if trip.get("status") == "requested" and _offer_expired(trip):
+        await _expire_trip_now(trip_id)
+        trip = get_trip(trip_id) or trip
 
     # Enriquecer con datos del pasajero desde MongoDB (nombre y telefono).
     trip["client_name"] = None
@@ -3597,11 +3637,17 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
+            # La condicion temporal va en la MISMA sentencia que la del
+            # driver_id: asi un chofer que pulsa Aceptar en el segundo 120
+            # gana aunque el admin asigne en el 121, y un viaje que ya paso
+            # los 240 s no puede aceptarse ni por carrera.
             cur.execute("""
                 UPDATE trips SET driver_id = %s, status = 'accepted'
-                WHERE trip_id = %s AND status = 'requested'
+                WHERE trip_id = %s
+                  AND status = 'requested'
+                  AND requested_at > NOW() - make_interval(secs => %s)
                 RETURNING trip_id, client_id;
-            """, (driver_id, trip_id))
+            """, (driver_id, trip_id, TRIP_ACCEPT_TIMEOUT_SECS))
             row = cur.fetchone()
             if row:
                 conn.commit()

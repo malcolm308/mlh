@@ -17,9 +17,9 @@ El panel de escritorio hablaba con `/admin/trips/active`, `/admin/vehicles` y
         (incluye comision, bono, descuento, referidos, coeficientes y espera).
 
     POST /admin/trips/check-orphaned
-        Lo llama un cron job (Render) cada minuto: publica en el grupo de
-        Telegram los viajes que siguen en `requested` pasado el 50 % del tiempo
-        de espera. Se autentica con API Key, no con JWT de administrador.
+        Lo llama un cron job (cron-job.org) cada minuto: publica en el grupo de
+        Telegram los viajes que siguen en `requested` entre 30 s y 240 s sin
+        chofer. Se autentica con API Key, no con JWT de administrador.
 
 Nada de esto se conecta a Mongo/Postgres desde el navegador: el panel web es
 solo un cliente HTTP y toda la escritura sigue pasando por la API.
@@ -82,16 +82,12 @@ ESTADO_APROBADO = "aprobado"
 ESTADOS_ACTIVOS = ("requested", "accepted", "driver_on_the_way",
                    "driver_arrived")
 
-# Un viaje es huerfano cuando lleva mas de la MITAD del tiempo de solicitud
-# esperando y todavia no lo acepto nadie. Con la ventana unica de 180 s el
-# aviso empieza a los 90 s, nunca a los 30: el umbral se deriva del mismo
-# `TRIP_ACCEPT_TIMEOUT_SECS` que usa el barrido, para que no vuelva a quedarse
-# desfasado si manana cambia el tiempo de solicitud. El aviso se manda en esa
-# ventana (90 s .. 180 s) y NO despues: un viaje que ya supero el tiempo total
-# esta a punto de expirar y avisar por Telegram solo haria que un chofer
-# llamara por una carrera que el pasajero ya no esta esperando.
-UMBRAL_HUERFANO_SECS = max(1, int(os.getenv(
-    "ORPHAN_ALERT_SECS", str(TRIP_ACCEPT_TIMEOUT_SECS // 2))))
+# El cron externo (cron-job.org) corre cada 60 s. Avisa por Telegram de los
+# viajes 'requested' que llevan MAS de 30 s esperando y MENOS del tiempo total
+# de solicitud (240 s). El viaje sigue vivo para los choferes hasta el barrido
+# de los 240 s: el aviso no lo cierra. Pasado el total no se avisa, porque ya
+# esta a punto de expirar y el pasajero debera volver a pedirlo.
+UMBRAL_HUERFANO_SECS = max(1, int(os.getenv("ORPHAN_ALERT_SECS", "30")))
 
 
 def require_api_key(
@@ -189,6 +185,26 @@ def _chofer_resumen(doc: dict) -> dict:
     }
 
 
+def _rechazo_ya_asignado() -> HTTPException:
+    """409 cuando otro proceso (chofer o admin) gano la carrera del viaje."""
+    return HTTPException(
+        status_code=409,
+        detail="El viaje ya fue aceptado por otro chófer. "
+               "Actualiza la tabla e inténtalo con otro viaje.",
+    )
+
+
+def _mensaje_expirada(espera: Optional[int]) -> str:
+    """Mensaje del 410 cuando la oferta ya paso los 240 s."""
+    if espera is None:
+        return ("La oferta de este viaje ya venció. El pasajero debe "
+                "volver a pedirlo.")
+    return ("La oferta de este viaje venció hace %d s (límite %d s). "
+            "El pasajero debe volver a pedirlo."
+            % (max(0, espera - TRIP_ACCEPT_TIMEOUT_SECS),
+               TRIP_ACCEPT_TIMEOUT_SECS))
+
+
 # ===================== VIAJES HUERFANOS =====================
 
 @router.get("/alerts/pending")
@@ -229,7 +245,8 @@ async def alertas_pendientes(admin: dict = Depends(require_admin)):
             "driver_name": None,
             "espera_segundos": espera,
             "es_huerfano": bool(espera is not None
-                                and espera > UMBRAL_HUERFANO_SECS),
+                                and UMBRAL_HUERFANO_SECS < espera
+                                < TRIP_ACCEPT_TIMEOUT_SECS),
             "alerta_enviada": bool(r.get("alerta_enviada")),
             "distance_km": (round(float(r["distance_km"]), 2)
                             if r.get("distance_km") is not None else None),
@@ -531,10 +548,10 @@ async def forzar_asignacion(
     """Asigna un viaje sin chofer a un chofer concreto (emergencia).
 
     A diferencia de `POST /trips/{id}/accept`, no exige que el chofer este en
-    estado `available` ni que la oferta siga dentro de los 60 s: el
-    administrador esta rescatando un viaje que se quedo sin despacho. Si se
-    exige que la cuenta este aprobada, que no tenga otro viaje activo y que el
-    tipo de vehiculo coincida con el que pidio el pasajero.
+    estado `available`: el administrador esta rescatando un viaje que se quedo
+    sin despacho. Si se exige que la cuenta este aprobada, que no tenga otro
+    viaje activo, que el tipo de vehiculo coincida y que la oferta siga dentro
+    de la ventana de 240 s.
     """
     doc = _buscar_chofer_para_asignar(datos)
     driver_id = str(doc["_id"])
@@ -559,9 +576,14 @@ async def forzar_asignacion(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
+            # Lectura solo para validar y para dar mensajes precisos. NO se usa
+            # `FOR UPDATE`: el arbitro es el UPDATE condicional de abajo, el
+            # equivalente en PostgreSQL a un `find_one_and_update` atomico. Si
+            # el chofer acepto por la app un instante antes, `driver_id` ya no
+            # es NULL y este UPDATE no devuelve fila.
             cur.execute(
-                "SELECT trip_id, client_id, status, driver_id, vehicle_type "
-                "FROM trips WHERE trip_id = %s FOR UPDATE",
+                "SELECT trip_id, client_id, status, driver_id, vehicle_type, "
+                "requested_at FROM trips WHERE trip_id = %s",
                 (trip_id,),
             )
             trip = cur.fetchone()
@@ -578,16 +600,19 @@ async def forzar_asignacion(
                         "status": trip.get("status"),
                         "message": "El viaje ya estaba asignado a ese chofer",
                     }
-                raise HTTPException(
-                    status_code=409,
-                    detail="El viaje ya tiene un chofer asignado. "
-                           "No se reasigna desde el panel.")
+                raise _rechazo_ya_asignado()
 
             if trip.get("status") not in ESTADOS_ACTIVOS:
                 raise HTTPException(
                     status_code=400,
                     detail="No se puede asignar un viaje en estado '%s'"
                            % trip.get("status"))
+
+            espera = _espera_segundos(trip.get("requested_at"))
+            if espera is not None and espera >= TRIP_ACCEPT_TIMEOUT_SECS:
+                raise HTTPException(
+                    status_code=410,
+                    detail=_mensaje_expirada(espera))
 
             tipo_chofer = _driver_vehicle_type(doc)
             tipo_viaje = _normalize_vehicle_type(trip.get("vehicle_type"))
@@ -598,6 +623,11 @@ async def forzar_asignacion(
                            "Elige un chofer del tipo correcto."
                            % (tipo_viaje, tipo_chofer))
 
+            # Asignacion atomica: solo gana quien encuentre el viaje todavia
+            # en 'requested', sin chofer y dentro de los 240 s. La condicion
+            # temporal se evalua en la misma sentencia, con el reloj del
+            # servidor, para que un admin en el segundo 121 no pueda pisar una
+            # aceptacion del chofer en el segundo 120.
             cur.execute(
                 """
                 UPDATE trips
@@ -606,18 +636,37 @@ async def forzar_asignacion(
                        alerta_enviada = TRUE
                  WHERE trip_id = %s
                    AND driver_id IS NULL
-                   AND status IN ('requested', 'accepted', 'driver_on_the_way',
-                                  'driver_arrived')
+                   AND status = 'requested'
+                   AND requested_at > NOW() - make_interval(secs => %s)
                 RETURNING trip_id, status
                 """,
-                (driver_id, trip_id),
+                (driver_id, trip_id, TRIP_ACCEPT_TIMEOUT_SECS),
             )
             actualizado = cur.fetchone()
             if not actualizado:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Otro proceso asignó o cerró el viaje mientras "
-                           "se guardaba. Actualiza la tabla e inténtalo de nuevo.")
+                # Perdimos la carrera: otro proceso acepto/asigno el viaje o
+                # la oferta vencio entre la lectura y el UPDATE. Se relee el
+                # estado real para no acusar a nadie sin pruebas.
+                conn.rollback()
+                actual = get_trip(trip_id) or {}
+                if (actual.get("driver_id")
+                        and str(actual["driver_id"]) == driver_id):
+                    return {
+                        "ok": True,
+                        "trip_id": trip_id,
+                        "driver_id": driver_id,
+                        **_chofer_resumen(doc),
+                        "status": actual.get("status"),
+                        "message": "El viaje ya estaba asignado a ese chofer",
+                    }
+                espera_actual = _espera_segundos(actual.get("requested_at"))
+                if (actual.get("status") == "expired"
+                        or (espera_actual is not None
+                            and espera_actual >= TRIP_ACCEPT_TIMEOUT_SECS)):
+                    raise HTTPException(
+                        status_code=410,
+                        detail=_mensaje_expirada(espera_actual))
+                raise _rechazo_ya_asignado()
             conn.commit()
         except HTTPException:
             conn.rollback()
