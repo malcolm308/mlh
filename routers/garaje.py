@@ -147,6 +147,9 @@ def _foto_exterior_url(doc: dict) -> Optional[str]:
     la foto exterior de su registro. La imagen se sirve con token: el chofer
     dueno o un administrador, nunca anonimo.
     """
+    explicita = doc.get("foto_exterior_url")
+    if isinstance(explicita, str) and explicita.strip():
+        return explicita.strip()
     fotos = doc.get("fotos") or {}
     if isinstance(fotos, dict):
         for campo in ("vehiculo_exterior_frente", "vehiculo_exterior_atras"):
@@ -174,6 +177,91 @@ def _foto_campo_url(doc: dict, campo: str) -> Optional[str]:
         if isinstance(ref, dict) and ref.get("archivo"):
             return "/garaje/imagen/%s" % ref["archivo"]
     return doc.get("%s_url" % campo)
+
+
+def _url_foto_registro(driver_id: str, ref: dict) -> Optional[str]:
+    """URL para pintar una foto del registro desde el garaje.
+
+    Con Cloudinary la referencia trae la `secure_url`; si la foto quedo en
+    disco se usa la ruta autorizada del registro, que ya sirve al chofer dueno
+    con su token.
+    """
+    url = ref.get("url")
+    if url:
+        return str(url)
+    campo = ref.get("campo")
+    if ref.get("archivo") and campo:
+        return "/documentos/chofer/%s/foto/%s" % (driver_id, campo)
+    return None
+
+
+def crear_vehiculo_inicial(chofer: dict) -> Optional[dict]:
+    """Crea el vehiculo del garaje con los datos del registro del chofer.
+
+    El registro con fotos ya guarda marca/modelo/chapa/color y las fotos del
+    vehiculo en el documento del chofer. Regla de negocio: ese primer vehiculo
+    entra `aprobado` y como activo, sin esperar una segunda revision, para que
+    el chofer pueda ponerse en linea apenas el administrador apruebe su cuenta.
+
+    Devuelve el documento insertado o `None` si faltan datos minimos.
+    """
+    driver_id = str(chofer.get("_id") or "")
+    if not driver_id:
+        return None
+    vehicle = chofer.get("vehicle") or {}
+    tipo = normalizar_tipo_vehiculo(
+        chofer.get("type_vehicle") or vehicle.get("servicio"))
+    marca = (vehicle.get("Marca") or "").strip()
+    modelo = (vehicle.get("model") or "").strip()
+    if not tipo or not marca or not modelo:
+        return None
+    # Sin datos minimos no se siembra nada: es mas seguro que el chofer suba
+    # el vehiculo desde Mi Garaje a inventarle uno.
+    if coleccion.find_one({"driver_id": driver_id}):
+        return None
+
+    matricula = _matricula_norm(vehicle.get("chapa") or "")
+    campos_vehiculo = (
+        "vehiculo_exterior_frente", "vehiculo_exterior_atras",
+        "vehiculo_interior_frente", "vehiculo_interior_atras",
+        "circulacion", "licencia_frente", "licencia_atras",
+    )
+    urls = {}
+    for ref in chofer.get("documentos") or []:
+        if not isinstance(ref, dict) or ref.get("campo") not in campos_vehiculo:
+            continue
+        url = _url_foto_registro(driver_id, ref)
+        if url:
+            urls[str(ref["campo"])] = url
+
+    doc = {
+        "_id": ObjectId(),
+        "driver_id": driver_id,
+        "tipo_vehiculo": tipo,
+        "marca": marca,
+        "modelo": modelo,
+        "year": vehicle.get("year"),
+        "matricula": matricula or None,
+        "color": vehicle.get("color"),
+        "estado": ESTADO_APROBADO,
+        "es_activo": True,
+        "origen": "registro",
+        "fotos_urls": urls,
+        "created_at": datetime.utcnow(),
+    }
+    exterior = (urls.get("vehiculo_exterior_frente")
+                or urls.get("vehiculo_exterior_atras"))
+    if exterior:
+        doc["foto_exterior_url"] = exterior
+    if urls.get("licencia_frente"):
+        doc["license_front_url"] = urls["licencia_frente"]
+    if urls.get("licencia_atras"):
+        doc["license_back_url"] = urls["licencia_atras"]
+
+    coleccion.insert_one(doc)
+    _invalidar_cache(driver_id)
+    logger.info("Vehiculo inicial aprobado para el chofer %s", driver_id)
+    return doc
 
 
 def _vehiculo_out(doc: dict) -> dict:
@@ -391,9 +479,16 @@ def _faltantes_de(doc: dict) -> list:
     obligatorias = _obligatorias_de(doc.get("tipo_vehiculo"))
     fotos = doc.get("fotos") or {}
     if not isinstance(fotos, dict):
-        return obligatorias
+        fotos = {}
+    # Un vehiculo sembrado desde el registro no tiene copia de las fotos en
+    # esta coleccion: viven en el documento del chofer y su URL queda en
+    # `fotos_urls`. Sin esto la app pediria "anadir fotos faltantes" a un
+    # vehiculo que ya las tiene.
+    urls = doc.get("fotos_urls") or {}
+    if not isinstance(urls, dict):
+        urls = {}
     return [c for c in obligatorias
-            if not (fotos.get(c) or {}).get("archivo")]
+            if not (fotos.get(c) or {}).get("archivo") and not urls.get(c)]
 
 
 def _dueno_o_admin(archivo: str, authorization: Optional[str]) -> None:
@@ -577,6 +672,13 @@ async def listar_vehiculos(authorization: Optional[str] = Header(None)):
     chofer = _chofer_actual(authorization)
     docs = list(coleccion.find(
         {"driver_id": chofer["id"]}).sort("created_at", -1))
+    if not docs:
+        # Choferes registrados despues del backfill de arranque: el vehiculo
+        # del registro se crea aqui, ya aprobado y activo, para que el garaje
+        # nunca aparezca vacio teniendo datos de vehiculo.
+        sembrado = crear_vehiculo_inicial(chofer["doc"])
+        if sembrado is not None:
+            docs = [sembrado]
     return [_vehiculo_out(d) for d in docs]
 
 

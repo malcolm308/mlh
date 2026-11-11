@@ -452,6 +452,16 @@ async def registro_con_fotos(
         {"$set": {"documentos": guardados, "documentos_subidos_at": ahora.isoformat()}},
     )
 
+    # El garaje es una coleccion aparte: el vehiculo del registro se crea ya
+    # `aprobado` y activo, con las URLs de sus fotos. Si algo falla aqui el
+    # registro NO se pierde; `GET /driver/vehicles` lo siembra al abrir la app.
+    try:
+        from routers.garaje import crear_vehiculo_inicial
+        crear_vehiculo_inicial(
+            {**doc, "_id": resultado.inserted_id, "documentos": guardados})
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo crear el vehiculo inicial de %s", driver_id)
+
     return {
         "ok": True,
         "_id": driver_id,
