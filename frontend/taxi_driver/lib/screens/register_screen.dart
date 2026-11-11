@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl_phone_field/country_picker_dialog.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
 
@@ -290,6 +291,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ],
         ),
       );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('missing_fields');
       if (!mounted) return;
       Navigator.of(context).popUntil((r) => r.isFirst);
     } catch (e) {

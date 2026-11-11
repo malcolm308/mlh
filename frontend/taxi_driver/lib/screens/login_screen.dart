@@ -68,7 +68,8 @@ class _LoginScreenState extends State<LoginScreen> {
         final profile = await api.getChofer(id);
         if (!mounted) return;
         if (profile.status == 'needs_correction' || profile.status == 'rejected') {
-          _goCorrection(profile);
+          final guardados = prefs.getStringList('missing_fields') ?? const [];
+          _goCorrection(profile, guardados);
         } else {
           _goHome(api, profile, id);
         }
@@ -105,10 +106,13 @@ class _LoginScreenState extends State<LoginScreen> {
       await prefs.setString('driver_id', id);
       // Se guarda el E.164 completo: es el mismo formato en que se registró.
       await prefs.setString('driver_telefono', telefono.trim());
+      // Se conserva lo que dijo el login para el proximo arranque de la app
+      // (el perfil puede no traer `missing_fields` en un backend viejo).
+      await prefs.setStringList('missing_fields', api.loginMissingFields);
 
       if (!mounted) return;
-      if (profile.status == 'needs_correction') {
-        _goCorrection(profile);
+      if (profile.status == 'needs_correction' || profile.status == 'rejected') {
+        _goCorrection(profile, api.loginMissingFields);
       } else {
         _goHome(api, profile, id);
       }
@@ -131,7 +135,7 @@ class _LoginScreenState extends State<LoginScreen> {
     ));
   }
 
-  void _goCorrection(DriverProfile profile) {
+  void _goCorrection(DriverProfile profile, [List<String>? faltantes]) {
     // `push` (no `pushReplacement`): al terminar de corregir se vuelve al
     // login, que es la pantalla base, y alli se avisa que sigue en revision.
     Navigator.of(context).push(MaterialPageRoute(
@@ -151,7 +155,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 },
           'max_passengers': profile.maxPassengers,
         },
-        rejectedFields: profile.missingFields,
+        rejectedFields:
+            (faltantes != null && faltantes.isNotEmpty)
+                ? faltantes
+                : profile.missingFields,
       ),
     ));
   }

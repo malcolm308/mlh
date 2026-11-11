@@ -108,6 +108,8 @@ class ChoferResponse(BaseModel):
     # compartirlo en el mensaje de invitacion.
     codigo_referido: Optional[str] = None
     status: Optional[str] = None
+    # Campos que el administrador rechazo; la app los pinta en rojo.
+    missing_fields: Optional[List[str]] = None
     documents_verified: Optional[bool] = None
     max_passengers: Optional[int] = None
     # Vínculo con Telegram. Lo rellena el bot al compartir el número; los choferes

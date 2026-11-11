@@ -14,6 +14,10 @@ export 'api_client.dart' show ApiException;
 class ApiService {
   final String base;
 
+  /// Ultimo estado devuelto por `/login` (needs_correction, rejected...).
+  String? loginStatus;
+  List<String> loginMissingFields = const [];
+
   /// Token JWT para `Authorization: Bearer`. Vive en [ApiClient] y aquí solo
   /// se expone con el mismo nombre que tenía antes del refactor.
   String? get token => ApiClient.token;
@@ -63,6 +67,12 @@ class ApiService {
   Future<String> login(String telefono, String password) async {
     final j = await _map('POST', '/login',
         body: {'email': telefono, 'password': password, 'app': 'chofer'});
+    // El login es el que trae `missing_fields`; el perfil puede no incluirlos
+    // todavia en un backend sin actualizar.
+    loginStatus = j['status']?.toString();
+    loginMissingFields = (j['missing_fields'] is List)
+        ? (j['missing_fields'] as List).map((e) => e.toString()).toList()
+        : const [];
     final t = j['access_token']?.toString();
     if (t == null || t.isEmpty) throw ApiException('Respuesta de login inválida');
     final refresh = j['refresh_token']?.toString();
