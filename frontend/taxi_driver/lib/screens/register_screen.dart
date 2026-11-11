@@ -8,6 +8,7 @@ import '../services/vehicle_types_service.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/documento_widgets.dart';
+import 'login_screen.dart';
 
 /// Formulario de registro de conductor.
 ///
@@ -164,6 +165,44 @@ class _RegisterScreenState extends State<RegisterScreen> {
         isDense: true,
       );
 
+  /// Deja el formulario como recien abierto antes de volver al login.
+  void _limpiarFormulario() {
+    for (final c in [
+      _nombre, _apellidos, _email, _referido, _password, _confirm,
+      _marca, _model, _year, _chapa, _color, _maxPassengers,
+    ]) {
+      c.clear();
+    }
+    _year.text = '2020';
+    _maxPassengers.text = '4';
+    _fotos.clear();
+    _tipo = null;
+    _telefonoCompleto = null;
+    _telefonoInicial = null;
+    _loading = false;
+    _error = null;
+  }
+
+  /// Vuelve al login sin dejar el formulario en la pila.
+  void _volverAlLogin(String mensaje) {
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => LoginScreen(mensaje: mensaje)),
+      (route) => false,
+    );
+  }
+
+  /// Texto entendible para los fallos de envio.
+  String _mensajeErrorEnvio(Object e) {
+    final s = e.toString();
+    if (s.contains('conexión') ||
+        s.contains('conectar') ||
+        s.contains('tarda demasiado')) {
+      return 'No se pudo enviar. Revisa tu conexión e inténtalo de nuevo.';
+    }
+    return s;
+  }
+
   Future<void> _register() async {
     if (widget.isCorrectionMode) {
       await _reenviarCorreccion();
@@ -218,13 +257,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
 
       if (!mounted) return;
-      await _mostrarPendiente();
+      _limpiarFormulario();
+      _volverAlLogin(
+        'Solicitud enviada correctamente. '
+        'Espera a que un administrador se contacte contigo.',
+      );
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = '$e';
-      });
+      setState(() => _error = _mensajeErrorEnvio(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -271,65 +313,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
 
       if (!mounted) return;
-      setState(() => _loading = false);
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          icon: const Icon(Icons.check_circle, size: 44, color: Color(0xFF2ECC71)),
-          title: const Text('Solicitud reenviada'),
-          content: const Text(
-            'Tus datos se actualizaron y tu solicitud volvió a revisión.\n\n'
-            'El administrador la revisará pronto.',
-            textAlign: TextAlign.center,
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Entendido'),
-            ),
-          ],
-        ),
-      );
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('missing_fields');
-      if (!mounted) return;
-      Navigator.of(context).popUntil((r) => r.isFirst);
+      _limpiarFormulario();
+      _volverAlLogin(
+        'Solicitud reenviada correctamente. '
+        'Tu registro volvió a revisión; te contactaremos pronto.',
+      );
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = '$e';
-      });
-    }
-  }
-
-  /// El registro se completo pero la cuenta queda pendiente de aprobacion:
-  /// avisa y regresa al login en vez de entrar a la app.
-  Future<void> _mostrarPendiente() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.hourglass_top, size: 44, color: Color(0xFFF39C12)),
-        title: const Text('Solicitud recibida'),
-        content: const Text(
-          'Tus 10 documentos se enviaron correctamente.\n\n'
-          'El administrador los va a revisar y, si todo está en orden, '
-          'habilitará tu cuenta. Te avisaremos cuando puedas entrar.',
-          textAlign: TextAlign.center,
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Entendido'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    if (ok == true) {
-      Navigator.of(context).popUntil((r) => r.isFirst);
+      setState(() => _error = _mensajeErrorEnvio(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 

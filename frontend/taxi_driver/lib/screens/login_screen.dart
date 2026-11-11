@@ -15,7 +15,10 @@ import 'forgot_password_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.mensaje});
+
+  /// Mensaje que se muestra al abrir, por ejemplo tras enviar el registro.
+  final String? mensaje;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -37,11 +40,63 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    final aviso = widget.mensaje;
+    if (aviso != null && aviso.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(aviso),
+          duration: const Duration(seconds: 6),
+        ));
+      });
+    }
     _restore();
     // OTA: se consulta al abrir la app, antes incluso de iniciar sesion. Un
     // parche se baja solo; si la version ya no es compatible, el aviso
     // bloqueante sale aqui. No hay viaje posible en esta pantalla.
     unawaited(_revisarActualizacion());
+  }
+
+  /// Estados en los que el chofer aun no puede entrar a la app.
+  static const _estadosPendientes = {
+    'pending',
+    'pending_review',
+    'pendiente',
+    'pending_documents',
+  };
+
+  bool _esPendiente(String? estado) =>
+      estado != null && _estadosPendientes.contains(estado.toLowerCase());
+
+  /// Deja el telefono limpio y muestra un aviso sin dejar el spinner activo.
+  void _avisar(String mensaje) {
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _error = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensaje), duration: const Duration(seconds: 6)),
+    );
+  }
+
+  /// Borra tokens y datos locales de una cuenta que no puede entrar.
+  Future<void> _limpiarSesionLocal(SharedPreferences prefs) async {
+    await TokenStore.instance.limpiar();
+    await prefs.remove('driver_id');
+    await prefs.remove('driver_telefono');
+    await prefs.remove('missing_fields');
+  }
+
+  /// Texto entendible para los fallos de red.
+  String _mensajeError(Object e) {
+    final s = e.toString();
+    if (s.contains('conexión') ||
+        s.contains('conectar') ||
+        s.contains('tarda demasiado')) {
+      return 'No se pudo conectar. Revisa tu conexión e inténtalo de nuevo.';
+    }
+    return s;
   }
 
   /// Consulta la version al backend y muestra el aviso si es obligatorio.
@@ -59,24 +114,31 @@ class _LoginScreenState extends State<LoginScreen> {
     // conserva ademas en SharedPreferences para el servicio de ofertas.
     final token = await TokenStore.instance.leerAccess();
     final id = prefs.getString('driver_id');
-    if (token != null && id != null) {
-      final api = ApiService();
-      api.token = token;
+    if (token == null || id == null) return;
+    final api = ApiService();
+    api.token = token;
+    if (!mounted) return;
+    setState(() => _loading = true);
+    try {
+      final profile = await api.getChofer(id);
       if (!mounted) return;
-      setState(() => _loading = true);
-      try {
-        final profile = await api.getChofer(id);
-        if (!mounted) return;
-        if (profile.status == 'needs_correction' || profile.status == 'rejected') {
-          final guardados = prefs.getStringList('missing_fields') ?? const [];
-          _goCorrection(profile, guardados);
-        } else {
-          _goHome(api, profile, id);
-        }
-      } catch (_) {
-        if (!mounted) return;
-        setState(() => _loading = false);
+      if (_esPendiente(profile.status)) {
+        // Una cuenta pendiente no puede quedarse dentro de la app.
+        await _limpiarSesionLocal(prefs);
+        _avisar('Tu registro está en revisión. Te contactaremos pronto.');
+      } else if (profile.status == 'needs_correction' ||
+          profile.status == 'rejected') {
+        final guardados = prefs.getStringList('missing_fields') ?? const [];
+        _goCorrection(profile, guardados);
+      } else {
+        _goHome(api, profile, id);
       }
+    } catch (_) {
+      // Sin red o perfil invalido: se queda en el login, sin spinner.
+      if (!mounted) return;
+      setState(() => _loading = false);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -102,6 +164,13 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       final prefs = await SharedPreferences.getInstance();
+      if (_esPendiente(profile.status)) {
+        // Respaldo por si el backend deja entrar a un pendiente.
+        await _limpiarSesionLocal(prefs);
+        _avisar('Tu registro está en revisión. Te contactaremos pronto.');
+        return;
+      }
+
       // `api.login` ya guardo access + refresh en TokenStore.
       await prefs.setString('driver_id', id);
       // Se guarda el E.164 completo: es el mismo formato en que se registró.
@@ -118,10 +187,15 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = e.toString();
-      });
+      final texto = e.toString();
+      if (texto.toLowerCase().contains('pendiente')) {
+        // El backend rechaza con 403 a las cuentas en revisión.
+        _avisar('Tu registro está en revisión. Te contactaremos pronto.');
+      } else {
+        setState(() => _error = _mensajeError(e));
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
