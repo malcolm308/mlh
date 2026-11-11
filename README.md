@@ -63,7 +63,12 @@ Las dos apps leen su configuracion de `--dart-define`, nunca de codigo fijo:
 | dart-define | Que es | Default local |
 |---|---|---|
 | `API_BASE_URL` | Base de la API FastAPI | `http://localhost:8000` |
-| `MAP_STYLE_URL` | URL del estilo de mapa (Martin) | `http://localhost:8010/style/taxi` |
+| `MAP_STYLE_URL` | URL de estilo de mapa explicita (tiene prioridad) | vacio |
+| `MAPTILER_API_KEY` | Clave de MapTiler; si falta se usa Martin | vacio |
+
+Sin `MAP_STYLE_URL` ni `MAPTILER_API_KEY`, las apps usan el estilo propio
+servido por Martin (`https://mlh-tdyg.onrender.com/style/taxi`). Asi el mapa
+funciona aunque la build se haga sin clave y no se queda en "Cargando mapa...".
 
 Para una build apuntando a produccion se pasan las URLs HTTPS de Render:
 

@@ -33,15 +33,33 @@ class ApiConfig {
   static const String appDownloadUrl = '$baseUrl/static/app_latest.apk';
 
   /// Clave de MapTiler. Se inyecta al compilar con
-  /// `--dart-define=MAPTILER_API_KEY=...`. Si no se pasa, queda vacia y el
-  /// estilo de MapTiler no cargara.
+  /// `--dart-define=MAPTILER_API_KEY=...`. Si no se pasa, queda vacia y se
+  /// usa el estilo propio de Martin, que no necesita clave.
   static const String mapTilerApiKey = String.fromEnvironment('MAPTILER_API_KEY');
 
-  /// URL del estilo de MapTiler (basic-v2): cobertura completa de calles
-  /// (incluye Guanabo) pero sin edificios 3D ni POIs pesados, para que el
-  /// mapa no se congele en telefonos modestos. Reemplaza a streets-v2.
-  static String get mapStyleUrl =>
-      'https://api.maptiler.com/maps/basic-v2/style.json?key=$mapTilerApiKey';
+  /// URL de estilo explicita (`--dart-define=MAP_STYLE_URL=...`).
+  ///
+  /// Tiene prioridad sobre todo lo demas: sirve para apuntar a un Martin
+  /// local (`http://localhost:8010/style/taxi`) o a cualquier estilo propio.
+  static const String mapStyleUrlOverride =
+      String.fromEnvironment('MAP_STYLE_URL');
+
+  /// URL del estilo del mapa.
+  ///
+  /// Orden de preferencia:
+  ///  1. [mapStyleUrlOverride], si se compilo con `--dart-define`.
+  ///  2. MapTiler basic-v2, solo si hay clave. Cobertura completa de calles
+  ///     (incluye Guanabo) y sin edificios 3D ni POIs pesados.
+  ///  3. Estilo propio servido por Martin. **No necesita clave**, asi que es
+  ///     el respaldo que evita que el mapa se quede en "Cargando mapa..."
+  ///     cuando la build sale sin `MAPTILER_API_KEY`.
+  static String get mapStyleUrl {
+    if (mapStyleUrlOverride.isNotEmpty) return mapStyleUrlOverride;
+    if (mapTilerApiKey.isNotEmpty) {
+      return 'https://api.maptiler.com/maps/basic-v2/style.json?key=$mapTilerApiKey';
+    }
+    return '$martinUrl/style/taxi';
+  }
 
   // ---------------- Endpoints del backend ----------------
 

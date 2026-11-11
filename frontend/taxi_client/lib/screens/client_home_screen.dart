@@ -25,7 +25,6 @@ import '../widgets/ui/pill_button.dart';
 import '../widgets/vehicle_selector_sheet.dart';
 import 'blocked_drivers_screen.dart';
 import 'client_fondo_screen.dart';
-import 'client_transfer_history_screen.dart';
 import 'favorite_locations_screen.dart';
 import 'history_screen.dart';
 import 'perfil_screen.dart';
@@ -1921,16 +1920,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
           builder: (_) => HistoryScreen(
             api: widget.api,
             clientId: widget.clientId,
-          ),
-        ));
-      },
-      onTransferencias: () {
-        Navigator.of(context).pop();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => ClientTransferHistoryScreen(
-            api: widget.api,
-            clientId: widget.clientId,
-            fullName: widget.profile.fullName,
           ),
         ));
       },

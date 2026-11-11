@@ -306,9 +306,15 @@ class _ClientMapViewState extends State<ClientMapView> {
   static const _layerRayos = 'cliente-rayos-simbolo';
   static const _rayoImagen = 'rayo_pin';
 
-  /// Capa del estilo sobre la que se dibuja la ruta. Las carreteras estan por
-  /// debajo y los rotulos por encima, que es lo que quiere el cliente.
-  static const _debajoDe = 'nombres-carretera';
+  /// Capas de rotulos bajo las que puede ir la ruta, en orden de preferencia.
+  ///
+  /// El estilo propio de Martin usa `nombres-carretera`; MapTiler basic-v2 usa
+  /// `Road labels`. Se elige una u otra segun lo que traiga el estilo cargado:
+  /// pasar un `belowLayerId` inexistente puede impedir que se cree la capa.
+  static const List<String> _posiblesDebajo = [
+    'nombres-carretera',
+    'Road labels',
+  ];
 
   bool _estiloListo = false;
 
@@ -458,11 +464,29 @@ class _ClientMapViewState extends State<ClientMapView> {
     }
   }
 
+  /// Capa de rotulos bajo la que va la ruta, segun el estilo cargado.
+  ///
+  /// Devuelve `null` si el estilo no tiene ninguna de [_posiblesDebajo]: en
+  /// ese caso MapLibre apila la ruta encima, que se ve igual pero no rompe la
+  /// creacion de la capa por un id inexistente.
+  Future<String?> _debajoDeEtiquetas(mlib.MapLibreMapController ctl) async {
+    try {
+      final capas = await ctl.getLayerIds();
+      for (final id in _posiblesDebajo) {
+        if (capas.contains(id)) return id;
+      }
+    } catch (_) {
+      // El estilo pudo recargarse mientras se consultaba; se sigue sin capa.
+    }
+    return null;
+  }
+
   Future<void> _pintarRuta({bool crearCapas = false}) async {
     final ctl = widget.controller._ctl;
     if (ctl == null) return;
 
     if (crearCapas) {
+      final debajo = await _debajoDeEtiquetas(ctl);
       await ctl.addGeoJsonSource(_srcRuta, _geojsonLineaSegura(const []));
       // Halo blanco: separa la ruta de las aceras, que tambien son blancas.
       // Va mas ancho que el azul y crece con el zoom, igual que el trazo azul.
@@ -476,7 +500,7 @@ class _ClientMapViewState extends State<ClientMapView> {
           lineJoin: 'round',
           lineCap: 'round',
         ),
-        belowLayerId: _debajoDe,
+        belowLayerId: debajo,
       );
       await ctl.addLineLayer(
         _srcRuta,
@@ -488,7 +512,7 @@ class _ClientMapViewState extends State<ClientMapView> {
           lineJoin: 'round',
           lineCap: 'round',
         ),
-        belowLayerId: _debajoDe,
+        belowLayerId: debajo,
       );
 
       // La recta es PROVISIONAL, mientras OSRM no responde: azul muy sutil y

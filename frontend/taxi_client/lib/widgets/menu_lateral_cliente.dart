@@ -31,7 +31,6 @@ class MenuLateralCliente extends StatelessWidget {
   final VoidCallback onPerfil;
   final VoidCallback onPromociones;
   final VoidCallback onHistorial;
-  final VoidCallback onTransferencias;
   final VoidCallback onFondo;
   final VoidCallback onFavoritas;
   final VoidCallback onBloqueados;
@@ -46,7 +45,6 @@ class MenuLateralCliente extends StatelessWidget {
     required this.onPerfil,
     required this.onPromociones,
     required this.onHistorial,
-    required this.onTransferencias,
     required this.onFondo,
     required this.onFavoritas,
     required this.onBloqueados,
@@ -98,11 +96,6 @@ class MenuLateralCliente extends StatelessWidget {
                         icono: Icons.history,
                         texto: 'Historial de viajes',
                         onTap: onHistorial,
-                      ),
-                      PilulaMenu(
-                        icono: Icons.swap_horiz_rounded,
-                        texto: 'Historial de transferencias',
-                        onTap: onTransferencias,
                       ),
                       PilulaMenu(
                         icono: Icons.account_balance_wallet_outlined,

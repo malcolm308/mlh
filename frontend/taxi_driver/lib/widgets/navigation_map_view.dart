@@ -430,6 +430,28 @@ static Map<String, dynamic> _flechaGeoJson(
   /// sources y layers que se habian anadido antes se pierden con el estilo, y el
   /// mapa se queda en blanco aunque la app no haya crasheado. Este es el unico
   /// momento en el que el estilo existe de verdad.
+  /// Capas de rotulos bajo las que puede ir la ruta, en orden de preferencia.
+  ///
+  /// El estilo propio de Martin usa `nombres-carretera`; MapTiler basic-v2 usa
+  /// `Road labels`. Se elige una u otra segun lo que traiga el estilo cargado:
+  /// pasar un `belowLayerId` inexistente puede impedir que se cree la capa.
+  static const List<String> _posiblesDebajo = [
+    'nombres-carretera',
+    'Road labels',
+  ];
+
+  Future<String?> _debajoDeEtiquetas(MapLibreMapController ctl) async {
+    try {
+      final capas = await ctl.getLayerIds();
+      for (final id in _posiblesDebajo) {
+        if (capas.contains(id)) return id;
+      }
+    } catch (_) {
+      // El estilo pudo recargarse mientras se consultaba; se sigue sin capa.
+    }
+    return null;
+  }
+
   Future<void> _onStyleLoaded() async {
     final ctl = _controlador;
     if (ctl == null) return;
@@ -444,8 +466,10 @@ static Map<String, dynamic> _flechaGeoJson(
       // que hay que evitar es 'edificios', que es la capa 5 de 12 del estilo:
       // las carreteras son la 7, con lo que la ruta quedaba tapada por la
       // calzada y solo se veian los tramos en que se salia de la calle.
-      // Con 'nombres-carretera' (la 8) la ruta va encima de las carreteras y
-      // los rotulos siguen escribiendose por encima.
+      // Con la capa de rotulos la ruta va encima de las carreteras y los
+      // rotulos siguen escribiendose por encima. El nombre cambia segun el
+      // estilo (Martin o MapTiler), por eso se busca entre los existentes.
+      final debajo = await _debajoDeEtiquetas(ctl);
       await ctl.addGeoJsonSource(_idRuta, _lineaGeoJson(widget.ruta));
       await ctl.addLineLayer(
         _idRuta,
@@ -474,7 +498,7 @@ static Map<String, dynamic> _flechaGeoJson(
           lineOpacity: 0.85,
           lineJoin: 'round',
         ),
-        belowLayerId: 'nombres-carretera',
+        belowLayerId: debajo,
       );
       await ctl.addLineLayer(
         _idRuta,
@@ -504,7 +528,7 @@ static Map<String, dynamic> _flechaGeoJson(
           lineOpacity: 0.85,
           lineJoin: 'round',
         ),
-        belowLayerId: 'nombres-carretera',
+        belowLayerId: debajo,
       );
 
 // Flecha de ubicacion del chofer.
@@ -545,7 +569,7 @@ static Map<String, dynamic> _flechaGeoJson(
           fillColor: '#ffffff',
           fillOpacity: 1.0,
         ),
-        belowLayerId: 'nombres-carretera',
+        belowLayerId: debajo,
       );
 
       await ctl.addGeoJsonSource(
@@ -564,7 +588,7 @@ static Map<String, dynamic> _flechaGeoJson(
           fillColor: '#1A73E8',
           fillOpacity: 1.0,
         ),
-        belowLayerId: 'nombres-carretera',
+        belowLayerId: debajo,
       );
     } catch (e) {
       // Si el estilo se recarga mientras se anaden las capas, la excepcion es
