@@ -126,8 +126,8 @@ def _formulario(api, config: dict) -> None:
             value=float(min(comision_billetera_actual,
                             max_comision_billetera)),
             format="%.2f", key="cfg_comision_billetera",
-            help="En lanzamiento es 0 %. El máximo permitido es %.0f %%."
-                 % max_comision_billetera,
+            help=(f"En lanzamiento es 0 %. El máximo permitido es "
+                  f"{max_comision_billetera:.0f} %."),
         )
         recargo_transferencia = p2.number_input(
             "Recargo por transferencia (%)",
