@@ -2500,8 +2500,8 @@ async def _expire_trip_now(trip_id: str) -> bool:
     """Marca el viaje como expirado si aun sigue en 'requested'.
 
     Se usa cuando alguien intenta aceptar una oferta vencida: en vez de dejarla
-    en 'requested' hasta el barrido de 120 s (y que otro conductor la reciba en
-    el siguiente sondeo), se cierra en el acto.
+    en 'requested' hasta el barrido (cada 15 s, con la ventana de 180 s), se
+    cierra en el acto.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -3404,6 +3404,9 @@ async def api_get_trip_receipt(trip_id: str):
         "commission_rate": 0.15,
         "commission_label": "15%",
         "commission_discount": False,
+        # El chofer necesita ver con que le pago el pasajero tambien cuando el
+        # recibo se reconstruye por HTTP (WS caido o fin forzado desde el panel).
+        "metodo_pago": _normalizar_metodo_pago(trip.get("payment_method")),
         "currency": trip.get("currency") or "CUP",
         "coeficiente_aplicado": (
             float(trip["coeficiente_aplicado"])
@@ -3544,7 +3547,7 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
     if estado == "cancelled":
         raise HTTPException(409, "La solicitud fue cancelada por el pasajero")
     if estado != "requested":
-        raise HTTPException(409, "El viaje ya fue aceptado por otro conductor")
+        raise HTTPException(409, "Aceptado por otro chofer")
 
     # 4. La oferta esta viva y sin dueno: comprobaciones del conductor.
     driver_state = await get_driver_status(driver_id)
@@ -3634,7 +3637,7 @@ async def api_accept_trip(trip_id: str, driver_id: str = Query(...)):
             raise HTTPException(410, "La oferta ha expirado")
         if actual and actual.get("status") == "cancelled":
             raise HTTPException(409, "La solicitud fue cancelada por el pasajero")
-        raise HTTPException(409, "El viaje ya fue aceptado por otro conductor")
+        raise HTTPException(409, "Aceptado por otro chofer")
 
     # Cambiar estado del chofer y notificar al cliente
     await set_driver_status(driver_id, "busy")

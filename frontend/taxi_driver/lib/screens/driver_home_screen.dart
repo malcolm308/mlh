@@ -65,9 +65,20 @@ class DriverHomeScreen extends StatefulWidget {
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
+/// Desenlace de una oferta que dejo de venir en el sondeo del chofer.
+///
+/// El sondeo solo dice "ya no esta". Antes de acusar a nadie se consulta el
+/// estado real y este enum guarda el veredicto: expirar y ser tomada por otro
+/// son desenlaces distintos y la UI no puede tratarlos igual.
+enum _FinOferta { tomadaPorOtro, expirada, cancelada, esMia, desconocida }
+
 class _DriverHomeScreenState extends State<DriverHomeScreen>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  static const int _offerLimitSecs = 20;
+  /// Respaldo del plazo de una oferta cuando el backend no manda
+  /// `offer_expires_in_secs`. Es el MISMO tiempo unico de solicitud del viaje
+  /// (180 s): antes eran 20 s locales y la tarjeta se cerraba antes que la
+  /// condicion real del servidor.
+  static const int _offerLimitSecs = 180;
   static const int _lostCloseSecs = 5;
 
   /// Máximo de antigüedad de un viaje 'accepted' para restaurarlo al abrir.
@@ -1085,11 +1096,34 @@ double? _rumboParaFlecha() {
     await _abrirViajeAsignado(null, tripId: id);
   }
 
-  /// La oferta se agoto sin respuesta. La tarjeta ya se retira sola por su
-  /// cuenta atras; aqui solo se limpia el aviso del panel y se explica.
+  /// La oferta se agoto sin respuesta. Se cierra la tarjeta y se vuelve al
+  /// mapa: expirar NO es perder una carrera contra otro chofer.
   void _alExpirarOferta(TripOffer offer) {
     if (!mounted) return;
+    // Solo la oferta que el chofer tiene en pantalla justifica cerrar algo.
+    if (_selectedOffer?.tripId != offer.tripId) return;
+    _cerrarOfertaExpirada(offer);
     _mostrarAviso('La oferta a ${_destino(offer)} expiró sin respuesta');
+  }
+
+  /// Cierra la tarjeta de una oferta vencida SIN marcarla como perdida.
+  ///
+  /// La tarjeta roja de "Aceptado por otro chofer" es para la carrera de
+  /// aceptacion (el chofer toca "Aceptar" y otro gano). Una oferta que se
+  /// agoto sola no la gano nadie: mostrar ese cartel y bloquear el boton era
+  /// el fallo reportado. Aqui solo se limpia el estado y vuelve el mapa.
+  void _cerrarOfertaExpirada(TripOffer offer) {
+    _offerTimer?.cancel();
+    _lostTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      if (_selectedOffer?.tripId == offer.tripId) _selectedOffer = null;
+      if (_lostOffer?.tripId == offer.tripId) {
+        _lostOffer = null;
+        _lostCountdown = 0;
+      }
+    });
+    _refreshRoutes();
   }
 
   /// Otro conductor se llevo el viaje. Para este chofer ya no existe.
@@ -1102,6 +1136,12 @@ double? _rumboParaFlecha() {
         _activeTrip?.tripId == offer.tripId) {
       return;
     }
+    // Solo la oferta que el chofer esta viendo produce la tarjeta roja. Otra
+    // oferta de la cache que se lleve alguien no debe cerrar la actual.
+    if (_selectedOffer?.tripId != offer.tripId &&
+        _lostOffer?.tripId != offer.tripId) {
+      return;
+    }
     _markOfferLost(offer);
     _mostrarAviso('Otro conductor aceptó el viaje a ${_destino(offer)}');
   }
@@ -1111,14 +1151,14 @@ double? _rumboParaFlecha() {
   ///
   /// Si el estado no se puede leer, se retira el aviso en silencio: dar un
   /// veredicto que no se puede sostener seria peor que no decir nada.
-  Future<void> _retirarAvisoSiDesaparecio(String tripId) async {
+  Future<_FinOferta> _retirarAvisoSiDesaparecio(String tripId) async {
     // Si el viaje es nuestro (aceptacion en vuelo o ya en curso), que haya
     // dejado de salir en el sondeo NO es que "otro conductor lo tomó" (es
     // justo lo contrario). Sin este guardado, el chofer que ganaba el viaje
     // recibia la carta de "Aceptado por otro chofer" sobre su propia carrera.
     if (tripId == _aceptandoTripId || tripId == _activeTrip?.tripId) {
       await _notif.handleOfferGone(tripId);
-      return;
+      return _FinOferta.esMia;
     }
 
     TripOffer? offer;
@@ -1135,7 +1175,7 @@ double? _rumboParaFlecha() {
       // convertia en "la oferta expiro" (o en "otro conductor" si la lectura
       // venia incompleta), dos mensajes que no se podian sostener.
       await _notif.handleOfferGone(tripId);
-      return;
+      return _FinOferta.desconocida;
     }
 
     final status = offer.status;
@@ -1149,16 +1189,17 @@ double? _rumboParaFlecha() {
       final propietario = offer.tripDriverId;
       if (propietario != null && propietario == widget.driverId) {
         await _notif.handleOfferGone(tripId);
-        return;
+        return _FinOferta.esMia;
       }
       await _notif.handleTripTakenByOther(tripId);
-      return;
+      return _FinOferta.tomadaPorOtro;
     }
     if (status == 'cancelled' || status == 'rejected') {
       await _notif.handleTripCancelled(tripId);
-      return;
+      return _FinOferta.cancelada;
     }
     await _notif.handleTripExpired(tripId);
+    return _FinOferta.expirada;
   }
 
   /// Destino legible de una oferta, para los avisos.
@@ -1336,20 +1377,30 @@ double? _rumboParaFlecha() {
               !offers.any((o) => o.tripId == id) &&
               !_declinedTripIds.contains(id))
           .toList();
+      final desenlaces = <String, _FinOferta>{};
       for (final id in desaparecidas) {
         _ofertaCache.remove(id);
-        await _retirarAvisoSiDesaparecio(id);
+        desenlaces[id] = await _retirarAvisoSiDesaparecio(id);
       }
 
       final selected = _selectedOffer;
       final stillThere =
           selected != null && offers.any((o) => o.tripId == selected.tripId);
-      if (_lostOffer == null && selected != null && !stillThere) {
-        _markOfferLost(selected);
-      } else {
-        setState(() {
-          if (selected != null && !stillThere) _selectedOffer = null;
-        });
+      if (selected != null && !stillThere) {
+        // La oferta salio del sondeo. Solo una derrota real contra otro chofer
+        // pinta la tarjeta roja; expirada o cancelada se cierran en silencio.
+        // `_retirarAvisoSiDesaparecio` ya consulto el estado real y aviso al
+        // panel; para "otro chofer" su callback deja la tarjeta correcta.
+        final fin = desenlaces[selected.tripId];
+        if (fin == _FinOferta.tomadaPorOtro) {
+          _markOfferLost(selected);
+        } else if (fin == _FinOferta.expirada ||
+            fin == _FinOferta.cancelada) {
+          setState(() => _selectedOffer = null);
+        }
+        // `esMia` (aceptacion en vuelo) y `desconocida` (fallo de red) se
+        // dejan como estan: la cuenta atras local o la aceptacion en curso
+        // resuelven el caso sin inventar un veredicto.
       }
 
       // La tarjeta interna es la interfaz principal de la oferta: se abre en
@@ -1887,7 +1938,11 @@ final inTripPhase = active != null && active.status == 'in_progress';
         _offerTimer?.cancel();
         final offer = _selectedOffer;
         if (offer != null) {
-          _markOfferLost(offer);
+          // Se agoto el tiempo: la tarjeta se cierra y vuelve el mapa. NO es
+          // "Aceptado por otro chofer": ese cartel solo existe si el backend
+          // responde 409 al tocar "Aceptar".
+          _cerrarOfertaExpirada(offer);
+          _mostrarAviso('La oferta a ${_destino(offer)} expiró sin respuesta');
         } else if (mounted) {
           setState(() => _offerCountdown = 0);
         }
@@ -2153,12 +2208,24 @@ final inTripPhase = active != null && active.status == 'in_progress';
     } catch (e) {
       _aceptandoTripId = null;
       if (!mounted) return;
+      // 409 = otro chofer gano la carrera: aqui SI corresponde la tarjeta
+      // roja. 410 = la oferta vencio antes del toque: mensaje suave y cierre.
+      final esOtraToma = e is ApiException &&
+          e.statusCode == 409 &&
+          !e.message.toLowerCase().contains('cancelada');
+      final expiro = e is ApiException && e.statusCode == 410;
       setState(() {
         _isAccepting = false;
         _selectedOffer = null;
         _loading = false;
       });
-      _showError(_mensajeAceptar(e));
+      if (esOtraToma) {
+        _markOfferLost(offer);
+      } else if (expiro) {
+        _mostrarAviso('La oferta ha expirado. Espera una nueva solicitud.');
+      } else {
+        _showError(_mensajeAceptar(e));
+      }
       await _tick();
     }
   }
@@ -2674,6 +2741,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
           children: [
             _row('Distancia', '${t.distanceKm} km'),
             _row('Duración', _fmtDuration(t.durationSecs)),
+            _row('Pago', t.paymentMethod),
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
             // El kilometraje se cobra con un coeficiente segun lo larga que sea
@@ -3097,14 +3165,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                         fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 4),
-                  Row(
-                    children: const [
-                      Icon(Icons.payments_outlined, size: 16, color: muted),
-                      SizedBox(width: 4),
-                      Text('Efectivo',
-                          style: TextStyle(color: muted, fontSize: 13)),
-                    ],
-                  ),
+                  _chipPago(o.paymentMethod),
                 ],
               ),
               const Spacer(),
@@ -3414,7 +3475,7 @@ if (o.pickup != null) ...[
                       color: text, fontSize: 14, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 2),
-                Text('${o.numPasajes} pasajero(s) · Efectivo',
+                Text('${o.numPasajes} pasajero(s) · ${o.paymentMethod}',
                     style: const TextStyle(color: muted, fontSize: 12)),
               ],
             ),
@@ -3739,6 +3800,16 @@ if (o.pickup != null) ...[
               '${t.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
               style: const TextStyle(
                   color: text, fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(_iconoPago(t.paymentMethod), size: 11, color: muted),
+                const SizedBox(width: 3),
+                Text(t.paymentMethod,
+                    style: const TextStyle(fontSize: 10, color: muted)),
+              ],
             ),
           ],
         ),
@@ -4241,6 +4312,21 @@ if (o.pickup != null) ...[
         _lineaEspera(trip),
         const SizedBox(height: 10),
 
+        // ---- Metodo de pago ----
+        // El chofer tiene que saber con que le paga el pasajero ANTES de
+        // terminarlo: billetera y transferencia no se cobran en mano, y la
+        // transferencia externa lleva recargo.
+        Row(
+          children: [
+            const Icon(Icons.payments_outlined, size: 14, color: muted),
+            const SizedBox(width: 6),
+            const Text('Pago', style: TextStyle(fontSize: 11, color: muted)),
+            const Spacer(),
+            _chipPago(trip.paymentMethod),
+          ],
+        ),
+        const SizedBox(height: 10),
+
         // ---- Precio + accion principal ----
         Row(
           children: [
@@ -4307,6 +4393,49 @@ if (o.pickup != null) ...[
             child: Icon(icon, size: 18, color: AppColors.ambar),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Icono del metodo con el que el pasajero paga el viaje.
+  IconData _iconoPago(String metodo) => switch (metodo) {
+        'Billetera' => Icons.account_balance_wallet_outlined,
+        'Transferencia' => Icons.swap_horiz_rounded,
+        _ => Icons.payments_outlined,
+      };
+
+  /// Color del metodo de pago. El ambar se reserva para efectivo, que es el
+  /// caso normal; billetera y transferencia se distinguen de un vistazo.
+  Color _colorPago(String metodo) => switch (metodo) {
+        'Billetera' => const Color(0xFF1A73E8),
+        'Transferencia' => const Color(0xFF7B1FA2),
+        _ => AppColors.ambar,
+      };
+
+  /// Chip compacto con el metodo de pago, para la oferta y el panel del viaje.
+  Widget _chipPago(String metodo) {
+    final color = _colorPago(metodo);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_iconoPago(metodo), size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(
+            metodo,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

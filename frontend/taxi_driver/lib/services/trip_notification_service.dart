@@ -48,9 +48,11 @@ class TripNotificationService {
 
   /// Segundos de vida por defecto si el backend no manda `expires_in_secs`.
   ///
-  /// Coincide con el `OFFER_TTL_SECS` del backend. Es red de seguridad: es
-  /// preferible retirar el aviso a dejarlo sonando sin limite.
-  static const int fallbackExpiresSecs = 60;
+  /// Coincide con la ventana unica de solicitud del backend (180 s). Es red de
+  /// seguridad: es preferible retirar el aviso a dejarlo sonando sin limite,
+  /// pero no debe ser mas corto que la oferta real o la tarjeta se cerraria
+  /// sola antes de que el viaje expire.
+  static const int fallbackExpiresSecs = 180;
 
   /// Canal de las notificaciones de oferta.
   ///

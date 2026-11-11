@@ -47,6 +47,10 @@ class _TripScreenState extends State<TripScreen> {
   /// `busqueda_expira_en_secs` (reloj del servidor) y entre sondeos baja de
   /// uno en uno. No cambia el estado: solo lo hace el backend a los 180 s.
   int? _busquedaRestante;
+
+  /// Respaldo del contador si el backend no manda `busqueda_expira_en_secs`
+  /// (version vieja o campo ausente). Es la misma ventana unica de 180 s.
+  static const int _busquedaRespaldoSecs = 180;
   Timer? _busquedaTimer;
   List<LatLng> _route = [];
   LatLng? _driverPos;
@@ -231,8 +235,9 @@ class _TripScreenState extends State<TripScreen> {
         _error = null;
         // Contador de busqueda: se re-sincroniza con el servidor cada 3 s y
         // entre sondeos lo baja el timer de 1 s. Nunca decide la expiracion.
-        _busquedaRestante =
-            t.status == 'requested' ? t.busquedaExpiraEnSecs : null;
+        _busquedaRestante = t.status == 'requested'
+            ? (t.busquedaExpiraEnSecs ?? _busquedaRespaldoSecs)
+            : null;
       });
       if (estadoAnterior != t.status) {
         // Nueva fase: la ruta del chofer de la fase anterior ya no sirve.

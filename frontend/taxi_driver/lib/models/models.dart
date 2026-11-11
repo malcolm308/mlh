@@ -248,6 +248,18 @@ String? _nested(Map<String, dynamic> j, String key, String sub) {
   return null;
 }
 
+/// Normaliza el metodo de pago a las tres etiquetas que usa la app.
+///
+/// El backend guarda 'Efectivo', 'Billetera' o 'Transferencia'. Cualquier
+/// valor viejo, vacio o desconocido se trata como efectivo: es el metodo por
+/// defecto y evita que el chofer vea una etiqueta en blanco.
+String _normalizarMetodoPago(dynamic valor) {
+  final v = (valor ?? '').toString().trim().toLowerCase();
+  if (v == 'billetera' || v.contains('wallet')) return 'Billetera';
+  if (v == 'transferencia' || v.contains('transfer')) return 'Transferencia';
+  return 'Efectivo';
+}
+
 /// Viaje sin asignar (oferta) o viaje activo.
 class TripOffer {
   final String tripId;
@@ -293,6 +305,12 @@ final String status;
   final String currency;
   final int? offerExpiresInSecs;
 
+  /// Metodo con el que el pasajero paga el viaje.
+  ///
+  /// Se muestra en la oferta y en el panel del viaje en curso. Ya viene
+  /// normalizado a 'Efectivo', 'Billetera' o 'Transferencia'.
+  final String paymentMethod;
+
   /// Chofer adjudicado al viaje, si lo hay.
   ///
   /// Lo devuelve el backend en `driver_id` de `getTrip`. Se usa para saber si
@@ -325,6 +343,7 @@ final String status;
     this.distanceKm,
 this.currency = 'CUP',
     this.offerExpiresInSecs,
+    this.paymentMethod = 'Efectivo',
     this.tripDriverId,
   });
 
@@ -438,6 +457,7 @@ this.currency = 'CUP',
         distanceKm: (j['distance_km'] ?? j['distance_km'])?.toDouble(),
 currency: (j['currency'] ?? 'CUP').toString(),
         offerExpiresInSecs: (j['offer_expires_in_secs'])?.toInt(),
+        paymentMethod: _normalizarMetodoPago(j['payment_method']),
         tripDriverId: j['driver_id']?.toString(),
       );
 }
@@ -465,6 +485,11 @@ class CompletedTrip {
 
   final String currency;
   final String? appliedRule;
+
+  /// Metodo con el que se pago el viaje ('Efectivo', 'Billetera' o
+  /// 'Transferencia'). El recibo lo muestra para que el chofer sepa de donde
+  /// salio el dinero y si lleva recargo por transferencia.
+  final String paymentMethod;
 
   /// Coeficiente por distancia que se aplicó a este viaje.
   ///
@@ -500,6 +525,7 @@ class CompletedTrip {
     this.commissionLabel = '15%',
     this.commissionDiscount = false,
     this.appliedRule,
+    this.paymentMethod = 'Efectivo',
     this.coeficienteAplicado,
     this.distanceFareSinCoeficiente,
     this.esperaSegs,
@@ -521,6 +547,8 @@ class CompletedTrip {
         commissionDiscount: (j['commission_discount'] ?? false) == true,
         currency: (j['currency'] ?? 'CUP').toString(),
         appliedRule: j['applied_rule']?.toString(),
+        paymentMethod: _normalizarMetodoPago(
+            j['metodo_pago'] ?? j['payment_method']),
         coeficienteAplicado: (j['coeficiente_aplicado'])?.toDouble(),
         distanceFareSinCoeficiente:
             (j['distance_fare_sin_coeficiente'])?.toDouble(),

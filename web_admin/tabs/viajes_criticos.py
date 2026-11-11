@@ -135,9 +135,9 @@ def _viajes_en_cola(api) -> None:
     # Sin cache: un viaje sin chofer es justo lo que no puede esperar 30 s.
     datos = api.viajes_criticos()
     viajes = datos.get("viajes") or []
-    # 30 s = 50 % del OFFER_TTL_SECS por defecto. Solo se usa si el backend es
-    # anterior a este cambio y no manda el umbral.
-    umbral = int(datos.get("umbral_huerfano_segundos") or 30)
+    # 90 s = 50 % de la ventana de solicitud de 180 s. Solo se usa si el backend
+    # es anterior a este cambio y no manda el umbral.
+    umbral = int(datos.get("umbral_huerfano_segundos") or 90)
     huerfanos = [v for v in viajes if _es_huerfano(v, umbral)]
 
     if huerfanos:

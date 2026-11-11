@@ -559,7 +559,9 @@ String _recogidaDe(Map j) {
 int _expiresDe(Map j) {
   final v = j['offer_expires_in_secs'];
   if (v is num && v > 0) return v.ceil();
-  return 60;
+  // Sin dato del servidor se usa la misma ventana unica de solicitud (180 s).
+  // Antes eran 60 s y el aviso en segundo plano moria antes que el viaje.
+  return 180;
 }
 
 /// Panel de notificaciones del isolate del servicio.

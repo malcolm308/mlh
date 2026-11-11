@@ -82,12 +82,16 @@ ESTADO_APROBADO = "aprobado"
 ESTADOS_ACTIVOS = ("requested", "accepted", "driver_on_the_way",
                    "driver_arrived")
 
-# Un viaje es huerfano cuando lleva mas de 30 s esperando y todavia no lo
-# acepto nadie. El aviso se manda en esa ventana (30 s .. 180 s) y NO despues:
-# un viaje que ya supero el tiempo total (`TRIP_ACCEPT_TIMEOUT_SECS`) esta a
-# punto de expirar y avisar por Telegram solo haria que un chofer llamara por
-# una carrera que el pasajero ya no esta esperando.
-UMBRAL_HUERFANO_SECS = max(1, int(os.getenv("ORPHAN_ALERT_SECS", "30")))
+# Un viaje es huerfano cuando lleva mas de la MITAD del tiempo de solicitud
+# esperando y todavia no lo acepto nadie. Con la ventana unica de 180 s el
+# aviso empieza a los 90 s, nunca a los 30: el umbral se deriva del mismo
+# `TRIP_ACCEPT_TIMEOUT_SECS` que usa el barrido, para que no vuelva a quedarse
+# desfasado si manana cambia el tiempo de solicitud. El aviso se manda en esa
+# ventana (90 s .. 180 s) y NO despues: un viaje que ya supero el tiempo total
+# esta a punto de expirar y avisar por Telegram solo haria que un chofer
+# llamara por una carrera que el pasajero ya no esta esperando.
+UMBRAL_HUERFANO_SECS = max(1, int(os.getenv(
+    "ORPHAN_ALERT_SECS", str(TRIP_ACCEPT_TIMEOUT_SECS // 2))))
 
 
 def require_api_key(
