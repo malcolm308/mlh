@@ -14,7 +14,16 @@ import '../widgets/documento_widgets.dart';
 /// chofer y del vehiculo junto con las 10 fotos obligatorias. El administrador
 /// revisa las fotos desde el panel y decide si lo habilita.
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  const RegisterScreen({
+    super.key,
+    this.isCorrectionMode = false,
+    this.driverData,
+    this.rejectedFields = const [],
+  });
+
+  final bool isCorrectionMode;
+  final Map<String, dynamic>? driverData;
+  final List<String> rejectedFields;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -32,6 +41,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   /// Telefono completo en E.164 (`+5359295207`) armado por IntlPhoneField con
   /// el prefijo del pais elegido. El multipart del registro manda ESTE valor.
   String? _telefonoCompleto;
+  /// Valor inicial del campo de telefono en modo correccion.
+  String? _telefonoInicial;
 
   final _marca = TextEditingController();
   final _model = TextEditingController();
@@ -61,6 +72,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     // el registro siga siendo posible.
     WidgetsBinding.instance.addPostFrameCallback((_) => _vehiculos.cargar());
     _vehiculos.addListener(_alCambiarTipos);
+    if (widget.isCorrectionMode && widget.driverData != null) {
+      _prefill(widget.driverData!);
+    }
   }
 
   @override
@@ -80,6 +94,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
   /// Llego la lista de tipos del backend: repinta el selector.
   void _alCambiarTipos() {
     if (mounted) setState(() {});
+  }
+
+  /// Precarga los datos del chofer en modo correccion.
+  void _prefill(Map<String, dynamic> d) {
+    _nombre.text = (d['Nombre'] ?? d['nombre'] ?? '').toString();
+    _apellidos.text = (d['Apellidos'] ?? d['apellidos'] ?? '').toString();
+    _email.text = (d['email'] ?? '').toString();
+    final tel = (d['numero_de_telefono'] ?? d['telefono'] ?? '').toString();
+    if (tel.isNotEmpty) {
+      _telefonoCompleto = tel;
+      _telefonoInicial = tel;
+    }
+    final v = d['vehicle'];
+    if (v is Map) {
+      _marca.text = (v['Marca'] ?? v['marca'] ?? '').toString();
+      _model.text = (v['model'] ?? v['modelo'] ?? '').toString();
+      _year.text = (v['year'] ?? v['anio'] ?? '2020').toString();
+      _chapa.text = (v['chapa'] ?? '').toString();
+      _color.text = (v['color'] ?? '').toString();
+      final serv = (v['servicio'] ?? v['type'] ?? d['type_vehicle'] ?? d['vehicle_type'] ?? '').toString();
+      if (serv.isNotEmpty) _tipo = serv;
+    }
+    final mp = d['max_passengers'];
+    if (mp != null) _maxPassengers.text = mp.toString();
   }
 
   /// Documentos exigidos para el TIPO elegido: si el chofer escoge moto o
@@ -126,12 +164,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
 
   Future<void> _register() async {
+    if (widget.isCorrectionMode) {
+      await _reenviarCorreccion();
+      return;
+    }
     if (!_formKey.currentState!.validate()) return;
     if (_password.text != _confirm.text) {
       setState(() => _error = 'Las contraseñas no coinciden');
       return;
     }
-
+    final telefono = _telefonoCompleto;
+    if (telefono == null || telefono.trim().length < 8) {
+      setState(() => _error = 'Ingresa un teléfono válido con su prefijo');
+      return;
+    }
     // Todas las fotos del tipo elegido son obligatorias para registrarse:
     // moto/triciclo no piden las del interior (ver `documentosPorTipo`).
     final documentos = documentosPorTipo(_tipo);
@@ -153,11 +199,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
     try {
       final api = ApiService();
-      final telefono = _telefonoCompleto;
-      if (telefono == null || telefono.trim().length < 8) {
-        setState(() => _error = 'Ingresa un teléfono válido con su prefijo');
-        return;
-      }
       await api.registerChoferConFotos(
         nombre: _nombre.text.trim(),
         apellidos: _apellidos.text.trim(),
@@ -177,6 +218,80 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       if (!mounted) return;
       await _mostrarPendiente();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  Future<void> _reenviarCorreccion() async {
+    final telefono = _telefonoCompleto;
+    if (telefono == null || telefono.trim().length < 8) {
+      setState(() => _error = 'Ingresa un teléfono válido con su prefijo');
+      return;
+    }
+    // Los documentos que el administrador rechazo hay que volver a subirlos.
+    final rechazados = widget.rejectedFields;
+    if (rechazados.isNotEmpty &&
+        !rechazados.any((campo) => _fotos.containsKey(campo))) {
+      setState(() => _error =
+          'Vuelve a subir al menos uno de los documentos rechazados.');
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final api = ApiService();
+      final id = widget.driverData?['_id']?.toString() ??
+          widget.driverData?['id']?.toString() ??
+          '';
+      if (id.isEmpty) {
+        setState(() {
+          _loading = false;
+          _error = 'No se pudo identificar tu cuenta. Vuelve a iniciar sesión.';
+        });
+        return;
+      }
+      if (_fotos.isNotEmpty) {
+        await api.updateDocumentos(id, _fotos);
+      }
+      // Este endpoint guarda los datos corregidos, devuelve la solicitud a
+      // "pendiente" y limpia los campos rechazados.
+      await api.reenviarSolicitud(
+        id,
+        nombre: _nombre.text.trim(),
+        apellidos: _apellidos.text.trim(),
+        telefono: telefono,
+      );
+
+      if (!mounted) return;
+      setState(() => _loading = false);
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.check_circle, size: 44, color: Color(0xFF2ECC71)),
+          title: const Text('Solicitud reenviada'),
+          content: const Text(
+            'Tus datos se actualizaron y tu solicitud volvió a revisión.\n\n'
+            'El administrador la revisará pronto.',
+            textAlign: TextAlign.center,
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      Navigator.of(context).popUntil((r) => r.isFirst);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -219,7 +334,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Crear cuenta de chofer')),
+      appBar: AppBar(title: Text(widget.isCorrectionMode
+          ? 'Corrige tu registro'
+          : 'Crear cuenta de chofer')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -266,6 +383,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 12),
                 IntlPhoneField(
+                  initialValue: _telefonoInicial,
                   initialCountryCode: 'CU',
                   keyboardType: TextInputType.phone,
                   // Estilo identico al resto del formulario (tema global).
@@ -291,33 +409,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     setState(() => _telefonoCompleto = phone.completeNumber);
                   },
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _referido,
-                  textCapitalization: TextCapitalization.characters,
-                  autocorrect: false,
-                  decoration: _dec('Código de referido (Opcional)',
-                      Icons.card_giftcard,
-                      helper: 'Si otro chofer te invitó, escribe su código'),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _password,
-                  obscureText: true,
-                  decoration: _dec('Contraseña', Icons.lock_outline),
-                  validator: (v) => (v == null || v.length < 4)
-                      ? 'Mínimo 4 caracteres'
-                      : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _confirm,
-                  obscureText: true,
-                  decoration: _dec('Confirmar contraseña', Icons.lock_outline),
-                  validator: (v) => (v == null || v.isEmpty)
-                      ? 'Confirma tu contraseña'
-                      : null,
-                ),
+                if (!widget.isCorrectionMode) ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _referido,
+                    textCapitalization: TextCapitalization.characters,
+                    autocorrect: false,
+                    decoration: _dec('Código de referido (Opcional)',
+                        Icons.card_giftcard,
+                        helper: 'Si otro chofer te invitó, escribe su código'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _password,
+                    obscureText: true,
+                    decoration: _dec('Contraseña', Icons.lock_outline),
+                    validator: (v) => (v == null || v.length < 4)
+                        ? 'Mínimo 4 caracteres'
+                        : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _confirm,
+                    obscureText: true,
+                    decoration: _dec('Confirmar contraseña', Icons.lock_outline),
+                    validator: (v) => (v == null || v.isEmpty)
+                        ? 'Confirma tu contraseña'
+                        : null,
+                  ),
+                ],
                 const SizedBox(height: 20),
                 const Text('Datos del vehículo',
                     style: TextStyle(
@@ -475,6 +595,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     documento: doc,
                     ruta: _fotos[doc.campo],
                     onPick: (origen) => _tomarFoto(doc, origen),
+                    rejected: widget.rejectedFields.contains(doc.campo),
                   ),
                 if (_error != null) ...[
                   const SizedBox(height: 14),
@@ -491,7 +612,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.app_registration),
-                  label: Text(_loading ? 'Enviando documentos...' : 'Registrarse'),
+                  label: Text(_loading ? 'Enviando documentos...' : (widget.isCorrectionMode ? 'Reenviar solicitud' : 'Registrarse')),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(48),
                   ),

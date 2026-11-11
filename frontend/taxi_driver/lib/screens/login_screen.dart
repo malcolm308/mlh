@@ -10,7 +10,6 @@ import '../services/api_service.dart';
 import '../services/token_store.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
-import 'correction_screen.dart';
 import 'driver_home_screen.dart';
 import 'forgot_password_screen.dart';
 import 'register_screen.dart';
@@ -69,7 +68,7 @@ class _LoginScreenState extends State<LoginScreen> {
         final profile = await api.getChofer(id);
         if (!mounted) return;
         if (profile.status == 'needs_correction' || profile.status == 'rejected') {
-          _goCorrection(api, profile, id);
+          _goCorrection(profile);
         } else {
           _goHome(api, profile, id);
         }
@@ -109,7 +108,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
       if (profile.status == 'needs_correction') {
-        _goCorrection(api, profile, id);
+        _goCorrection(profile);
       } else {
         _goHome(api, profile, id);
       }
@@ -132,12 +131,27 @@ class _LoginScreenState extends State<LoginScreen> {
     ));
   }
 
-  void _goCorrection(ApiService api, DriverProfile profile, String driverId) {
-    Navigator.of(context).pushReplacement(MaterialPageRoute(
-      builder: (_) => CorrectionScreen(
-        api: api,
-        profile: profile,
-        driverId: driverId,
+  void _goCorrection(DriverProfile profile) {
+    // `push` (no `pushReplacement`): al terminar de corregir se vuelve al
+    // login, que es la pantalla base, y alli se avisa que sigue en revision.
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => RegisterScreen(
+        isCorrectionMode: true,
+        driverData: {
+          '_id': profile.id,
+          'Nombre': profile.nombre,
+          'Apellidos': profile.apellidos,
+          'email': profile.email,
+          'numero_de_telefono': profile.telefono,
+          'vehicle': profile.vehicleData.isNotEmpty
+              ? profile.vehicleData
+              : {
+                  'model': profile.vehicleModel,
+                  'servicio': profile.vehicleType,
+                },
+          'max_passengers': profile.maxPassengers,
+        },
+        rejectedFields: profile.missingFields,
       ),
     ));
   }

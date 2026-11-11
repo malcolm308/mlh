@@ -25,6 +25,7 @@ from typing import Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel
 
 from db.Chofer.auth import verify_token as verify_chofer_token
 from db.Chofer.connection import chofer_db
@@ -32,6 +33,11 @@ from routers.Solicitud_de_viajes_v4 import get_connection
 from routers.documentos import _borrar_archivos
 from routers.garaje import FOTO_DIR
 from services.fotos_nube import borrar as borrar_nube
+from services.telefono import (
+    buscar_por_telefono,
+    es_telefono_valido,
+    normalizar_telefono,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,31 +110,67 @@ def _borrar_fotos_de_vehiculos(driver_id: str) -> None:
                     doc.get("_id"), n_fotos, driver_id)
 
 
+class ReenvioIn(BaseModel):
+    """Datos corregidos que la app manda junto al reenvío (todos opcionales)."""
+
+    Nombre: Optional[str] = None
+    Apellidos: Optional[str] = None
+    numero_de_telefono: Optional[str] = None
+
+
 @router.post("/driver/reenviar")
-async def reenviar_solicitud(authorization: Optional[str] = Header(None)):
+async def reenviar_solicitud(
+    body: Optional[ReenvioIn] = None,
+    authorization: Optional[str] = Header(None),
+):
     """El chofer reenvía su solicitud tras corregir los datos marcados.
 
-    Pasa el estado de `needs_correction` a `pendiente` y limpia
-    `missing_fields`. Los datos corregidos se actualizan por separado
-    (foto por foto) antes de llamar a este endpoint.
+    Guarda los datos personales corregidos, pasa el estado a `pendiente`,
+    limpia `missing_fields` y reactiva la revisión. Las fotos se suben antes,
+    con `POST /documentos/chofer/{id}`.
     """
     chofer = _chofer_actual(authorization)
     driver_id = chofer["id"]
     doc = chofer["doc"]
     if doc.get("status") not in ("needs_correction", "rejected", "pending_review"):
         raise HTTPException(status_code=400, detail="La cuenta no requiere corrección")
-    chofer_coleccion.update_one(
-        {"_id": ObjectId(driver_id)},
-        {"$set": {
-            "estado_habilitacion": "pendiente",
-            "status": "pending_review",
-            "Enable": False,
-            "documents_verified": False,
-            "missing_fields": [],
-            "motivo_habilitacion": None,
-            "updated_at": datetime.utcnow().isoformat(),
-        }},
-    )
+
+    cambios = {
+        "estado_habilitacion": "pendiente",
+        "status": "pending_review",
+        "Enable": False,
+        "documents_verified": False,
+        "missing_fields": [],
+        "correction_fields": [],
+        "motivo_habilitacion": None,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if body is not None:
+        if body.Nombre is not None and body.Nombre.strip():
+            cambios["Nombre"] = body.Nombre.strip()
+        if body.Apellidos is not None and body.Apellidos.strip():
+            cambios["Apellidos"] = body.Apellidos.strip()
+        telefono = (body.numero_de_telefono or "").strip()
+        if telefono:
+            if not es_telefono_valido(telefono):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El número de teléfono no es válido. "
+                           "Escribe los 8 dígitos.",
+                )
+            repetidos = [
+                d for d in buscar_por_telefono(chofer_coleccion, telefono)
+                if str(d["_id"]) != driver_id
+            ]
+            if repetidos:
+                raise HTTPException(
+                    status_code=409,
+                    detail="El número de teléfono ya está asociado a otra cuenta.",
+                )
+            cambios["numero_de_telefono"] = normalizar_telefono(telefono)
+
+    chofer_coleccion.update_one({"_id": ObjectId(driver_id)}, {"$set": cambios})
+    logger.info("Solicitud de %s reenviada a revisión", driver_id)
     return {"ok": True, "message": "Solicitud reenviada. En revisión."}
 
 

@@ -62,11 +62,13 @@ class TarjetaDocumento extends StatelessWidget {
     required this.documento,
     required this.ruta,
     required this.onPick,
+    this.rejected = false,
   });
 
   final DocumentoRequerido documento;
   final String? ruta;
   final Future<void> Function(ImageSource source) onPick;
+  final bool rejected;
 
   @override
   Widget build(BuildContext context) {
@@ -77,8 +79,10 @@ class TarjetaDocumento extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: tiene ? const Color(0xFF2ECC71) : const Color(0xFFDDDDDD),
-          width: tiene ? 1.5 : 1,
+          color: rejected
+              ? Colors.red
+              : (tiene ? const Color(0xFF2ECC71) : const Color(0xFFDDDDDD)),
+          width: rejected ? 2 : (tiene ? 1.5 : 1),
         ),
       ),
       child: Padding(
@@ -118,6 +122,17 @@ class TarjetaDocumento extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (rejected)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Este documento fue rechazado. Vuelve a subirlo.',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.red.shade700,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
                 ],
               ),
             ),

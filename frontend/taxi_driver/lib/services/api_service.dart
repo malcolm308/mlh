@@ -119,8 +119,19 @@ class ApiService {
   }
 
   /// Reenvía la solicitud tras corregir los datos marcados por el admin.
-  Future<void> reenviarSolicitud(String driverId) async {
-    await _map('POST', '/driver/reenviar');
+  Future<void> reenviarSolicitud(
+    String driverId, {
+    String? nombre,
+    String? apellidos,
+    String? telefono,
+  }) async {
+    final body = <String, dynamic>{
+      if (nombre != null && nombre.isNotEmpty) 'Nombre': nombre,
+      if (apellidos != null && apellidos.isNotEmpty) 'Apellidos': apellidos,
+      if (telefono != null && telefono.isNotEmpty)
+        'numero_de_telefono': telefono,
+    };
+    await _map('POST', '/driver/reenviar', body: body);
   }
 
   /// Elimina para siempre la cuenta del chofer autenticado.

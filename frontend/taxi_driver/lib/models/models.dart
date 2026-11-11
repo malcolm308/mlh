@@ -36,6 +36,8 @@ class DriverProfile {
   final String? status;
   final List<String> missingFields;
   final String? codigoReferido;
+  /// Mapa `vehicle` crudo (marca, chapa, color, year...) para prellenar.
+  final Map<String, dynamic> vehicleData;
   /// perfil (`GET /chofer/{id}`); el backend lo crea si la cuenta es antigua.
 
   DriverProfile({
@@ -54,6 +56,7 @@ class DriverProfile {
     this.status,
     this.missingFields = const [],
     this.codigoReferido,
+    this.vehicleData = const {},
   });
 
 factory DriverProfile.fromJson(Map<String, dynamic> j) {
@@ -91,6 +94,8 @@ factory DriverProfile.fromJson(Map<String, dynamic> j) {
           ? (j['missing_fields'] as List).map((e) => e.toString()).toList()
           : const [],
       codigoReferido: _str(j, ['codigo_referido']),
+      vehicleData:
+          vehicle is Map ? Map<String, dynamic>.from(vehicle) : const {},
     );
   }
 

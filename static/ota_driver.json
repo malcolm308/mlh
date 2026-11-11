@@ -1,11 +1,15 @@
 {
   "app": "driver",
   "latest": {
-    "version": "1.0.22",
-    "version_code": 4027,
+    "version": "1.0.23",
+    "version_code": 4028,
     "apk": "app_chofer_latest.apk"
   },
   "releases": [
+    {
+      "version": "1.0.23",
+      "version_code": 4028
+    },
     {
       "version": "1.0.22",
       "version_code": 4027
@@ -21,10 +25,6 @@
     {
       "version": "1.0.19",
       "version_code": 4024
-    },
-    {
-      "version": "1.0.18",
-      "version_code": 4023
     }
   ],
   "patches": [
@@ -141,5 +141,5 @@
       "published_at": "2026-11-08T12:58:19+00:00"
     }
   ],
-  "updated_at": "2026-11-10T23:39:36+00:00"
+  "updated_at": "2026-11-11T00:40:09+00:00"
 }
