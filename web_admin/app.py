@@ -361,6 +361,10 @@ def _sidebar(api: ApiClient, permitidas: Optional[list[str]] = None) -> None:
         st.caption("Panel de administración")
         st.markdown("**%s**" % (api.admin_email or "Administrador"))
         st.caption(get_api_base_url())
+        # Render expone el commit desplegado. Si algun dia el panel "sigue
+        # fallando" tras un push, este texto dice si de verdad se actualizo.
+        _build = (os.getenv("RENDER_GIT_COMMIT") or "local")[:7]
+        st.caption("build %s" % _build)
         st.divider()
 
         # Selector de seccion: sustituye al `st.tabs` estatico, que reiniciaba
