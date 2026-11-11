@@ -24,6 +24,8 @@ import '../widgets/ui/glass_sheet.dart';
 import '../widgets/ui/pill_button.dart';
 import '../widgets/vehicle_selector_sheet.dart';
 import 'blocked_drivers_screen.dart';
+import 'client_fondo_screen.dart';
+import 'client_transfer_history_screen.dart';
 import 'favorite_locations_screen.dart';
 import 'history_screen.dart';
 import 'perfil_screen.dart';
@@ -160,6 +162,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   VehicleOption? _selectedVehicle;
   String? _etaText;
   String _paymentMethod = 'Efectivo';
+
+  /// Saldo vigente del Fondo del pasajero, consultado al cotizar el viaje.
+  double _walletBalance = 0;
+
+  /// Recargo por pago con transferencia externa (0.10 = 10%, lo fija el
+  /// panel). El backend es quien calcula el monto final.
+  double _transferSurchargeRate = 0.10;
 
   /// Datos del pasajero para esta solicitud: cuántos viajan, si llevan
   /// equipaje y si llevan mascota. Se envían al backend con el viaje.
@@ -943,6 +952,20 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         _showError('No hay vehículos disponibles en este momento.');
         return;
       }
+      // Saldo real de la billetera y recargo vigente: el selector de pago los
+      // necesita para avisar antes de pedir el viaje.
+      final tasaRecargo =
+          (res['recargo_transferencia'] as num?)?.toDouble() ?? 0.10;
+      double saldo = _walletBalance;
+      try {
+        final fondo = await widget.api.getClientFondo(widget.clientId);
+        saldo = (fondo['fondo'] as num?)?.toDouble() ?? saldo;
+      } catch (_) {
+        // Sin conexion se conserva el ultimo saldo conocido; el backend
+        // vuelve a validar al crear el viaje.
+      }
+      if (!mounted || req != _estReq) return;
+
       // Transición a Paso 2: cambiar estado Y abrir panel en un solo setState
       setState(() {
         _currentState = ClientState.selectingVehicle;
@@ -951,6 +974,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         _vehicles = vehiclesList;
         _etaText = res['eta_text'] as String? ?? '--';
         _paymentMethod = res['payment_method'] as String? ?? 'Efectivo';
+        _transferSurchargeRate = tasaRecargo;
+        _walletBalance = saldo;
         _selectedVehicle = vehiclesList.first;
       });
       // Abrir el panel DESPUÉS del setState (necesita _vehicles poblado)
@@ -990,6 +1015,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         durationMin: _routeMin ?? 0,
         etaText: _etaText ?? '--',
         paymentMethod: _paymentMethod,
+        walletBalance: _walletBalance,
+        transferSurchargeRate: _transferSurchargeRate,
         vehicles: _vehicles,
         initialSelectedIndex: initialIndex < 0 ? 0 : initialIndex,
         numPasajes: _numPasajes,
@@ -998,8 +1025,11 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         onPasajerosChanged: (v) => setState(() => _numPasajes = v),
         onEquipajeChanged: (v) => setState(() => _equipaje = v),
         onMascotaChanged: (v) => setState(() => _mascota = v),
-        onConfirm: (selectedIndex) {
-          setState(() => _selectedVehicle = _vehicles[selectedIndex]);
+        onConfirm: (selectedIndex, paymentMethod) {
+          setState(() {
+            _selectedVehicle = _vehicles[selectedIndex];
+            _paymentMethod = paymentMethod;
+          });
           Navigator.of(ctx).pop(true);
           _requestTrip();
         },
@@ -1050,6 +1080,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         mascota: _mascota,
         requestAddress: _pickupAddr ?? _sinDireccion,
         dropoffAddress: _dropoffAddr ?? _sinDireccion,
+        paymentMethod: _paymentMethod,
       );
       final tripId = (res['trip_id'] ?? '').toString();
       if (tripId.isEmpty) throw ApiException('No se recibió el trip_id');
@@ -1893,6 +1924,26 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
           ),
         ));
       },
+      onTransferencias: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ClientTransferHistoryScreen(
+            api: widget.api,
+            clientId: widget.clientId,
+            fullName: widget.profile.fullName,
+          ),
+        ));
+      },
+      onFondo: () {
+        Navigator.of(context).pop();
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ClientFondoScreen(
+            api: widget.api,
+            clientId: widget.clientId,
+            fullName: widget.profile.fullName,
+          ),
+        ));
+      },
       onFavoritas: () {
         Navigator.of(context).pop();
         Navigator.of(context).push(MaterialPageRoute(
@@ -1936,6 +1987,8 @@ class _VehicleSelectorStateful extends StatefulWidget {
   final double durationMin;
   final String etaText;
   final String paymentMethod;
+  final double walletBalance;
+  final double transferSurchargeRate;
   final List<VehicleOption> vehicles;
   final int initialSelectedIndex;
   final int numPasajes;
@@ -1944,7 +1997,7 @@ class _VehicleSelectorStateful extends StatefulWidget {
   final ValueChanged<int> onPasajerosChanged;
   final ValueChanged<bool> onEquipajeChanged;
   final ValueChanged<bool> onMascotaChanged;
-  final ValueChanged<int> onConfirm;
+  final void Function(int selectedIndex, String paymentMethod) onConfirm;
   final VoidCallback onBack;
   final bool isLoading;
   final VoidCallback onOpen;
@@ -1957,6 +2010,8 @@ class _VehicleSelectorStateful extends StatefulWidget {
     this.durationMin = 0,
     required this.etaText,
     required this.paymentMethod,
+    required this.walletBalance,
+    required this.transferSurchargeRate,
     required this.vehicles,
     required this.initialSelectedIndex,
     required this.numPasajes,
@@ -1986,6 +2041,10 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
   late bool _equipaje;
   late bool _mascota;
 
+  /// Metodo de pago elegido dentro de la hoja. Vive aqui porque el modal es
+  /// su propia ruta y el `setState` del home no lo reconstruye.
+  late String _paymentMethod;
+
   @override
   void initState() {
     super.initState();
@@ -1993,6 +2052,7 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
     _numPasajes = widget.numPasajes;
     _equipaje = widget.equipaje;
     _mascota = widget.mascota;
+    _paymentMethod = widget.paymentMethod;
     widget.onOpen();
   }
 
@@ -2010,7 +2070,12 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
       distanceKm: widget.distanceKm,
       durationMin: widget.durationMin,
       etaText: widget.etaText,
-      paymentMethod: widget.paymentMethod,
+      paymentMethod: _paymentMethod,
+      walletBalance: widget.walletBalance,
+      transferSurchargeRate: widget.transferSurchargeRate,
+      onPaymentMethodChanged: (metodo) {
+        setState(() => _paymentMethod = metodo);
+      },
       vehicles: widget.vehicles,
       selectedIndex: _selectedIndex,
       numPasajes: _numPasajes,
@@ -2034,7 +2099,7 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
         });
       },
       onConfirmTrip: () {
-        widget.onConfirm(_selectedIndex);
+        widget.onConfirm(_selectedIndex, _paymentMethod);
       },
       onBack: widget.onBack,
       isLoading: widget.isLoading,

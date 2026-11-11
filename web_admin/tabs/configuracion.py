@@ -48,6 +48,12 @@ def _resumen(config: dict) -> None:
     c4.metric("Referidos", "Activos" if config.get("referidos_activos")
               else "Apagados")
 
+    p1, p2 = st.columns(2)
+    p1.metric("Comisión de la billetera",
+              "%.2f %%" % _porcentaje(config.get("comision_billetera")))
+    p2.metric("Recargo por transferencia",
+              "%.2f %%" % _porcentaje(config.get("recargo_transferencia")))
+
     if config.get("expirada"):
         st.warning(
             "La promoción está vencida%s. Los descuentos y bonos ya no se "
@@ -70,6 +76,14 @@ def _formulario(api, config: dict) -> None:
     descuento_actual = _porcentaje(
         config.get("descuento_cliente_porcentaje"))
     max_descuento = _porcentaje(config.get("descuento_maximo", 0.10))
+    comision_billetera_actual = _porcentaje(config.get("comision_billetera"))
+    recargo_transferencia_actual = _porcentaje(
+        config.get("recargo_transferencia"), 2)
+    max_comision_billetera = _porcentaje(
+        config.get("comision_billetera_maxima", 0.10))
+    if max_comision_billetera <= 0:
+        max_comision_billetera = 10.0
+    max_recargo = 100.0
 
     with st.form("form_configuracion"):
         st.markdown("#### Comisión y descuento")
@@ -95,6 +109,33 @@ def _formulario(api, config: dict) -> None:
             min_value=0.0, max_value=float(max_descuento), step=0.5,
             value=float(min(descuento_actual, max_descuento)),
             format="%.2f", key="cfg_descuento",
+        )
+
+        st.markdown("#### Pagos con billetera y transferencia")
+        st.caption(
+            "La comisión de la billetera se retiene cuando el pasajero paga "
+            "con saldo; el resto entra al Fondo del chófer. El recargo por "
+            "transferencia se suma al precio en los pagos externos (Zelle, "
+            "banco, etc.). El cálculo lo hace siempre el backend."
+        )
+        p1, p2 = st.columns(2)
+        comision_billetera = p1.number_input(
+            "Comisión de la billetera (%)",
+            min_value=0.0, max_value=float(max_comision_billetera),
+            step=0.5,
+            value=float(min(comision_billetera_actual,
+                            max_comision_billetera)),
+            format="%.2f", key="cfg_comision_billetera",
+            help="En lanzamiento es 0 %. El máximo permitido es %.0f %%."
+                 % max_comision_billetera,
+        )
+        recargo_transferencia = p2.number_input(
+            "Recargo por transferencia (%)",
+            min_value=0.0, max_value=float(max_recargo), step=0.5,
+            value=float(min(recargo_transferencia_actual, max_recargo)),
+            format="%.2f", key="cfg_recargo_transferencia",
+            help="Se añade al costo del viaje cuando el pasajero paga por "
+                 "transferencia. Por defecto 10 %.",
         )
 
         st.markdown("#### Bono del chófer")
@@ -199,6 +240,17 @@ def _formulario(api, config: dict) -> None:
 
     comision_fraccion = round(comision / 100.0, 4)
     descuento_fraccion = round(descuento / 100.0, 4)
+    comision_billetera_fraccion = round(comision_billetera / 100.0, 4)
+    recargo_transferencia_fraccion = round(
+        recargo_transferencia / 100.0, 4)
+
+    if comision_billetera_fraccion > (max_comision_billetera / 100.0) + 1e-9:
+        st.error("La comisión de la billetera no puede pasar de %.0f %%."
+                 % max_comision_billetera)
+        return
+    if recargo_transferencia_fraccion > 1.0 + 1e-9:
+        st.error("El recargo por transferencia no puede pasar de 100 %.")
+        return
 
     if comision_fraccion <= 0:
         if descuento_activo or descuento > 0:
@@ -221,6 +273,8 @@ def _formulario(api, config: dict) -> None:
 
     payload = {
         "comision_porcentaje": comision_fraccion,
+        "comision_billetera": comision_billetera_fraccion,
+        "recargo_transferencia": recargo_transferencia_fraccion,
         "bono_chofer_activo": bool(bono_activo),
         "bono_chofer_monto": round(float(bono_monto), 2),
         "bono_chofer_viajes_requeridos": int(bono_viajes),

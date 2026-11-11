@@ -172,6 +172,7 @@ class ApiService {
     bool mascota = false,
     String? requestAddress,
     String? dropoffAddress,
+    String paymentMethod = 'Efectivo',
   }) async {
     return _map('POST', '/trips', body: {
       'client_id': clientId,
@@ -185,6 +186,7 @@ class ApiService {
       'mascota': mascota,
       'request_address': requestAddress,
       'dropoff_address': dropoffAddress,
+      'payment_method': paymentMethod,
     });
   }
 
@@ -244,6 +246,33 @@ class ApiService {
       {int limit = 50}) async {
     final list = await _list('GET', '/trips/history/$clientId?limit=$limit');
     return list.whereType<Map<String, dynamic>>().toList();
+  }
+
+  // ---------------- FONDO / TRANSFERENCIAS ----------------
+
+  /// Saldo actual de la billetera del pasajero.
+  Future<Map<String, dynamic>> getClientFondo(String clientId) async {
+    return _map('GET', '/clients/$clientId/fondo');
+  }
+
+  /// Transferencia de billetera a billetera entre pasajeros. El destino se
+  /// identifica por teléfono; el monto total se mueve del Fondo de uno al otro.
+  Future<Map<String, dynamic>> transferClientFondo({
+    required String clientId,
+    required String toClientPhone,
+    required double amount,
+  }) async {
+    return _map('POST', '/clients/$clientId/transfer', body: {
+      'to_client_phone': toClientPhone.trim(),
+      'amount': amount,
+    });
+  }
+
+  /// Historial de pagos del pasajero (viajes con billetera/transferencia y
+  /// transferencias entre pasajeros). Cada entrada trae el MONTO TOTAL y la
+  /// contraparte por teléfono.
+  Future<Map<String, dynamic>> getClientTransferHistory(String clientId) async {
+    return _map('GET', '/clients/$clientId/historial/transferencias');
   }
 
   // ---------------- ESTIMACION ----------------

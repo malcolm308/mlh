@@ -43,6 +43,7 @@ def _perfil_cliente(doc: dict) -> dict:
             filter(None, [doc.get("Nombre"), doc.get("Apellidos")])).strip(),
         "email": doc.get("email"),
         "telefono": doc.get("numero_de_telefono"),
+        "fondo": float(doc.get("Fondo") or 0),
         "codigo_referido": codigo,
         "descuentos_disponibles": int(doc.get("descuentos_disponibles") or 0),
     }
@@ -73,6 +74,8 @@ def _promocion_publica() -> dict:
     p = leer_promocion()
     return {
         "comision_porcentaje": float(p["comision_porcentaje"]),
+        "comision_billetera": float(p["comision_billetera"]),
+        "recargo_transferencia": float(p["recargo_transferencia"]),
         "referidos_activos": bool(p.get("referidos_activos", True)),
         "descuento_cliente_activo": bool(p.get("descuento_cliente_activo")),
         "descuento_cliente_porcentaje": float(p.get("descuento_cliente_porcentaje") or 0),

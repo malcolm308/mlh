@@ -7,6 +7,10 @@ class ClientProfile {
   final String email;
   final String? telefono;
 
+  /// Saldo de la billetera del pasajero (`Fondo` en Mongo). Se usa para pagar
+  /// viajes con Billetera y para transferir a otro pasajero.
+  final double fondo;
+
   /// Codigo con el que este pasajero invita a otros. El backend lo devuelve en
   /// el perfil y crea uno si la cuenta es anterior al sistema de referidos.
   final String? codigoReferido;
@@ -16,6 +20,7 @@ class ClientProfile {
     required this.fullName,
     required this.email,
     this.telefono,
+    this.fondo = 0,
     this.codigoReferido,
   });
 
@@ -24,6 +29,7 @@ class ClientProfile {
         fullName: '${j['Nombre'] ?? ''} ${j['Apellidos'] ?? ''}'.trim(),
         email: j['email']?.toString() ?? '',
         telefono: j['numero_de_telefono']?.toString(),
+        fondo: ((j['fondo'] ?? j['Fondo']) as num?)?.toDouble() ?? 0,
         codigoReferido: (j['codigo_referido'] ?? '') is String &&
                 (j['codigo_referido'] as String).trim().isNotEmpty
             ? (j['codigo_referido'] as String).trim()

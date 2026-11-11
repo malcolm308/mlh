@@ -8,6 +8,11 @@ import 'ui/pill_button.dart';
 class VehicleOption {
   final String type;
   final double price;
+
+  /// Precio cuando se paga por TRANSFERENCIA externa: ya incluye el recargo
+  /// (10% por defecto), calculado por el backend.
+  final double priceTransferencia;
+
   final String iconPath;
   final String displayName;
 
@@ -16,7 +21,12 @@ class VehicleOption {
     required this.price,
     required this.iconPath,
     required this.displayName,
-  });
+    double? priceTransferencia,
+  }) : priceTransferencia = priceTransferencia ?? price * 1.10;
+
+  /// Precio final segun el metodo de pago elegido.
+  double priceFor(String metodo) =>
+      metodo == 'Transferencia' ? priceTransferencia : price;
 
   factory VehicleOption.fromApi(Map<String, dynamic> json) {
     final type = json['vehicle_type'] as String;
@@ -45,9 +55,12 @@ class VehicleOption {
         displayName = type;
     }
     
+    final precio = (json['price'] as num).toDouble();
     return VehicleOption(
       type: type,
-      price: (json['price'] as num).toDouble(),
+      price: precio,
+      priceTransferencia: (json['price_transferencia'] as num?)?.toDouble() ??
+          precio * 1.10,
       iconPath: iconPath,
       displayName: displayName,
     );
@@ -68,6 +81,17 @@ class VehicleSelectorSheet extends StatelessWidget {
   final double durationMin;
   final String etaText;
   final String paymentMethod;
+
+  /// Saldo actual de la billetera del pasajero (Fondo). Se muestra en el
+  /// selector y bloquea el viaje si no alcanza.
+  final double walletBalance;
+
+  /// Recargo configurado para pago por transferencia (0.10 = 10%).
+  final double transferSurchargeRate;
+
+  /// Cambia el metodo de pago elegido (Efectivo / Billetera / Transferencia).
+  final ValueChanged<String> onPaymentMethodChanged;
+
   final List<VehicleOption> vehicles;
   final int selectedIndex;
   final int numPasajes;
@@ -89,6 +113,9 @@ class VehicleSelectorSheet extends StatelessWidget {
     this.durationMin = 0,
     required this.etaText,
     required this.paymentMethod,
+    required this.onPaymentMethodChanged,
+    this.walletBalance = 0,
+    this.transferSurchargeRate = 0.10,
     required this.vehicles,
     required this.selectedIndex,
     required this.numPasajes,
@@ -105,15 +132,25 @@ class VehicleSelectorSheet extends StatelessWidget {
 
   VehicleOption get _selected => vehicles[selectedIndex];
 
+  /// La billetera solo confirma si el saldo cubre el precio del viaje. Con
+  /// efectivo o transferencia externa no hay nada que validar aqui.
+  bool get _puedeConfirmar =>
+      paymentMethod != 'Billetera' ||
+      walletBalance + 0.009 >= _selected.priceFor('Billetera');
+
   @override
   Widget build(BuildContext context) {
     return GlassSheet(
       showHandle: false,
       padding: EdgeInsets.zero,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 10),
+      // El selector de pago agrega alto: la hoja se puede desplazar en
+      // pantallas pequenas sin recortar el boton de confirmar.
+      child: SingleChildScrollView(
+        physics: const ClampingScrollPhysics(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
           // Cabecera: botón "Cambiar ruta" + indicador de arrastre
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -274,13 +311,26 @@ class VehicleSelectorSheet extends StatelessWidget {
           const SizedBox(height: 14),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: _PaymentSelector(
+              value: paymentMethod,
+              walletBalance: walletBalance,
+              transferSurchargeRate: transferSurchargeRate,
+              precio: _selected.priceFor('Efectivo'),
+              precioTransferencia: _selected.priceTransferencia,
+              onChanged: onPaymentMethodChanged,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _DetailColumn(
                   icon: Icons.attach_money,
                   label: 'Precio',
-                  value: '${_selected.price.toStringAsFixed(0)} CUP',
+                  value:
+                      '${_selected.priceFor(paymentMethod).toStringAsFixed(0)} CUP',
                   valueColor: AppColors.ambar,
                 ),
                 _DetailColumn(
@@ -304,10 +354,11 @@ class VehicleSelectorSheet extends StatelessWidget {
               loading: isLoading,
               loadingLabel: 'Solicitando...',
               icon: Icons.local_taxi_rounded,
-              onPressed: isLoading ? null : onConfirmTrip,
+              onPressed: isLoading || !_puedeConfirmar ? null : onConfirmTrip,
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -560,6 +611,213 @@ class _VehicleCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Selector de metodo de pago con las tres opciones reales del backend:
+/// Efectivo, Billetera (saldo) y Transferencia externa (con recargo).
+///
+/// * Billetera muestra el saldo y avisa si no alcanza.
+/// * Transferencia muestra el aviso del recargo configurado y el precio ya
+///   incluye ese porcentaje (lo calculo el backend).
+class _PaymentSelector extends StatelessWidget {
+  final String value;
+  final double walletBalance;
+  final double transferSurchargeRate;
+  final double precio;
+  final double precioTransferencia;
+  final ValueChanged<String> onChanged;
+
+  const _PaymentSelector({
+    required this.value,
+    required this.walletBalance,
+    required this.transferSurchargeRate,
+    required this.precio,
+    required this.precioTransferencia,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final sinSaldo = walletBalance + 0.009 < precio;
+    final porcentaje = (transferSurchargeRate * 100).toStringAsFixed(
+        transferSurchargeRate * 100 == (transferSurchargeRate * 100).round()
+            ? 0
+            : 1);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.account_balance_wallet_outlined,
+                size: 18, color: AppColors.secundario),
+            const SizedBox(width: 8),
+            const Text(
+              'Método de pago',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.tinta,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _MetodoCard(
+                icon: Icons.payments_outlined,
+                label: 'Efectivo',
+                selected: value == 'Efectivo',
+                onTap: () => onChanged('Efectivo'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _MetodoCard(
+                icon: Icons.account_balance_wallet_outlined,
+                label: 'Billetera',
+                detalle: '${walletBalance.toStringAsFixed(0)} CUP',
+                selected: value == 'Billetera',
+                onTap: () => onChanged('Billetera'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _MetodoCard(
+                icon: Icons.swap_horiz_rounded,
+                label: 'Transferencia',
+                selected: value == 'Transferencia',
+                onTap: () => onChanged('Transferencia'),
+              ),
+            ),
+          ],
+        ),
+        if (value == 'Billetera' && sinSaldo) ...[
+          const SizedBox(height: 8),
+          _Aviso(
+            icon: Icons.error_outline,
+            color: AppColors.error,
+            texto: 'Saldo insuficiente: tienes '
+                '${walletBalance.toStringAsFixed(2)} CUP y el viaje cuesta '
+                '${precio.toStringAsFixed(2)} CUP. Elige otro método de pago.',
+          ),
+        ],
+        if (value == 'Transferencia') ...[
+          const SizedBox(height: 8),
+          _Aviso(
+            icon: Icons.info_outline,
+            color: AppColors.ambar,
+            texto: 'Al pagar por transferencia, se añade un $porcentaje% al '
+                'costo del viaje '
+                '(${precioTransferencia.toStringAsFixed(2)} CUP).',
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _MetodoCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String? detalle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _MetodoCard({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.detalle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.acentoSuave : AppColors.campo,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? AppColors.acento : AppColors.borde,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 18,
+                color: selected ? AppColors.tinta : AppColors.secundario),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? AppColors.tinta : AppColors.secundario,
+              ),
+            ),
+            if (detalle != null) ...[
+              const SizedBox(height: 1),
+              Text(
+                detalle!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 10, color: AppColors.secundario),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Aviso extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String texto;
+
+  const _Aviso({
+    required this.icon,
+    required this.color,
+    required this.texto,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              texto,
+              style: TextStyle(fontSize: 11.5, color: color, height: 1.3),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -312,13 +312,30 @@ class ApiService {
     return _map('GET', '/drivers/$driverId/fondo');
   }
 
+  /// Historial de entradas y salidas del Fondo (transferencias y pagos con
+  /// billetera). Las contrapartes vienen identificadas por teléfono.
+  Future<Map<String, dynamic>> getTransferHistory(String driverId) async {
+    return _map('GET', '/drivers/$driverId/historial/transferencias');
+  }
+
+  /// Comisiones cobradas carrera por carrera, con el teléfono del pasajero.
+  Future<Map<String, dynamic>> getCommissionHistory(String driverId) async {
+    return _map('GET', '/drivers/$driverId/historial/comisiones');
+  }
+
+  /// Transferencia de billetera a billetera. El destino se identifica por
+  /// teléfono; `toDriverEmail` queda solo por compatibilidad.
   Future<Map<String, dynamic>> transferFondo({
     required String driverId,
-    required String toDriverEmail,
+    String? toDriverEmail,
+    String? toDriverPhone,
     required double amount,
   }) async {
+    final telefono = (toDriverPhone ?? '').trim();
+    final email = (toDriverEmail ?? '').trim();
     return _map('POST', '/drivers/$driverId/transfer', body: {
-      'to_driver_email': toDriverEmail,
+      if (telefono.isNotEmpty) 'to_driver_phone': telefono,
+      if (email.isNotEmpty) 'to_driver_email': email,
       'amount': amount,
     });
   }

@@ -136,6 +136,10 @@ class DriverVehicle {
   /// publica en `/garaje/imagen/{archivo}`. Requiere token para descargarla.
   final String? fotoExteriorUrl;
 
+  /// Foto exterior DELANTERA. Es la imagen protagonista de la tarjeta del
+  /// garaje; si falta, la tarjeta pinta el icono genérico.
+  final String? fotoExteriorDelante;
+
   const DriverVehicle({
     required this.id,
     required this.driverId,
@@ -150,6 +154,7 @@ class DriverVehicle {
     this.fotos = const {},
     this.fotosFaltantes = const [],
     this.fotoExteriorUrl,
+    this.fotoExteriorDelante,
   });
 
   /// Etiqueta de estado legible para la interfaz.
@@ -182,6 +187,7 @@ class DriverVehicle {
             .map((c) => c.toString())
             .toList(),
         fotoExteriorUrl: _str(j, ['foto_exterior_url']),
+        fotoExteriorDelante: _str(j, ['foto_exterior_delante']),
       );
 }
 

@@ -606,61 +606,66 @@ class _GarageScreenState extends State<GarageScreen> {
     );
   }
 
-  /// URL absoluta de la foto exterior del vehiculo (el backend la publica
-  /// como ruta relativa `/garaje/imagen/{archivo}`).
-  String? _urlFoto(DriverVehicle v) {
-    final raw = v.fotoExteriorUrl?.trim();
+  /// URL de la foto exterior DELANTERA del vehiculo. Es la protagonista de la
+  /// tarjeta; si no existe, se pinta el icono generico (nunca la trasera).
+  String? _urlFotoDelantera(DriverVehicle v) {
+    final raw = v.fotoExteriorDelante?.trim();
     if (raw != null && raw.isNotEmpty) {
       return raw.startsWith('http') ? raw : '${ApiConfig.baseUrl}$raw';
     }
-    // Respaldo mientras el backend no manda `foto_exterior_url`: el nombre del
-    // archivo ya viene en `fotos`, asi que la miniatura no depende de un
-    // despliegue nuevo. Se prefiere la foto delantera y luego la trasera.
-    for (final campo in const [
-      'vehiculo_exterior_frente',
-      'vehiculo_exterior_atras',
-    ]) {
-      final archivo = v.fotos[campo]?.archivo.trim();
-      if (archivo != null && archivo.isNotEmpty) {
-        return '${ApiConfig.baseUrl}/garaje/imagen/$archivo';
-      }
+    // Respaldo mientras el backend no manda `foto_exterior_delante`: el nombre
+    // del archivo ya viene en `fotos`.
+    final archivo =
+        v.fotos['vehiculo_exterior_frente']?.archivo.trim();
+    if (archivo != null && archivo.isNotEmpty) {
+      return '${ApiConfig.baseUrl}/garaje/imagen/$archivo';
     }
     return null;
   }
 
-  /// Miniatura de la foto exterior, con borde redondeado y respaldo si aun no
-  /// hay foto o la descarga falla (el vehiculo puede estar pendiente).
-  Widget _miniatura(DriverVehicle v) {
-    final url = _urlFoto(v);
+  /// Foto principal de la tarjeta: grande, con borde redondeado y respaldo
+  /// generico si aun no hay foto delantera o la descarga falla.
+  Widget _fotoPrincipal(DriverVehicle v, {double? height}) {
+    final url = _urlFotoDelantera(v);
     final token = widget.api.token;
-    const respaldo = Icon(Icons.directions_car_outlined,
-        size: 30, color: Color(0xFF9CA3AF));
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 76,
-        height: 76,
-        color: const Color(0xFFF3F4F6),
-        child: url == null
-            ? respaldo
-            : Image.network(
-                url,
-                fit: BoxFit.cover,
-                headers: (token == null || token.isEmpty)
-                    ? null
-                    : {'Authorization': 'Bearer $token'},
-                errorBuilder: (_, _, _) => respaldo,
-                loadingBuilder: (ctx, child, progreso) => progreso == null
-                    ? child
-                    : const Center(
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-              ),
-      ),
+    const respaldo = Center(
+      child: Icon(Icons.directions_car_outlined,
+          size: 52, color: Color(0xFF9CA3AF)),
+    );
+    final imagen = url == null
+        ? Container(
+            color: const Color(0xFFF3F4F6),
+            alignment: Alignment.center,
+            child: respaldo,
+          )
+        : Image.network(
+            url,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            headers: (token == null || token.isEmpty)
+                ? null
+                : {'Authorization': 'Bearer $token'},
+            errorBuilder: (_, _, _) => Container(
+              color: const Color(0xFFF3F4F6),
+              alignment: Alignment.center,
+              child: respaldo,
+            ),
+            loadingBuilder: (ctx, child, progreso) => progreso == null
+                ? child
+                : Container(
+                    color: const Color(0xFFF3F4F6),
+                    alignment: Alignment.center,
+                    child: const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+          );
+    return SizedBox(
+      height: height ?? 168,
+      width: double.infinity,
+      child: imagen,
     );
   }
 
@@ -673,160 +678,195 @@ class _GarageScreenState extends State<GarageScreen> {
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _miniatura(v),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '${v.marca ?? '—'} ${v.modelo ?? ''}'.trim(),
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 16),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: colorDeEstado.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(v.estadoEtiqueta,
-                                style: TextStyle(
-                                    color: colorDeEstado,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold)),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Tipo: ${_tipos.etiquetaDe(v.tipoVehiculo)} · '
-                        'Matrícula: ${v.matricula ?? '—'}',
-                        style: const TextStyle(color: Color(0xFF6B7280)),
-                      ),
-                    ],
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // La foto exterior DELANTERA es la protagonista de la tarjeta.
+          Stack(
+            children: [
+              _fotoPrincipal(v),
+              Positioned(
+                top: 10,
+                right: 10,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.94),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(v.estadoEtiqueta,
+                      style: TextStyle(
+                          color: colorDeEstado,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ),
+              if (v.esActivo)
+                Positioned(
+                  top: 10,
+                  left: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111827).withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text('En uso',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold)),
                   ),
                 ),
-                IconButton(
-                  tooltip: 'Editar vehículo',
-                  onPressed: () => _editarVehiculo(v),
-                  icon: const Icon(Icons.edit_outlined,
-                      color: Color(0xFF111827)),
-                ),
-                IconButton(
-                  tooltip: 'Eliminar vehículo',
-                  onPressed: _eliminandoId == null
-                      ? () => _eliminarVehiculo(v)
-                      : null,
-                  icon: _eliminandoId == v.id
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.delete_outline,
-                          color: Color(0xFFC62828)),
-                ),
-              ],
-            ),
-            _seccionFotos(v),
-            if (v.motivo != null && v.motivo!.trim().isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text('Motivo: ${v.motivo}',
-                  style: const TextStyle(
-                      color: Color(0xFFB26A00), fontStyle: FontStyle.italic)),
             ],
-            if (!v.esAprobado) ...[
-              const SizedBox(height: 4),
-              Text(
-                v.estado == 'rechazado'
-                    ? 'Rechazado: corrige el motivo y espera una nueva '
-                        'revisión.'
-                    : 'Pendiente: el administrador debe aprobarlo antes de '
-                        'poder usarlo.',
-                style: TextStyle(fontSize: 12, color: colorDeEstado),
-              ),
-            ],
-            const SizedBox(height: 10),
-            Row(
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 6, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // El circulo y el texto tambien seleccionan: antes solo
-                // respondia el boton y parecia que el selector estaba roto.
-                Expanded(
-                  child: InkWell(
-                    onTap: _seleccionandoId == null
-                        ? () => _usarVehiculo(v)
-                        : null,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      child: Row(
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            v.esActivo
-                                ? Icons.radio_button_checked
-                                : Icons.radio_button_off,
-                            size: 18,
-                            color: v.esActivo
-                                ? const Color(0xFF111827)
-                                : Colors.grey,
+                          Text(
+                            '${v.marca ?? '—'} ${v.modelo ?? ''}'.trim(),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 16),
                           ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              v.esActivo
-                                  ? 'Vehículo en uso'
-                                  : 'No está en uso',
-                              style: const TextStyle(fontSize: 13),
-                            ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Tipo: ${_tipos.etiquetaDe(v.tipoVehiculo)} · '
+                            'Matrícula: ${v.matricula ?? '—'}',
+                            style:
+                                const TextStyle(color: Color(0xFF6B7280)),
                           ),
                         ],
                       ),
                     ),
-                  ),
+                    IconButton(
+                      tooltip: 'Editar vehículo',
+                      onPressed: () => _editarVehiculo(v),
+                      icon: const Icon(Icons.edit_outlined,
+                          color: Color(0xFF111827)),
+                    ),
+                    IconButton(
+                      tooltip: 'Eliminar vehículo',
+                      onPressed: _eliminandoId == null
+                          ? () => _eliminarVehiculo(v)
+                          : null,
+                      icon: _eliminandoId == v.id
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.delete_outline,
+                              color: Color(0xFFC62828)),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  // Solo se bloquea mientras hay un select en vuelo. Si el
-                  // vehiculo no esta aprobado, el boton sigue respondiendo
-                  // con el motivo (antes quedaba deshabilitado y parecia roto).
-                  onPressed: _seleccionandoId != null
-                      ? null
-                      : () => _usarVehiculo(v),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(40),
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    backgroundColor: v.esActivo
-                        ? const Color(0xFFE5E7EB)
-                        : const Color(0xFF111827),
-                    foregroundColor:
-                        v.esActivo ? const Color(0xFF6B7280) : Colors.white,
+                _seccionFotos(v),
+                if (v.motivo != null && v.motivo!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text('Motivo: ${v.motivo}',
+                      style: const TextStyle(
+                          color: Color(0xFFB26A00),
+                          fontStyle: FontStyle.italic)),
+                ],
+                if (!v.esAprobado) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    v.estado == 'rechazado'
+                        ? 'Rechazado: corrige el motivo y espera una nueva '
+                            'revisión.'
+                        : 'Pendiente: el administrador debe aprobarlo antes de '
+                            'poder usarlo.',
+                    style: TextStyle(fontSize: 12, color: colorDeEstado),
                   ),
-                  icon: _seleccionandoId == v.id
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.check, size: 18),
-                  label: Text(v.esActivo ? 'En uso' : 'Usar este vehículo'),
+                ],
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    // El circulo y el texto tambien seleccionan: antes solo
+                    // respondia el boton y parecia que el selector estaba roto.
+                    Expanded(
+                      child: InkWell(
+                        onTap: _seleccionandoId == null
+                            ? () => _usarVehiculo(v)
+                            : null,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                v.esActivo
+                                    ? Icons.radio_button_checked
+                                    : Icons.radio_button_off,
+                                size: 18,
+                                color: v.esActivo
+                                    ? const Color(0xFF111827)
+                                    : Colors.grey,
+                              ),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  v.esActivo
+                                      ? 'Vehículo en uso'
+                                      : 'No está en uso',
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: FilledButton.icon(
+                        // Solo se bloquea mientras hay un select en vuelo. Si el
+                        // vehiculo no esta aprobado, el boton sigue respondiendo
+                        // con el motivo (antes quedaba deshabilitado y parecia roto).
+                        onPressed: _seleccionandoId != null
+                            ? null
+                            : () => _usarVehiculo(v),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(40),
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 12),
+                          backgroundColor: v.esActivo
+                              ? const Color(0xFFE5E7EB)
+                              : const Color(0xFF111827),
+                          foregroundColor: v.esActivo
+                              ? const Color(0xFF6B7280)
+                              : Colors.white,
+                        ),
+                        icon: _seleccionandoId == v.id
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.check, size: 18),
+                        label: Text(
+                            v.esActivo ? 'En uso' : 'Usar este vehículo'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -60,11 +60,28 @@ DEFAULT_COMISION = Decimal("0.15")
 DEFAULT_BONO_MONTO = Decimal("1100")
 DEFAULT_BONO_VIAJES = 10
 
+# Comision de los pagos con Billetera (saldo de la plataforma). El dinero entra
+# al Fondo del chofer y la plataforma retiene esta parte. En lanzamiento es 0%,
+# pero el campo queda listo en la base y en el panel. El tope es 10%: por
+# encima, el chofer trabajaria casi gratis y la regla de negocio lo prohibe.
+DEFAULT_COMISION_BILLETERA = Decimal("0.00")
+COMISION_BILLETERA_MAXIMA = Decimal("0.10")
+
+# Recargo que se suma al precio cuando el pasajero paga por transferencia
+# (Zelle, banco, etc.): el dinero no entra a la plataforma, asi que el 10%
+# compensa la gestion. Se calcula SIEMPRE en el backend.
+DEFAULT_RECARGO_TRANSFERENCIA = Decimal("0.10")
+RECARGO_TRANSFERENCIA_MAXIMO = Decimal("1.00")
+
 # Fila unica: el CHECK sobre `id` impide que alguien inserte una segunda.
 DDL = """
     CREATE TABLE IF NOT EXISTS promociones (
         id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
         comision_porcentaje NUMERIC(5,4) NOT NULL DEFAULT 0.1500,
+        -- Comision de la billetera (pago con saldo). 0% en lanzamiento.
+        comision_billetera NUMERIC(5,4) NOT NULL DEFAULT 0.0000,
+        -- Recargo del pago por transferencia bancaria externa. 10%.
+        recargo_transferencia NUMERIC(5,4) NOT NULL DEFAULT 0.1000,
         bono_chofer_activo BOOLEAN NOT NULL DEFAULT TRUE,
         bono_chofer_monto NUMERIC(12,2) NOT NULL DEFAULT 1100.00,
         bono_chofer_viajes_requeridos INTEGER NOT NULL DEFAULT 10,
@@ -164,6 +181,8 @@ def verify_cron_or_admin(
 
 ALTER_PROMOCIONES = """
     ALTER TABLE promociones
+            ADD COLUMN IF NOT EXISTS comision_billetera NUMERIC(5,4) NOT NULL DEFAULT 0.0000,
+            ADD COLUMN IF NOT EXISTS recargo_transferencia NUMERIC(5,4) NOT NULL DEFAULT 0.1000,
             ADD COLUMN IF NOT EXISTS referidos_activos BOOLEAN NOT NULL DEFAULT TRUE,
             ADD COLUMN IF NOT EXISTS coef_corto_km NUMERIC(6,2) NOT NULL DEFAULT 3.0,
             ADD COLUMN IF NOT EXISTS coef_corto_valor NUMERIC(6,4) NOT NULL DEFAULT 0.5000,
@@ -236,6 +255,8 @@ def leer_promocion() -> Dict[str, Any]:
     """
     valores = {
         "comision_porcentaje": DEFAULT_COMISION,
+        "comision_billetera": DEFAULT_COMISION_BILLETERA,
+        "recargo_transferencia": DEFAULT_RECARGO_TRANSFERENCIA,
         "bono_chofer_activo": True,
         "bono_chofer_monto": DEFAULT_BONO_MONTO,
         "bono_chofer_viajes_requeridos": DEFAULT_BONO_VIAJES,
@@ -278,6 +299,13 @@ def leer_promocion() -> Dict[str, Any]:
         comision = _a_decimal(fila.get("comision_porcentaje"), DEFAULT_COMISION)
         valores.update({
             "comision_porcentaje": comision,
+            "comision_billetera": min(
+                _a_decimal(fila.get("comision_billetera"),
+                           DEFAULT_COMISION_BILLETERA),
+                COMISION_BILLETERA_MAXIMA),
+            "recargo_transferencia": _a_decimal(
+                fila.get("recargo_transferencia"),
+                DEFAULT_RECARGO_TRANSFERENCIA),
             "bono_chofer_activo": bool(fila.get("bono_chofer_activo", True)),
             "bono_chofer_monto": _a_decimal(fila.get("bono_chofer_monto"),
                                              DEFAULT_BONO_MONTO),
@@ -456,6 +484,10 @@ def _a_dinero(valor: Decimal) -> Decimal:
 
 class PromoIn(BaseModel):
     comision_porcentaje: float = Field(..., description="Fraccion: 0.0 a 1.0")
+    comision_billetera: float = Field(
+        0.0, description="Comision del pago con billetera. Maximo 0.10.")
+    recargo_transferencia: float = Field(
+        0.10, description="Recargo del pago por transferencia. Por defecto 0.10.")
     bono_chofer_activo: bool = True
     bono_chofer_monto: float = 0
     bono_chofer_viajes_requeridos: int = 0
@@ -484,6 +516,23 @@ def _validar(datos: PromoIn) -> Dict[str, Any]:
             status_code=400,
             detail="La comisión debe ser una fracción entre 0 y 1. "
                    "Por ejemplo, 0.15 es el quince por ciento.")
+
+    comision_billetera = Decimal(str(datos.comision_billetera)).quantize(
+        Decimal("0.0001"))
+    if comision_billetera < 0 or comision_billetera > COMISION_BILLETERA_MAXIMA:
+        raise HTTPException(
+            status_code=400,
+            detail="La comisión de la billetera debe estar entre 0 y %s."
+                   % _porcentaje(COMISION_BILLETERA_MAXIMA))
+
+    recargo_transferencia = Decimal(
+        str(datos.recargo_transferencia)).quantize(Decimal("0.0001"))
+    if (recargo_transferencia < 0
+            or recargo_transferencia > RECARGO_TRANSFERENCIA_MAXIMO):
+        raise HTTPException(
+            status_code=400,
+            detail="El recargo de la transferencia debe estar entre 0 y 1. "
+                   "Por ejemplo, 0.10 es el diez por ciento.")
 
     descuento = Decimal(str(datos.descuento_cliente_porcentaje)).quantize(
         Decimal("0.0001"))
@@ -540,6 +589,8 @@ def _validar(datos: PromoIn) -> Dict[str, Any]:
 
     return {
         "comision_porcentaje": comision,
+        "comision_billetera": comision_billetera,
+        "recargo_transferencia": recargo_transferencia,
         "bono_chofer_activo": bool(datos.bono_chofer_activo),
         "bono_chofer_monto": monto_bono,
         "bono_chofer_viajes_requeridos": viajes,
@@ -606,6 +657,11 @@ async def promocion_vigente():
     """
     promo = leer_promocion()
     return {
+        "comision_billetera": float(promo["comision_billetera"]),
+        "comision_billetera_texto": _porcentaje(promo["comision_billetera"]),
+        "recargo_transferencia": float(promo["recargo_transferencia"]),
+        "recargo_transferencia_texto":
+            _porcentaje(promo["recargo_transferencia"]),
         "descuento_cliente_activo": promo["descuento_cliente_activo"],
         "descuento_cliente_porcentaje": float(promo["descuento_cliente_porcentaje"]),
         "descuento_cliente_porcentaje_texto":
@@ -624,7 +680,8 @@ async def promocion_vigente():
 @router.post("")
 async def guardar_promocion(datos: PromoIn, admin: dict = Depends(require_admin)):
     limpio = _validar(datos)
-    columnas = ("comision_porcentaje, bono_chofer_activo, bono_chofer_monto, "
+    columnas = ("comision_porcentaje, comision_billetera, "
+                "recargo_transferencia, bono_chofer_activo, bono_chofer_monto, "
                 "bono_chofer_viajes_requeridos, descuento_cliente_activo, "
                 "descuento_cliente_porcentaje, referidos_activos, fecha_expiracion, "
                 "coef_corto_km, coef_corto_valor, coef_medio_km, coef_medio_valor, "

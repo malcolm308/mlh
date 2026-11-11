@@ -540,6 +540,14 @@ def init_db():
             -- y el cobro, y sin guardar el valor la reclamacion no se puede
             -- responder. NULL en los viajes anteriores a esta columna.
             ADD COLUMN IF NOT EXISTS coeficiente_aplicado NUMERIC(6,4),
+            -- Metodo de pago con el que se pidio el viaje: Efectivo, Billetera
+            -- o Transferencia. Se guarda al crear para que el cierre cobre
+            -- exactamente por la via elegida.
+            ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50) DEFAULT 'Efectivo',
+            -- Recargo del 10% aplicado a los pagos por transferencia.
+            ADD COLUMN IF NOT EXISTS recargo_transferencia NUMERIC(12,2) DEFAULT 0,
+            -- Comision retenida en los pagos con billetera (0% en lanzamiento).
+            ADD COLUMN IF NOT EXISTS comision_billetera NUMERIC(12,2) DEFAULT 0,
             -- Marca de la alerta de viaje huerfano enviada al grupo de Telegram.
             ADD COLUMN IF NOT EXISTS alerta_enviada BOOLEAN NOT NULL DEFAULT FALSE;
     """
@@ -906,7 +914,17 @@ def estimate_trip_price(
     """Calcula la tarifa estimada sin crear el viaje (misma distancia y formula que create_trip)."""
     distance_km = distancia_por_calle_km(
         request_lat, request_lng, dropoff_lat, dropoff_lng)
-    return _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
+    desglose = _price_breakdown(
+        distance_km, vehicle_type, request_lat, request_lng,
+        dropoff_lat, dropoff_lng)
+    promo = leer_promocion()
+    recargo_rate = float(promo["recargo_transferencia"])
+    desglose["recargo_transferencia_porcentaje"] = recargo_rate
+    desglose["precio_transferencia"] = round(
+        float(desglose["precio_estimado"]) * (1 + recargo_rate), 2)
+    desglose["comision_billetera_porcentaje"] = float(
+        promo["comision_billetera"])
+    return desglose
 
 
 def estimate_all_vehicles(
@@ -927,24 +945,32 @@ def estimate_all_vehicles(
     AVG_SPEED_KMH = 30
     eta_minutes = round((distance_km / AVG_SPEED_KMH) * 60)
     eta_text = f"{eta_minutes} min"
-    
+
+    promo = leer_promocion()
+    recargo_rate = float(promo["recargo_transferencia"])
+    comision_billetera = float(promo["comision_billetera"])
+
     vehicles = []
     for vehicle_type in ["moto", "triciclo", "basico", "confort"]:
         breakdown = _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
         vehicles.append({
             "vehicle_type": vehicle_type,
             "price": breakdown["precio_estimado"],
+            "price_transferencia": round(
+                float(breakdown["precio_estimado"]) * (1 + recargo_rate), 2),
             "base_fare": breakdown["base_fare"],
             "distance_fare": breakdown["distance_fare"],
             "time_fare": breakdown["time_fare"],
             "coeficiente": breakdown["coeficiente"],
         })
-    
+
     return {
         "distance_km": round(distance_km, 2),
         "eta_minutes": eta_minutes,
         "eta_text": eta_text,
         "payment_method": "Efectivo",
+        "recargo_transferencia": recargo_rate,
+        "comision_billetera": comision_billetera,
         "vehicles": vehicles,
     }
 # ===================== TRIPS =====================
@@ -963,8 +989,10 @@ def create_trip(
     base_fare: Optional[float] = None,
     request_address: Optional[str] = None,
     dropoff_address: Optional[str] = None,
+    payment_method: str = "Efectivo",
 ) -> dict:
     vehicle_type = _normalize_vehicle_type(vehicle_type) or "basico"
+    payment_method = _normalizar_metodo_pago(payment_method)
     if not validate_client_exists(client_id):
         raise ValueError(f"Cliente no encontrado en MongoDB: {client_id}")
     # Solo validar conductor si se proporciono driver_id explicitamente
@@ -991,7 +1019,31 @@ def create_trip(
             breakdown = _price_breakdown(
                 distance_km, vehicle_type,
                 request_lat, request_lng, dropoff_lat, dropoff_lng)
-            precio_estimado = breakdown["precio_estimado"]
+            precio_base = breakdown["precio_estimado"]
+
+            # Recargo por transferencia: SIEMPRE lo calcula el backend. El
+            # 10% se configura en el panel; aqui solo se aplica.
+            promo = leer_promocion()
+            recargo = 0.0
+            if payment_method == "Transferencia":
+                recargo = float(
+                    (Decimal(str(precio_base))
+                     * Decimal(str(promo["recargo_transferencia"]))).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP))
+            precio_estimado = round(float(precio_base) + recargo, 2)
+
+            # La billetera se valida al pedir el viaje: si el saldo no cubre
+            # el total estimado, se rechaza antes de mover un chofer.
+            if payment_method == "Billetera":
+                cliente_oid = to_mongo_id(client_id)
+                cliente_doc = (cliente_coleccion.find_one({"_id": cliente_oid})
+                               if cliente_oid else None)
+                saldo = float((cliente_doc or {}).get("Fondo") or 0)
+                if saldo + 0.009 < precio_estimado:
+                    raise ValueError(
+                        "Saldo insuficiente en la billetera: el viaje cuesta "
+                        "%.2f CUP y tu saldo es %.2f CUP."
+                        % (precio_estimado, saldo))
 
             # Si hay driver_id, el estado es 'accepted'; si no, queda 'requested' sin chofer
             initial_status = "accepted" if driver_id else "requested"
@@ -1001,12 +1053,13 @@ def create_trip(
                 INSERT INTO trips (
                     client_id, driver_id, status, request_location, dropoff_location,
                     equipaje, mascota, num_pasajes, vehicle_type,
-                    precio_estimado, base_fare, distance_km, request_address, dropoff_address
+                    precio_estimado, base_fare, distance_km, request_address,
+                    dropoff_address, payment_method, recargo_transferencia
                 ) VALUES (
                     %s, %s, %s,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING trip_id;
                 """,
@@ -1016,7 +1069,7 @@ def create_trip(
                     dropoff_lng, dropoff_lat,
                     equipaje, mascota, num_pasajes, vehicle_type,
                     precio_estimado, base_fare, round(distance_km, 3),
-                    request_address, dropoff_address
+                    request_address, dropoff_address, payment_method, recargo,
                 ),
             )
             trip_id = cur.fetchone()["trip_id"]
@@ -1027,6 +1080,9 @@ def create_trip(
                 "driver_id": driver_id,
                 "status": initial_status,
                 "precio_estimado": precio_estimado,
+                "precio_base_estimado": float(precio_base),
+                "recargo_transferencia": recargo,
+                "payment_method": payment_method,
                 "distance_km": round(distance_km, 2),
                 "equipaje": equipaje,
                 "mascota": mascota,
@@ -1059,6 +1115,7 @@ def get_trip(trip_id: str) -> Optional[dict]:
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
+                recargo_transferencia, comision_billetera,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
                 request_address, dropoff_address
             FROM trips WHERE trip_id = %s;
@@ -1410,7 +1467,23 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
             # Lo que paga el pasajero. El descuento sale de la comision de la
             # plataforma, nunca del bolsillo del chofer.
-            total_fare = float(Decimal(str(precio_bruto)) - descuento_cliente - descuento_referido)
+            precio_neto = float(
+                Decimal(str(precio_bruto)) - descuento_cliente - descuento_referido)
+
+            # Pago por transferencia: se suma el recargo configurado (10% por
+            # defecto) al precio final. El calculo vive aqui, no en la app.
+            try:
+                payment_method = _normalizar_metodo_pago(
+                    trip.get("payment_method"))
+            except ValueError:
+                payment_method = "Efectivo"
+            recargo_transferencia = 0.0
+            if payment_method == "Transferencia":
+                recargo_transferencia = float(
+                    (Decimal(str(precio_neto))
+                     * Decimal(str(promo["recargo_transferencia"]))).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP))
+            total_fare = round(precio_neto + recargo_transferencia, 2)
 
             # 9. Actualizar el viaje en PostgreSQL
             cur.execute("""
@@ -1429,6 +1502,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     espera_secs = %s,
                     excedente_espera_secs = %s,
                     coeficiente_aplicado = %s,
+                    payment_method = %s,
+                    recargo_transferencia = %s,
                     currency = 'CUP'
                 WHERE trip_id = %s
                 RETURNING *;
@@ -1438,6 +1513,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 base_fare, distance_fare, tip, total_fare,
                 float(descuento_cliente), None,
                 espera_secs, excedente_secs, float(coeficiente),
+                payment_method, recargo_transferencia,
                 trip_id
             ))
             updated_trip = cur.fetchone()
@@ -1472,32 +1548,131 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                         "discount_applied": False, "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d")}
             comision_nominal = None
             commission = None
-            try:
-                comision = resolve_commission(driver_id_str, promo["comision_porcentaje"])
-                comision_nominal = float(
-                    (Decimal(str(precio_bruto)) * comision["rate"]).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP))
-                commission = max(0.0, round(comision_nominal - float(descuento_cliente), 2))
-                commit_commission(
-                    driver_id_str,
-                    commission,
-                    comision["discount_applied"],
-                    comision["discount_date"],
-                )
+            comision_billetera = 0.0
 
-                # La comision nominal queda guardada junto al descuento para que el
-                # calculo sea auditable despues: sin esto no habria forma de saber
-                # de donde salio lo que se desconto del fondo.
-                cur.execute(
-                    "UPDATE trips SET comision_nominal = %s WHERE trip_id = %s",
-                    (comision_nominal, trip_id))
-                conn.commit()
-            except Exception:
-                # Si falla la comision, el viaje ya esta 'completed' con precio.
-                # No se deshace: logueamos y seguimos.
-                logger.exception("complete_trip: fallo en comision para viaje %s", trip_id)
-                comision_nominal = None
-                commission = None
+            if payment_method == "Billetera":
+                # Pago con saldo: la plataforma toma el dinero del `Fondo` del
+                # pasajero y lo abona al Fondo del chofer MENOS la comision
+                # configurada (0% en lanzamiento, tope 10%). El descuento al
+                # cliente, si lo hay, ya viene incluido en `total_fare` y lo
+                # asume la plataforma: al chofer se le abona lo cobrado.
+                try:
+                    client_oid = to_mongo_id(
+                        updated_trip.get("client_id") or "")
+                    saldo = 0.0
+                    if client_oid:
+                        cliente_doc = cliente_coleccion.find_one(
+                            {"_id": client_oid}) or {}
+                        saldo = max(0.0, float(cliente_doc.get("Fondo") or 0))
+
+                    # Se cobra como maximo lo que hay: nunca se inventa saldo.
+                    debito = round(min(saldo, float(total_fare)), 2)
+                    tasa = float(promo["comision_billetera"])
+                    comision_billetera = round(debito * tasa, 2)
+                    neto_chofer = max(0.0, round(debito - comision_billetera, 2))
+
+                    if client_oid and debito > 0:
+                        cliente_coleccion.update_one(
+                            {"_id": client_oid},
+                            {"$inc": {"Fondo": -debito}})
+                    if debito + 0.009 < float(total_fare):
+                        logger.warning(
+                            "Billetera: el cliente %s tenia %.2f y el viaje "
+                            "%s costo %.2f; se debito %.2f. El chofer recibe "
+                            "el neto de lo cobrado.",
+                            updated_trip.get("client_id"), saldo, trip_id,
+                            total_fare, debito)
+
+                    if neto_chofer > 0:
+                        chofer_coleccion.update_one(
+                            {"_id": to_mongo_id(driver_id_str)},
+                            {"$inc": {"Fondo": neto_chofer}})
+
+                    comision = {
+                        "rate": tasa,
+                        "label": _etiqueta_tasa(tasa),
+                        "discount_applied": False,
+                        "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d"),
+                    }
+                    comision_nominal = comision_billetera
+                    commission = comision_billetera
+
+                    # Libro de movimientos: sirve para el historial del cliente
+                    # y del chofer, siempre identificados por telefono.
+                    if debito > 0:
+                        txn_cliente = create_transaction(
+                            trip_id, updated_trip.get("client_id"), "client",
+                            -debito, "wallet_payment",
+                            payment_gateway="billetera")
+                        update_transaction_status(txn_cliente, "completed")
+                    if neto_chofer > 0:
+                        txn_chofer = create_transaction(
+                            trip_id, driver_id_str, "driver", neto_chofer,
+                            "wallet_income", payment_gateway="billetera")
+                        update_transaction_status(txn_chofer, "completed")
+
+                    cur.execute(
+                        "UPDATE trips SET comision_nominal = %s, "
+                        "comision_billetera = %s WHERE trip_id = %s",
+                        (comision_billetera, comision_billetera, trip_id))
+                    conn.commit()
+                except Exception:
+                    logger.exception(
+                        "complete_trip: fallo al liquidar billetera del viaje %s",
+                        trip_id)
+
+            elif payment_method == "Transferencia":
+                # Pago externo (Zelle, banco, etc.): el dinero no pasa por la
+                # plataforma. El recargo del 10% ya quedo en `total_fare`; no
+                # hay comision que retener ni Fondo que mover.
+                comision = {
+                    "rate": 0.0,
+                    "label": "0% (transferencia externa)",
+                    "discount_applied": False,
+                    "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d"),
+                }
+                comision_nominal = 0.0
+                commission = 0.0
+                try:
+                    cur.execute(
+                        "UPDATE trips SET comision_nominal = 0, "
+                        "comision_billetera = 0 WHERE trip_id = %s", (trip_id,))
+                    conn.commit()
+                except Exception:
+                    logger.exception(
+                        "complete_trip: no se pudo marcar comision 0 del viaje %s",
+                        trip_id)
+
+            else:
+                # Efectivo: flujo historico. La comision sale del Fondo del
+                # chofer al cerrar el viaje.
+                try:
+                    comision = resolve_commission(driver_id_str, promo["comision_porcentaje"])
+                    comision_nominal = float(
+                        (Decimal(str(precio_bruto)) * comision["rate"]).quantize(
+                            Decimal("0.01"), rounding=ROUND_HALF_UP))
+                    commission = max(0.0, round(comision_nominal - float(descuento_cliente), 2))
+                    commit_commission(
+                        driver_id_str,
+                        commission,
+                        comision["discount_applied"],
+                        comision["discount_date"],
+                    )
+
+                    # La comision nominal queda guardada junto al descuento para que el
+                    # calculo sea auditable despues: sin esto no habria forma de saber
+                    # de donde salio lo que se desconto del fondo.
+                    cur.execute(
+                        "UPDATE trips SET comision_nominal = %s, "
+                        "comision_billetera = 0 WHERE trip_id = %s",
+                        (comision_nominal, trip_id))
+                    conn.commit()
+                except Exception:
+                    # Si falla la comision, el viaje ya esta 'completed' con precio.
+                    # No se deshace: logueamos y seguimos.
+                    logger.exception("complete_trip: fallo en comision para viaje %s", trip_id)
+                    comision_nominal = None
+                    commission = None
 
             # 11. Sistema de referidos
             try:
@@ -1626,6 +1801,9 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "commission_rate": comision.get("rate") if isinstance(comision, dict) else None,
                 "commission_label": comision.get("label") if isinstance(comision, dict) else None,
                 "commission_discount": comision.get("discount_applied") if isinstance(comision, dict) else None,
+                "payment_method": payment_method,
+                "recargo_transferencia": recargo_transferencia,
+                "comision_billetera": comision_billetera,
                 "currency": updated_trip.get("currency") or "CUP",
                 "vehicle_type": vehicle_type,
                 "applied_rule": applied_rule_desc,
@@ -2365,6 +2543,82 @@ def _normalize_vehicle_type(value) -> Optional[str]:
     return text or None
 
 
+METODOS_PAGO = ("Efectivo", "Billetera", "Transferencia")
+
+
+def _normalizar_metodo_pago(value) -> str:
+    """Nombre canonico del metodo de pago.
+
+    La app manda 'Billetera'/'Transferencia'/'Efectivo', pero se aceptan alias
+    en minusculas para que una llamada directa a la API no rompa el cierre.
+    """
+    texto = str(value or "").strip().translate(_ACCENTS).lower()
+    if texto in ("", "efectivo", "cash"):
+        return "Efectivo"
+    if texto in ("billetera", "wallet", "saldo", "fondo"):
+        return "Billetera"
+    if texto in ("transferencia", "transfer", "banco", "zelle"):
+        return "Transferencia"
+    raise ValueError(
+        "Metodo de pago no valido. Use Efectivo, Billetera o Transferencia.")
+
+
+def _digitos_telefono(valor) -> str:
+    return "".join(c for c in str(valor or "") if c.isdigit())
+
+
+def _buscar_por_telefono(coleccion, telefono):
+    """Busca un usuario por telefono sin depender del formato guardado.
+
+    Compara los ultimos 8 digitos: en Cuba el numero local tiene 8 y el
+    prefijo (+53) se escribe de mil formas. Devuelve el documento o None.
+    """
+    digitos = _digitos_telefono(telefono)
+    if len(digitos) < 7:
+        return None
+    ultimos = digitos[-8:]
+    try:
+        return coleccion.find_one(
+            {"numero_de_telefono": {"$regex": ultimos + "$"}})
+    except Exception:
+        logger.exception("No se pudo buscar por telefono %s", telefono)
+        return None
+
+
+def _telefono_visible(valor) -> Optional[str]:
+    """Telefono con prefijo internacional para los historiales.
+
+    Los telefonos vienen de Mongo sin formato homogeneo. Se dejan siempre en
+    la forma '+53 59295207' (o '+1 3051234567') para que el identificador de
+    los historiales sea el telefono y nunca el correo.
+    """
+    if valor is None:
+        return None
+    texto = str(valor).strip()
+    if not texto:
+        return None
+    limpio = "".join(c for c in texto if c.isdigit() or c == "+")
+    if limpio.startswith("00"):
+        limpio = "+" + limpio[2:]
+    if not limpio:
+        return None
+    if not limpio.startswith("+"):
+        # Cuba: 8 digitos locales o 53 + 8 digitos sin el '+'.
+        if len(limpio) == 8:
+            limpio = "+53" + limpio
+        elif limpio.startswith("53") and len(limpio) > 8:
+            limpio = "+" + limpio
+        else:
+            limpio = "+" + limpio
+    digitos = limpio[1:]
+    if len(digitos) > 8:
+        # Prefijo de pais de 1 a 3 digitos: se separa para leerlo comodo.
+        prefijo = digitos[:len(digitos) - 8] if len(digitos) - 8 <= 3 else "53"
+        resto = digitos[len(prefijo):]
+        return "+%s %s" % (prefijo, resto)
+    return limpio
+
+
 def _driver_vehicle_type(doc: dict) -> Optional[str]:
     """Extrae el tipo de vehiculo (normalizado) de un documento de chofer.
 
@@ -2656,6 +2910,8 @@ class TripCreate(BaseModel):
     base_fare: Optional[float] = None
     request_address: Optional[str] = None
     dropoff_address: Optional[str] = None
+    # Efectivo | Billetera | Transferencia. Default: el flujo historico.
+    payment_method: str = "Efectivo"
 
 class TripEstimateRequest(BaseModel):
     request_lat: float
@@ -2701,7 +2957,15 @@ class TransactionStatusUpdate(BaseModel):
     status: str
 
 class TransferCreate(BaseModel):
-    to_driver_email: str
+    # Compatibilidad: la app antigua mandaba email. El identificador principal
+    # del sistema es el telefono, asi que se acepta cualquiera de los dos.
+    to_driver_email: Optional[str] = None
+    to_driver_phone: Optional[str] = None
+    amount: float
+
+
+class ClientTransferCreate(BaseModel):
+    to_client_phone: str
     amount: float
 
 class DriverPayoutCreate(BaseModel):
@@ -2761,6 +3025,7 @@ async def api_create_trip(body: TripCreate, background: BackgroundTasks):
             base_fare=body.base_fare,
             request_address=body.request_address,
             dropoff_address=body.dropoff_address,
+            payment_method=body.payment_method,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3976,6 +4241,7 @@ async def api_get_driver_fondo(driver_id: str):
     return {
         "driver_id": driver_id,
         "email": doc.get("email"),
+        "telefono": _telefono_visible(doc.get("numero_de_telefono")),
         "nombre": doc.get("Nombre"),
         "apellidos": doc.get("Apellidos"),
         "fondo": float(doc.get("Fondo") or doc.get("fondo") or 0),
@@ -3995,11 +4261,17 @@ async def api_transfer_fondo(driver_id: str, body: TransferCreate):
     if not sender:
         raise HTTPException(status_code=404, detail="Chofer no encontrado")
 
-    recipient_email = body.to_driver_email.strip().lower()
-    if not recipient_email:
-        raise HTTPException(status_code=400, detail="Email del destinatario requerido")
+    recipient_email = (body.to_driver_email or "").strip().lower()
+    recipient_phone = (body.to_driver_phone or "").strip()
+    if not recipient_email and not recipient_phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Telefono (o email) del destinatario requerido")
 
-    recipient = chofer_coleccion.find_one({"email": recipient_email})
+    if recipient_phone:
+        recipient = _buscar_por_telefono(chofer_coleccion, recipient_phone)
+    else:
+        recipient = chofer_coleccion.find_one({"email": recipient_email})
     if not recipient:
         raise HTTPException(status_code=404, detail="Chofer destino no encontrado")
 
@@ -4036,10 +4308,424 @@ async def api_transfer_fondo(driver_id: str, body: TransferCreate):
     return {
         "ok": True,
         "amount": amount,
-        "to_driver_email": recipient_email,
+        "to_driver_email": recipient.get("email"),
+        "to_driver_phone": _telefono_visible(recipient.get("numero_de_telefono")),
         "fondo_restante": round(sender_fondo - amount, 2),
         "transaction_out": txn_out,
         "transaction_in": txn_in,
+    }
+
+
+# ===================== HISTORIALES (TELEFONO COMO IDENTIFICADOR) =====================
+
+def _nombre_doc(doc: dict) -> Optional[str]:
+    nombre = " ".join(filter(None, [
+        doc.get("Nombre"), doc.get("Apellidos")])).strip()
+    return nombre or None
+
+
+@router.get("/drivers/{driver_id}/historial/comisiones")
+async def api_driver_commission_history(
+        driver_id: str, limit: int = Query(200, le=500)):
+    """Comisiones cobradas al chofer, carrera por carrera.
+
+    El identificador de cada carrera es el telefono del pasajero (nunca el
+    correo). El monto que ve el chofer es lo que pago el pasajero y, aparte,
+    la comision que se le retuvo en esa carrera.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT trip_id, client_id, completed_at, total_fare,
+                   descuento_cliente, comision_nominal, comision_billetera,
+                   recargo_transferencia, payment_method, currency
+            FROM trips
+            WHERE driver_id = %s AND status = 'completed'
+            ORDER BY completed_at DESC NULLS LAST
+            LIMIT %s;
+            """,
+            (driver_id, limit),
+        )
+        filas = [dict(r) for r in cur.fetchall()]
+        cur.close()
+
+    ids = []
+    for fila in filas:
+        oid = to_mongo_id(fila.get("client_id") or "")
+        if oid and oid not in ids:
+            ids.append(oid)
+    clientes = {}
+    if ids:
+        for doc in cliente_coleccion.find({"_id": {"$in": ids}}):
+            clientes[str(doc["_id"])] = doc
+
+    items = []
+    total_facturado = 0.0
+    total_comision = 0.0
+    for fila in filas:
+        metodo = fila.get("payment_method") or "Efectivo"
+        nominal = float(fila.get("comision_nominal") or 0)
+        descuento = float(fila.get("descuento_cliente") or 0)
+        if metodo == "Billetera":
+            comision = float(fila.get("comision_billetera") or 0)
+        elif metodo == "Transferencia":
+            comision = 0.0
+        else:
+            comision = max(0.0, nominal - descuento)
+        monto = float(fila.get("total_fare") or 0)
+        cliente = clientes.get(str(fila.get("client_id") or ""), {})
+        completado = fila.get("completed_at")
+        items.append({
+            "trip_id": fila.get("trip_id"),
+            "fecha": completado.isoformat() if completado else None,
+            "cliente_nombre": _nombre_doc(cliente),
+            "cliente_telefono": _telefono_visible(
+                cliente.get("numero_de_telefono")),
+            "metodo_pago": metodo,
+            "monto_total": round(monto, 2),
+            "comision": round(comision, 2),
+            "comision_nominal": round(nominal, 2),
+            "descuento_cliente": round(descuento, 2),
+            "recargo_transferencia": round(
+                float(fila.get("recargo_transferencia") or 0), 2),
+            "currency": fila.get("currency") or "CUP",
+        })
+        total_facturado += monto
+        total_comision += comision
+
+    chofer = None
+    try:
+        chofer = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)})
+    except Exception:
+        chofer = None
+    return {
+        "driver_id": driver_id,
+        "telefono": _telefono_visible(
+            (chofer or {}).get("numero_de_telefono")),
+        "nombre": _nombre_doc(chofer or {}),
+        "items": items,
+        "total_viajes": len(items),
+        "total_facturado": round(total_facturado, 2),
+        "total_comision": round(total_comision, 2),
+        "currency": "CUP",
+    }
+
+
+@router.get("/drivers/{driver_id}/historial/transferencias")
+async def api_driver_transfer_history(
+        driver_id: str, limit: int = Query(200, le=500)):
+    """Entradas y salidas de dinero del Fondo del chofer.
+
+    Incluye las transferencias entre choferes y los pagos que los pasajeros
+    hicieron con billetera (ese dinero entra al Fondo del chofer). Todas las
+    contrapartes se identifican por telefono.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT transaction_id, trip_id, amount, transaction_type,
+                   payment_gateway, gateway_reference, created_at
+            FROM transactions
+            WHERE user_id = %s AND user_type = 'driver'
+              AND transaction_type IN ('transfer', 'wallet_income')
+            ORDER BY created_at DESC
+            LIMIT %s;
+            """,
+            (driver_id, limit),
+        )
+        filas = [dict(r) for r in cur.fetchall()]
+        cur.close()
+
+    # Telefonos de las contrapartes: choferes (transfer) y clientes (viajes).
+    otros_ids = []
+    trip_ids = []
+    for fila in filas:
+        if fila.get("transaction_type") == "transfer":
+            oid = to_mongo_id(fila.get("gateway_reference") or "")
+            if oid and oid not in otros_ids:
+                otros_ids.append(oid)
+        elif fila.get("trip_id"):
+            trip_ids.append(fila["trip_id"])
+    choferes = {}
+    if otros_ids:
+        for doc in chofer_coleccion.find({"_id": {"$in": otros_ids}}):
+            choferes[str(doc["_id"])] = doc
+
+    clientes_por_viaje = {}
+    if trip_ids:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                "SELECT trip_id, client_id FROM trips WHERE trip_id = ANY(%s)",
+                (trip_ids,))
+            viajes = [dict(r) for r in cur.fetchall()]
+            cur.close()
+        ids_cli = []
+        for v in viajes:
+            oid = to_mongo_id(v.get("client_id") or "")
+            if oid and oid not in ids_cli:
+                ids_cli.append(oid)
+        docs_cli = {}
+        if ids_cli:
+            for doc in cliente_coleccion.find({"_id": {"$in": ids_cli}}):
+                docs_cli[str(doc["_id"])] = doc
+        for v in viajes:
+            clientes_por_viaje[v["trip_id"]] = docs_cli.get(
+                str(v.get("client_id") or ""), {})
+
+    items = []
+    total_recibido = 0.0
+    total_enviado = 0.0
+    for fila in filas:
+        monto = float(fila.get("amount") or 0)
+        tipo_txn = fila.get("transaction_type")
+        if tipo_txn == "transfer":
+            otro = choferes.get(str(fila.get("gateway_reference") or ""), {})
+            concepto = ("Transferencia enviada" if monto < 0
+                        else "Transferencia recibida")
+            contraparte = _telefono_visible(otro.get("numero_de_telefono"))
+            contraparte_nombre = _nombre_doc(otro)
+        else:
+            otro = clientes_por_viaje.get(fila.get("trip_id") or "", {})
+            concepto = "Pago de viaje (billetera)"
+            contraparte = _telefono_visible(otro.get("numero_de_telefono"))
+            contraparte_nombre = _nombre_doc(otro)
+        if monto >= 0:
+            total_recibido += monto
+        else:
+            total_enviado += abs(monto)
+        creado = fila.get("created_at")
+        items.append({
+            "transaction_id": fila.get("transaction_id"),
+            "trip_id": fila.get("trip_id"),
+            "concepto": concepto,
+            "monto": round(monto, 2),
+            "contraparte_telefono": contraparte,
+            "contraparte_nombre": contraparte_nombre,
+            "metodo": fila.get("payment_gateway") or "fondo_transfer",
+            "fecha": creado.isoformat() if creado else None,
+        })
+
+    chofer = None
+    try:
+        chofer = chofer_coleccion.find_one({"_id": to_mongo_id(driver_id)})
+    except Exception:
+        chofer = None
+    return {
+        "driver_id": driver_id,
+        "telefono": _telefono_visible(
+            (chofer or {}).get("numero_de_telefono")),
+        "nombre": _nombre_doc(chofer or {}),
+        "items": items,
+        "total_recibido": round(total_recibido, 2),
+        "total_enviado": round(total_enviado, 2),
+        "currency": "CUP",
+    }
+
+
+@router.get("/clients/{client_id}/historial/transferencias")
+async def api_client_transfer_history(
+        client_id: str, limit: int = Query(200, le=500)):
+    """Pagos realizados por el cliente: viajes con billetera/transferencia y
+    transferencias de billetera a billetera.
+
+    Cada entrada trae el MONTO TOTAL que pago el cliente y la contraparte
+    identificada por telefono.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT trip_id, driver_id, total_fare, payment_method,
+                   recargo_transferencia, completed_at, currency
+            FROM trips
+            WHERE client_id = %s AND status = 'completed'
+              AND payment_method IN ('Billetera', 'Transferencia')
+            ORDER BY completed_at DESC NULLS LAST
+            LIMIT %s;
+            """,
+            (client_id, limit),
+        )
+        viajes = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT transaction_id, amount, gateway_reference, created_at
+            FROM transactions
+            WHERE user_id = %s AND user_type = 'client'
+              AND transaction_type = 'transfer'
+            ORDER BY created_at DESC
+            LIMIT %s;
+            """,
+            (client_id, limit),
+        )
+        transferencias = [dict(r) for r in cur.fetchall()]
+        cur.close()
+
+    driver_ids = []
+    for v in viajes:
+        oid = to_mongo_id(v.get("driver_id") or "")
+        if oid and oid not in driver_ids:
+            driver_ids.append(oid)
+    choferes = {}
+    if driver_ids:
+        for doc in chofer_coleccion.find({"_id": {"$in": driver_ids}}):
+            choferes[str(doc["_id"])] = doc
+
+    otros_ids = []
+    for t in transferencias:
+        oid = to_mongo_id(t.get("gateway_reference") or "")
+        if oid and oid not in otros_ids:
+            otros_ids.append(oid)
+    otros_clientes = {}
+    if otros_ids:
+        for doc in cliente_coleccion.find({"_id": {"$in": otros_ids}}):
+            otros_clientes[str(doc["_id"])] = doc
+
+    items = []
+    total_pagado = 0.0
+    total_viajes = 0.0
+    total_transferido = 0.0
+    for v in viajes:
+        monto = float(v.get("total_fare") or 0)
+        chofer = choferes.get(str(v.get("driver_id") or ""), {})
+        completado = v.get("completed_at")
+        items.append({
+            "tipo": "viaje",
+            "trip_id": v.get("trip_id"),
+            "concepto": "Pago de viaje",
+            "monto": round(monto, 2),
+            "metodo": v.get("payment_method"),
+            "recargo_transferencia": round(
+                float(v.get("recargo_transferencia") or 0), 2),
+            "contraparte_telefono": _telefono_visible(
+                chofer.get("numero_de_telefono")),
+            "contraparte_nombre": _nombre_doc(chofer),
+            "fecha": completado.isoformat() if completado else None,
+            "currency": v.get("currency") or "CUP",
+        })
+        total_pagado += monto
+        total_viajes += monto
+
+    for t in transferencias:
+        monto = float(t.get("amount") or 0)
+        otro = otros_clientes.get(str(t.get("gateway_reference") or ""), {})
+        creado = t.get("created_at")
+        items.append({
+            "tipo": "transferencia",
+            "transaction_id": t.get("transaction_id"),
+            "concepto": ("Transferencia enviada" if monto < 0
+                         else "Transferencia recibida"),
+            "monto": round(monto, 2),
+            "metodo": "Billetera",
+            "recargo_transferencia": 0.0,
+            "contraparte_telefono": _telefono_visible(
+                otro.get("numero_de_telefono")),
+            "contraparte_nombre": _nombre_doc(otro),
+            "fecha": creado.isoformat() if creado else None,
+            "currency": "CUP",
+        })
+        if monto < 0:
+            total_pagado += abs(monto)
+            total_transferido += abs(monto)
+
+    items.sort(key=lambda i: i.get("fecha") or "", reverse=True)
+
+    cliente = None
+    try:
+        cliente = cliente_coleccion.find_one({"_id": to_mongo_id(client_id)})
+    except Exception:
+        cliente = None
+    return {
+        "client_id": client_id,
+        "telefono": _telefono_visible(
+            (cliente or {}).get("numero_de_telefono")),
+        "nombre": _nombre_doc(cliente or {}),
+        "items": items,
+        "total_pagado": round(total_pagado, 2),
+        "total_viajes": round(total_viajes, 2),
+        "total_transferido": round(total_transferido, 2),
+        "currency": "CUP",
+    }
+
+
+@router.get("/clients/{client_id}/fondo")
+async def api_get_client_fondo(client_id: str):
+    try:
+        doc = cliente_coleccion.find_one({"_id": to_mongo_id(client_id)})
+    except Exception:
+        doc = None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    return {
+        "client_id": client_id,
+        "nombre": _nombre_doc(doc),
+        "telefono": _telefono_visible(doc.get("numero_de_telefono")),
+        "fondo": float(doc.get("Fondo") or 0),
+    }
+
+
+@router.post("/clients/{client_id}/transfer")
+async def api_transfer_client_fondo(client_id: str, body: ClientTransferCreate):
+    """Transferencia de billetera a billetera entre pasajeros.
+
+    Igual que el chofer: el destino se identifica por telefono y las dos
+    partes quedan en el libro de `transactions` para el historial.
+    """
+    amount = round(float(body.amount), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="El monto debe ser mayor que 0")
+
+    try:
+        sender = cliente_coleccion.find_one({"_id": to_mongo_id(client_id)})
+    except Exception:
+        sender = None
+    if not sender:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+    recipient = _buscar_por_telefono(
+        cliente_coleccion, body.to_client_phone or "")
+    if not recipient:
+        raise HTTPException(
+            status_code=404, detail="Cliente destino no encontrado")
+    recipient_id = from_mongo_id(recipient["_id"])
+    if recipient_id == client_id:
+        raise HTTPException(
+            status_code=400, detail="No puedes transferirte a ti mismo")
+
+    sender_fondo = float(sender.get("Fondo") or 0)
+    if sender_fondo + 0.009 < amount:
+        raise HTTPException(status_code=400, detail="Fondo insuficiente")
+
+    try:
+        cliente_coleccion.update_one(
+            {"_id": to_mongo_id(client_id)}, {"$inc": {"Fondo": -amount}})
+        cliente_coleccion.update_one(
+            {"_id": recipient["_id"]}, {"$inc": {"Fondo": amount}})
+        txn_out = create_transaction(
+            None, client_id, "client", -amount, "transfer",
+            payment_gateway="fondo_transfer", gateway_reference=recipient_id)
+        txn_in = create_transaction(
+            None, recipient_id, "client", amount, "transfer",
+            payment_gateway="fondo_transfer", gateway_reference=client_id)
+        update_transaction_status(txn_out, "completed")
+        update_transaction_status(txn_in, "completed")
+    except Exception:
+        cliente_coleccion.update_one(
+            {"_id": to_mongo_id(client_id)}, {"$inc": {"Fondo": amount}})
+        cliente_coleccion.update_one(
+            {"_id": recipient["_id"]}, {"$inc": {"Fondo": -amount}})
+        raise HTTPException(
+            status_code=500, detail="No se pudo completar la transferencia")
+
+    return {
+        "ok": True,
+        "amount": amount,
+        "to_client_phone": _telefono_visible(
+            recipient.get("numero_de_telefono")),
+        "to_client_name": _nombre_doc(recipient),
+        "fondo_restante": round(sender_fondo - amount, 2),
     }
 
 
