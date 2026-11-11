@@ -2210,9 +2210,11 @@ final inTripPhase = active != null && active.status == 'in_progress';
       if (!mounted) return;
       // 409 = otro chofer gano la carrera: aqui SI corresponde la tarjeta
       // roja. 410 = la oferta vencio antes del toque: mensaje suave y cierre.
+      final motivo = e is ApiException ? e.message.toLowerCase() : '';
       final esOtraToma = e is ApiException &&
           e.statusCode == 409 &&
-          !e.message.toLowerCase().contains('cancelada');
+          !motivo.contains('cancelada') &&
+          !motivo.contains('completado');
       final expiro = e is ApiException && e.statusCode == 410;
       setState(() {
         _isAccepting = false;
