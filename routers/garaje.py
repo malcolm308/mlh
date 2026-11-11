@@ -460,9 +460,25 @@ def _marcar_fotos_aprobadas(fotos: dict, email_admin: str,
 
 def _fotos_salida(doc: dict) -> Optional[dict]:
     fotos = doc.get("fotos")
-    if not isinstance(fotos, dict):
-        return None
-    return fotos
+    if isinstance(fotos, dict) and fotos:
+        return fotos
+    # Vehiculo sembrado desde el registro: sus fotos viven en el documento del
+    # chofer y solo se guardo la URL en `fotos_urls`. Se publican aqui para que
+    # la tarjeta no las pinte como "falta" aunque la miniatura ya las muestre.
+    urls = doc.get("fotos_urls")
+    if not isinstance(urls, dict) or not urls:
+        return fotos if isinstance(fotos, dict) else None
+    salida = dict(fotos or {})
+    for campo, url in urls.items():
+        if not isinstance(url, str) or not url.strip():
+            continue
+        salida.setdefault(str(campo), {
+            "archivo": None,
+            "url": url,
+            "estado": ESTADO_APROBADO,
+            "motivo": None,
+        })
+    return salida
 
 
 def _obligatorias_de(tipo_vehiculo: Optional[str]) -> list:
