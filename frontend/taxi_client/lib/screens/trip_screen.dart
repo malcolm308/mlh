@@ -570,6 +570,7 @@ class _TripScreenState extends State<TripScreen> {
   }
 
   Future<void> _cancel() async {
+    if (_popped) return;
     // Confirmación para evitar cancelación accidental
     final confirmar = await showDialog<bool>(
       context: context,
@@ -601,10 +602,22 @@ class _TripScreenState extends State<TripScreen> {
       await widget.api.cancelTrip(widget.tripId);
       if (!mounted || _popped) return;
       _poll?.cancel();
-      
+
       // Marcar como popped para evitar double pop
       _popped = true;
-      
+
+      // Se limpia TODO el estado local antes de navegar: la pantalla de
+      // "Ubica tu destino" no debe heredar nada del viaje cancelado (ni el
+      // "Solicitando viaje...", ni la tarifa, ni el contador de busqueda).
+      setState(() {
+        _trip = null;
+        _busquedaRestante = null;
+        _driverPos = null;
+        _route = const [];
+        _error = null;
+        _cancelling = false;
+      });
+
       // NO llamar a _refresh() aquí - causaría double pop
       // Pop directamente con resultado 'cancelled'
       ScaffoldMessenger.of(context).showSnackBar(
@@ -623,6 +636,32 @@ class _TripScreenState extends State<TripScreen> {
         backgroundColor: Theme.of(context).colorScheme.error,
       ));
     }
+  }
+
+  /// Salida por la "X" (y por el boton atras del sistema).
+  ///
+  /// Si el viaje sigue vivo, delega en [_cancel]: confirmacion + POST de
+  /// cancelacion + pop con `'cancelled'`, que hace que ClientHomeScreen limpie
+  /// su estado. Si ya termino, solo cierra con el resultado correcto para que
+  /// el home tambien se resetee (nunca se vuelve con `null`, que dejaba la
+  /// pantalla de destino mostrando "Solicitando viaje...").
+  Future<void> _salirDelViaje() async {
+    if (_popped) return;
+    final status = _trip?.status;
+    final sigueVivo = status == 'requested' ||
+        status == 'accepted' ||
+        status == 'driver_on_the_way' ||
+        status == 'driver_arrived' ||
+        status == 'in_progress';
+    if (!sigueVivo) {
+      _popped = true;
+      _poll?.cancel();
+      Navigator.of(context).pop(
+        status == 'completed' ? 'completed' : 'cancelled',
+      );
+      return;
+    }
+    await _cancel();
   }
 
   int get _stepIndex {
@@ -649,9 +688,24 @@ class _TripScreenState extends State<TripScreen> {
     // El recibo se queda en pantalla hasta que el pasajero pulse "Finalizar",
     // que es el unico boton que limpia el estado y hace el pop.
     if (t != null && t.status == 'completed') {
-      return _buildCompletedScreen(t);
+      // El boton atras del sistema tambien cierra el recibo devolviendo
+      // 'completed'; sin esto salia con `null` y el home quedaba a medias.
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _finalizarViaje();
+        },
+        child: _buildCompletedScreen(t),
+      );
     }
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        unawaited(_salirDelViaje());
+      },
+      child: Scaffold(
       // Sin AppBar: el mapa ocupa tambien la franja superior. La X de salida
       // flota sobre el mapa para no robarle ancho a la vista ni dejar una
       // barra con el codigo del viaje (dato tecnico que no aporta nada).
@@ -723,10 +777,10 @@ class _TripScreenState extends State<TripScreen> {
                             padding: const EdgeInsets.all(10),
                             child: FloatingActionButton.small(
                               heroTag: 'salirViaje',
-                              tooltip: 'Salir (el viaje continúa)',
+                              tooltip: 'Salir o cancelar el viaje',
                               backgroundColor: Colors.white,
                               foregroundColor: AppColors.tinta,
-                              onPressed: () => Navigator.of(context).pop(),
+                              onPressed: () => unawaited(_salirDelViaje()),
                               child: const Icon(Icons.close),
                             ),
                           ),
@@ -753,6 +807,7 @@ class _TripScreenState extends State<TripScreen> {
                 _buildDetailsPanel(),
               ],
             ),
+      ),
     );
   }
 

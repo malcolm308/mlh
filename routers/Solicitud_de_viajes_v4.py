@@ -2491,18 +2491,21 @@ async def filter_declined_trips(trips: list[dict], driver_id: Optional[str]) -> 
 # pasajero ve "No encontramos choferes disponibles" + "Volver a pedir viaje".
 # 240 s: el cron externo (cada 60 s) tiene tiempo de avisar por Telegram a los
 # 30 s y al pasajero le queda margen real antes de rendirse.
-TRIP_ACCEPT_TIMEOUT_SECS = int(os.getenv("TRIP_ACCEPT_TIMEOUT_SECS", "240"))
+#
+# Se fija en codigo a proposito y NO se lee del entorno: en Render quedaron
+# valores viejos (180/60) de versiones anteriores y hacian que el cliente
+# mostrara "0:58" y el chofer "53 s" aunque el codigo ya dijera 240. La regla
+# de negocio es una sola ventana de 240 s para todos.
+TRIP_ACCEPT_TIMEOUT_SECS = 240
 
 # Tiempo que una OFERTA concreta queda viva para un conductor, es decir lo que
 # viaja en `expires_in_secs`. La app lo usa como temporizador local del FSI: si
 # el conductor no responde en ese plazo, la oferta se cierra sola.
 #
-# Tiene que ir ALINEADO con `TRIP_ACCEPT_TIMEOUT_SECS`: si la oferta muriera
-# antes (p. ej. a los 60 s) el viaje seguiria 'requested' y el pasajero
-# esperando 240 s sin que ningun conductor pudiera verlo ni aceptarlo. La
-# ventana en la que el viaje es visible y aceptable es la misma para todos.
-# Se puede ajustar por entorno sin tocar el codigo.
-OFFER_TTL_SECS = int(os.getenv("OFFER_TTL_SECS", str(TRIP_ACCEPT_TIMEOUT_SECS)))
+# Es EXACTAMENTE la misma ventana que el viaje: si la oferta muriera antes
+# (p. ej. a los 60 s) el viaje seguiria 'requested' y el pasajero esperando
+# 240 s sin que ningun conductor pudiera verlo ni aceptarlo.
+OFFER_TTL_SECS = TRIP_ACCEPT_TIMEOUT_SECS
 
 _DRIVER_VEHICLE_KEYS = ("vehicle_type", "type_vehicle", "type")
 

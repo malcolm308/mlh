@@ -87,8 +87,10 @@ class OfertasBackgroundService {
 
   /// Id del proceso de arranque de la app: el servicio ignora una oferta
   /// detectada mas de `ttlAviso` seg antes, y programa su retiro igual que la
-  /// pantalla principal.
-  static const int ttlAviso = 60;
+  /// pantalla principal. Tiene que cubrir toda la ventana de la oferta (240 s):
+  /// con 60 s el aviso de pantalla completa desaparecia mucho antes de que el
+  /// viaje expirara.
+  static const int ttlAviso = 240;
 
   bool _configurado = false;
 

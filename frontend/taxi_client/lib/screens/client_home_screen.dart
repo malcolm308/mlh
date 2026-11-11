@@ -1112,8 +1112,13 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       // Si el pasajero cerro el recibo (o el viaje fue cancelado), volver al
       // paso 1. En `completed` el reset ocurre SOLO aqui: la pantalla del
       // recibo se queda abierta hasta que el usuario pulse "Finalizar".
-      if ((result == 'cancelled' || result == 'completed') && mounted) {
-        _resetTripState();
+      // `null` significa que TripScreen se cerro sin resultado (X o atras del
+      // sistema): tambien hay que limpiar, o la pantalla de destino se queda
+      // mostrando "Solicitando viaje..." con la tarifa vacia.
+      if (result == 'cancelled' ||
+          result == 'completed' ||
+          result == null) {
+        if (mounted) _resetTripState();
       }
       // El viaje termino: si habia un APK obligatorio pendiente, se avisa
       // ahora (nunca durante el viaje).
