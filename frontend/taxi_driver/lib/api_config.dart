@@ -31,7 +31,7 @@ class ApiConfig {
 
   /// APK publicado por el backend en `/static` y que se comparte por WhatsApp.
   /// Es el `arm64-v8a` de `--split-per-abi` (el que usa casi todo telefono).
-  static const String appDownloadUrl = '$baseUrl/static/app_latest.apk';
+  static const String appDownloadUrl = '$baseUrl/static/app_cliente_v2.apk';
 
   /// APK de la app del CHOFER. Es el que reparte un chofer al invitar a otro
   /// chofer: quien se lo descarga termina en el registro de choferes, no en

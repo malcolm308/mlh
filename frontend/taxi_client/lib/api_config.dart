@@ -30,7 +30,9 @@ class ApiConfig {
 
   /// APK publicado por el backend en `/static` y que se comparte por WhatsApp.
   /// Es el `arm64-v8a` de `--split-per-abi` (el que usa casi todo telefono).
-  static const String appDownloadUrl = '$baseUrl/static/app_latest.apk';
+  /// El nombre `app_cliente_v2.apk` es distinto del historico para que ningun
+  /// telefono/navegador reutilice una copia cacheada del APK viejo.
+  static const String appDownloadUrl = '$baseUrl/static/app_cliente_v2.apk';
 
   /// Clave de MapTiler. Se inyecta al compilar con
   /// `--dart-define=MAPTILER_API_KEY=...`. Si no se pasa, queda vacia y se

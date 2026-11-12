@@ -296,7 +296,11 @@ romper a los choferes que no lo tienen.
 Las apps se reparten desde la carpeta `static/` del repositorio y se
 actualizan solas contra el backend:
 
-- `static/app_latest.apk` — APK del cliente (`arm64-v8a`).
+- `static/app_cliente_v2.apk` — APK del cliente (`arm64-v8a`). Es el nombre
+  que comparte la app; cambiarlo evita que el navegador o el telefono reusen
+  una copia cacheada del APK anterior.
+- `static/app_latest.apk` — copia del mismo APK del cliente, por compatibilidad
+  con los enlaces viejos que ya circulan.
 - `static/app_chofer_latest.apk` — APK del chofer (`arm64-v8a`).
 - `static/patch_latest.zip` / `static/patch_chofer_latest.zip` — parche ligero.
 - `static/ota_client.json` / `static/ota_driver.json` — manifiestos que dicen
@@ -338,6 +342,16 @@ python scripts/publicar_ota.py --app client --version 1.0.2 --version-code 2003 
 git add static/ota_client.json static/app_latest.apk
 git commit -m "chore: publicar APK 1.0.2"
 git push origin main
+```
+
+Si el APK anterior se descargo corrupto, publica con un nombre nuevo para
+saltarse la cache (`--apk-name app_cliente_v2.apk`) y sube ese archivo:
+
+```powershell
+python scripts/publicar_ota.py --app client --version 1.0.3 --version-code 2004 `
+  --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
+  --apk-name app_cliente_v2.apk
+git add static/ota_client.json static/app_cliente_v2.apk
 ```
 
 ### Publicar un parche ligero (mismo APK, sin reinstalar)
