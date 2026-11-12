@@ -236,8 +236,20 @@ class ApiClient:
         return self._json("PUT", "/admin/mi-password",
                           json={"actual": actual, "nueva": nueva})
 
-    def buscar_clientes(self, q: str) -> dict:
-        return self._json("GET", "/users/admin/buscar", params={"q": q})
+    def buscar_clientes(self, q: str = "", limit: int = 300, skip: int = 0,
+                        incluir_eliminados: bool = False) -> dict:
+        """Lista completa de pasajeros (o filtrada por `q`).
+
+        Sin `q` el backend devuelve todos los clientes de la app, ordenados del
+        mas reciente al mas antiguo. `incluir_eliminados` sirve para auditar
+        una baja sin que ensucie la tabla normal.
+        """
+        params: dict = {"limit": limit, "skip": skip}
+        if q:
+            params["q"] = q
+        if incluir_eliminados:
+            params["incluir_eliminados"] = "true"
+        return self._json("GET", "/users/admin/buscar", params=params)
 
     def borrar_cliente(self, cliente_id: str) -> dict:
         return self._json("POST", "/users/admin/eliminar/%s" % cliente_id)

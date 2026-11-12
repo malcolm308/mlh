@@ -50,6 +50,7 @@ No hace falta configurar Mongo ni Postgres en este servicio.
 | Chóferes | Habilitar o rechazar cuentas y ver documentos faltantes. | `GET /admin/choferes`, `POST /admin/choferes/{id}/estado` |
 | Billetera | Chóferes y clientes: saldo, recargas/abonos, descuentos y movimientos. | `GET /billetera/choferes`, `GET /billetera/saldo/{id}`, `POST /billetera/recarga`, `POST /billetera/descargo`, `GET /billetera/movimientos`, `GET /billetera/clientes`, `GET /billetera/clientes/{id}`, `POST /billetera/clientes/recarga`, `POST /billetera/clientes/descargo`, `GET /billetera/clientes/{id}/movimientos` |
 | Viajes | Totales del día, evolución y detalle. | `GET /admin/trips/resumen`, `GET /admin/trips/diarios`, `GET /admin/trips/dia` |
+| Clientes | Tabla completa de pasajeros de la app (buscar por teléfono, correo o nombre; fondo, viajes y estado), exportación a CSV y borrado físico de una cuenta. | `GET /users/admin/buscar`, `POST /users/admin/eliminar/{id}` |
 
 `GET/PUT /admin/configuracion`, `GET /admin/alerts/pending`,
 `POST /admin/trips/{id}/force-assign` y `POST /admin/trips/check-orphaned`

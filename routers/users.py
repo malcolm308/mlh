@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from bson import ObjectId
 import bcrypt
@@ -117,41 +117,77 @@ async def admin_eliminar_cliente(cliente_id: str,
     return {"ok": True, "message": "Cuenta borrada"}
 
 
+def _activo(valor) -> bool:
+    """`Enable` convive en la base como booleano y como texto ("True"/"False").
+
+    Sin normalizar, `bool("False")` es True y las cuentas deshabilitadas se
+    pintaban como activas en el panel.
+    """
+    if valor is None:
+        return True
+    if isinstance(valor, str):
+        return valor.strip().lower() not in ("false", "0", "no", "inactivo",
+                                            "deshabilitado")
+    return bool(valor)
+
+
+def _cliente_publico(d: dict) -> dict:
+    """Campos de un pasajero aptos para el panel (sin password ni direccion)."""
+    return {
+        "id": str(d["_id"]),
+        "nombre": " ".join(x for x in (d.get("Nombre"),
+                                      d.get("Apellidos")) if x).strip(),
+        "email": d.get("email"),
+        "telefono": d.get("numero_de_telefono") or d.get("phone"),
+        "enable": _activo(d.get("Enable")),
+        "eliminado": bool(d.get("eliminado")),
+        "viajes": int(d.get("viajes_completados") or 0),
+        "fondo": float(d.get("Fondo") or 0),
+        "codigo_referido": d.get("codigo_referido"),
+        "creado": (d.get("created_at").isoformat()
+                   if isinstance(d.get("created_at"), datetime) else None),
+    }
+
+
 @router.get("/admin/buscar")
-async def buscar_clientes(q: str = "", admin: dict = Depends(REQUIERE_OPERADOR_REGISTROS)):
-    """Busca pasajeros por telefono, correo o nombre (panel admin).
+async def buscar_clientes(
+    q: str = "",
+    limit: int = Query(300, ge=1, le=1000),
+    skip: int = Query(0, ge=0),
+    incluir_eliminados: bool = False,
+    admin: dict = Depends(REQUIERE_OPERADOR_REGISTROS),
+):
+    """Lista o busca pasajeros para el panel admin.
+
+    Sin `q` devuelve TODOS los clientes registrados en la app (paginado con
+    `limit`/`skip` y ordenado del mas reciente al mas antiguo); con `q` filtra
+    por telefono, correo o nombre. Las cuentas eliminadas quedan ocultas salvo
+    que se pida `incluir_eliminados=true`, para poder auditar un borrado.
 
     Devuelve campos limitados (sin password, sin direccion): lo justo para
-    identificar la cuenta antes de un borrado. Visible para super_admin y
-    user_operator; otros roles reciben 403.
+    identificar la cuenta. Visible para super_admin y user_operator; otros
+    roles reciben 403.
     """
     texto = (q or "").strip()
-    if not texto:
-        return {"clientes": []}
-    patron = {"$regex": re.escape(texto), "$options": "i"}
-    docs = users_coleccion.find({
-        "$or": [
+    filtro: dict = {}
+    if not incluir_eliminados:
+        filtro["eliminado"] = {"$ne": True}
+    if texto:
+        patron = {"$regex": re.escape(texto), "$options": "i"}
+        filtro["$or"] = [
             {"numero_de_telefono": patron},
+            {"phone": patron},
             {"email": patron},
             {"Nombre": patron},
             {"Apellidos": patron},
         ]
-    }, {"password": 0}).limit(30)
-    salida = []
-    for d in docs:
-        salida.append({
-            "id": str(d["_id"]),
-            "nombre": " ".join(x for x in (d.get("Nombre"),
-                                          d.get("Apellidos")) if x).strip(),
-            "email": d.get("email"),
-            "telefono": d.get("numero_de_telefono") or d.get("phone"),
-            "enable": bool(d.get("Enable", True)),
-            "eliminado": bool(d.get("eliminado")),
-            "viajes": int(d.get("viajes_completados") or 0),
-            "creado": (d.get("created_at").isoformat()
-                       if isinstance(d.get("created_at"), datetime) else None),
-        })
-    return {"clientes": salida}
+
+    total = users_coleccion.count_documents(filtro)
+    docs = (users_coleccion.find(filtro, {"password": 0, "password_hash": 0})
+            .sort([("created_at", -1), ("_id", -1)])
+            .skip(skip).limit(limit))
+    salida = [_cliente_publico(d) for d in docs]
+    return {"clientes": salida, "total": total, "skip": skip, "limit": limit}
 
 @router.get("/me")
 async def get_my_profile(user: dict = Depends(get_current_user)):
