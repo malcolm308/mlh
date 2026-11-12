@@ -4588,9 +4588,16 @@ if (o.pickup != null) ...[
       _showError('No se pudo obtener tu código de invitación. Inténtalo de nuevo.');
       return;
     }
-    final mensaje = '¡Únete al equipo de RapiTaxi! Usa mi código $codigo al '
-        'registrarte y empieza a ganar. Yo recibiré un bono cuando hagas tu '
-        'primer viaje. Descarga aquí: ${ApiConfig.driverDownloadUrl}';
+    // Mismo formato que el cliente: enlace de 64 bits como principal y el de
+    // 32 bits para telefonos antiguos que rechazan el APK de 64 bits. Se
+    // reparte la app del CHOFER, no la del pasajero.
+    final mensaje = '¡Descarga RapiTaxi aquí! 👉 '
+        '${ApiConfig.driverDownloadUrl}. '
+        "Si tu teléfono es un modelo antiguo (como Samsung A02) y te da error "
+        "de 'paquete no válido', usa este otro enlace: "
+        '${ApiConfig.driverDownloadUrl32}.\n\n'
+        '¡Únete al equipo de RapiTaxi! Usa mi código $codigo al registrarte y '
+        'empieza a ganar. Yo recibiré un bono cuando hagas tu primer viaje.';
     // ignore: deprecated_member_use
     await Share.share(mensaje, subject: 'RapiTaxi Chofer');
   }

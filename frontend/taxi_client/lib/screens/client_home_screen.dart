@@ -1894,10 +1894,17 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
       _showError('No se pudo obtener tu código de invitación. Inténtalo de nuevo.');
       return;
     }
-    final mensaje = '¡Descarga RapiTaxi, la mejor forma de moverte por La '
-        'Habana! Usa mi código de invitación $codigo al registrarte y obtén un '
-        '10% de descuento en tu primer viaje. Descarga aquí: '
-        '${ApiConfig.appDownloadUrl}';
+    // Mensaje pedido por producto: enlace de 64 bits como principal y el de
+    // 32 bits como alternativa para telefonos antiguos (Samsung A02 y
+    // similares) que rechazan el APK de 64 bits con "paquete no valido".
+    // La invitacion (codigo de referido) se mantiene al final para no perder
+    // el sistema de referidos.
+    final mensaje = '¡Descarga RapiTaxi aquí! 👉 ${ApiConfig.appDownloadUrl}. '
+        "Si tu teléfono es un modelo antiguo (como Samsung A02) y te da error "
+        "de 'paquete no válido', usa este otro enlace: "
+        '${ApiConfig.appDownloadUrl32}.\n\n'
+        'Usa mi código de invitación $codigo al registrarte y obtén un 10% de '
+        'descuento en tu primer viaje.';
     // ignore: deprecated_member_use
     await Share.share(mensaje, subject: 'RapiTaxi');
   }

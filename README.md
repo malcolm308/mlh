@@ -294,14 +294,21 @@ romper a los choferes que no lo tienen.
 ## APK y actualizaciones OTA (`/static` + `/app/version`)
 
 Las apps se reparten desde la carpeta `static/` del repositorio y se
-actualizan solas contra el backend:
+actualizan solas contra el backend.
 
-- `static/app_cliente_v2.apk` — APK del cliente (`arm64-v8a`). Es el nombre
-  que comparte la app; cambiarlo evita que el navegador o el telefono reusen
-  una copia cacheada del APK anterior.
-- `static/app_latest.apk` — copia del mismo APK del cliente, por compatibilidad
-  con los enlaces viejos que ya circulan.
-- `static/app_chofer_latest.apk` — APK del chofer (`arm64-v8a`).
+**Distribucion hibrida (64/32 bits).** Cada app se publica partida con
+`--split-per-abi` para no obligar a descargar el APK universal (~60 MB):
+
+- `static/app_cliente_64bits.apk` — cliente `arm64-v8a` (~34 MB). Es el enlace
+  **principal** (`ApiConfig.appDownloadUrl`) que comparte la app.
+- `static/app_cliente_32bits.apk` — cliente `armeabi-v7a` (~28 MB), para
+  telefonos antiguos que rechazan el de 64 bits con "paquete no valido".
+- `static/app_chofer_64bits.apk` — chofer `arm64-v8a` (~37 MB), enlace
+  principal de la app del chofer.
+- `static/app_chofer_32bits.apk` — chofer `armeabi-v7a` (~32 MB).
+- `static/app_cliente_v2.apk`, `static/app_latest.apk` y
+  `static/app_chofer_latest.apk` — copias de los APK de 64 bits, por
+  compatibilidad con los enlaces viejos que ya circulan.
 - `static/patch_latest.zip` / `static/patch_chofer_latest.zip` — parche ligero.
 - `static/ota_client.json` / `static/ota_driver.json` — manifiestos que dicen
   cual es la ultima version, el historial de releases y los parches.
@@ -353,6 +360,34 @@ python scripts/publicar_ota.py --app client --version 1.0.3 --version-code 2004 
   --apk-name app_cliente_v2.apk
 git add static/ota_client.json static/app_cliente_v2.apk
 ```
+
+### Publicar los APK de 64 y 32 bits (distribucion hibrida)
+
+Compila una sola vez con `--split-per-abi` y copia los dos APK a `static/`.
+`--apk-name` solo controla el que registra el manifiesto OTA (el de 64 bits);
+el de 32 bits se copia aparte:
+
+```powershell
+cd E:\Taxi_Rapid\frontend\taxi_client   # o taxi_driver
+flutter build apk --release --split-per-abi --no-pub
+
+cd E:\Taxi_Rapid
+copy frontend\taxi_client\build\app\outputs\flutter-apk\app-arm64-v8a-release.apk static\app_cliente_64bits.apk
+copy frontend\taxi_client\build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk static\app_cliente_32bits.apk
+python scripts/publicar_ota.py --app client --version 1.0.22 --version-code 4023 `
+  --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
+  --apk-name app_cliente_64bits.apk
+```
+
+Haz lo mismo con `taxi_driver` y `app_chofer_64bits.apk` /
+`app_chofer_32bits.apk` (`--app driver`). Recuerda refrescar tambien las copias
+legacy de 64 bits (`app_cliente_v2.apk`, `app_latest.apk`,
+`app_chofer_latest.apk`) para que los enlaces viejos sigan sirviendo la version
+nueva.
+
+El mensaje de "Compartir App" lleva los dos enlaces (`appDownloadUrl` y
+`appDownloadUrl32` / `driverDownloadUrl` y `driverDownloadUrl32`, en
+`lib/api_config.dart`).
 
 ### Publicar un parche ligero (mismo APK, sin reinstalar)
 

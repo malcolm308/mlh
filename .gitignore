@@ -75,6 +75,10 @@ frontend/*/.dart_tool/
 frontend/*/.flutter-plugins
 frontend/*/.flutter-plugins-dependencies
 
+# Parches OTA de trabajo que genera `flutter_patcher:pack`. El que se sirve a
+# los telefonos se publica en static/ con scripts/publicar_ota.py.
+frontend/*/dist/
+
 # Android
 frontend/*/android/.gradle/
 frontend/*/android/app/debug/
