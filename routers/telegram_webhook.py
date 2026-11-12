@@ -45,6 +45,7 @@ from routers.documentos import CAMPOS, MAX_SIZE_MB, _detectar_extension
 from services.telefono import (LARGO_NACIONAL, TELEFONOS_DE_RELLENO,
                                buscar_por_telefono, es_telefono_valido,
                                normalizar_telefono, variantes)
+from services.tipo_vehiculo import resolver_tipo_vehiculo
 
 logger = logging.getLogger(__name__)
 
@@ -595,9 +596,14 @@ def _a_timestamp(valor: Any) -> Optional[float]:
 
 
 def _servicio_de(chofer: Dict[str, Any]) -> str:
-    vehiculo = chofer.get("vehicle") or {}
-    return (chofer.get("type_vehicle") or chofer.get("vehicle_type")
-            or vehiculo.get("servicio") or "basico")
+    """Tipo de vehiculo REGISTRADO, ya normalizado.
+
+    `resolver_tipo_vehiculo` es el mismo resolutor que usa `GET /chofer/{id}`:
+    el dato esta repartido en `type_vehicle`, `vehicle_type`, `vehicle.servicio`
+    y `vehicle.type`, y en la base conviven mayusculas y tildes. Normalizarlo
+    aqui evita que `/precio` caiga en `basico` por un `'Confort '` con espacios.
+    """
+    return resolver_tipo_vehiculo(chofer) or "basico"
 
 
 def _teclado_menu() -> dict:
@@ -874,9 +880,20 @@ async def _cmd_precio(bot: Telegram, chat_id: int) -> None:
 
     info = await _mi_chofer(chat_id) or {}
     servicio = "basico"
-    token = await _token_admin()
-    if token and info.get("driver_id"):
-        chofer = await _cargar_chofer(token, info["driver_id"])
+    # El tipo de vehiculo se lee del documento del propio chofer en Mongo, no
+    # con `GET /chofer/{id}` + token de administrador. Ese token depende de
+    # `TELEGRAM_ADMIN_EMAIL`/`TELEGRAM_ADMIN_PASSWORD` y, si falta o caduca,
+    # `servicio` se quedaba en `basico` para TODO el mundo: el chofer de moto,
+    # triciclo o confort veia la tarifa del basico. El dato es publico del
+    # chofer y la coleccion ya esta disponible en el bot.
+    driver_id = info.get("driver_id")
+    if driver_id:
+        try:
+            chofer = _coleccion().find_one({"_id": _object_id(driver_id)})
+        except Exception:
+            logger.warning("No se pudo leer el chofer %s para /precio",
+                           driver_id, exc_info=True)
+            chofer = None
         if chofer:
             servicio = _servicio_de(chofer)
 
