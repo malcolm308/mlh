@@ -1,8 +1,8 @@
 """Billetera (fondo) de choferes y clientes.
 
 Servicio de recargas y movimientos del fondo. El saldo vive en el documento del
-usuario en MongoDB (campo `Fondo`): en la coleccion de choferes es de donde
-descuentan la comision del 15%, y en la de clientes es el saldo con el que
+usuario en MongoDB (campo `Fondo`): en la coleccion de choferes es de donde se
+descuenta la comision vigente, y en la de clientes es el saldo con el que
 pagan los viajes por Billetera y las transferencias entre pasajeros. Aqui queda
 el libro de movimientos (PostgreSQL) y los endpoints que consume la app de
 administracion.

@@ -5,21 +5,26 @@ La plataforma es un ecosistema cerrado: el saldo del chofer es un unico campo
 (`Fondo` en Mongo) y no hay retiros en efectivo. Todo lo que se guarda son
 promociones y comisiones, y quien las cambia es el administrador desde el panel.
 
-Un detalle que condiciona todo el calculo: el descuento al cliente NUNCA sale del
-dinero del chofer. Sale de la comision de la plataforma. Por eso el descuento se
-aplica a la comision nominal y no al precio del viaje:
+Regla del reparto (la misma en efectivo, billetera y transferencia):
 
-    precio del viaje          10.00
-    comision nominal (15%)     1.50   <- lo que la plataforma cobra
-    descuento al cliente       1.00   <- se descuenta de esa comision
-    paga el cliente            9.00
-    comision que sale del Fondo 0.50  <- 1.50 - 1.00
-    conserva el chofer         8.50   <- 10.00 - 1.50, intacto
-    se queda la plataforma     0.50
+* Si la comision nominal SUPERA el descuento, la plataforma lo absorbe. El
+  descuento se resta de la comision y el chofer conserva el bruto menos la
+  comision nominal:
 
-Si en vez de eso se calculara `0.15 x 9.00`, el chofer se quedaria con `7.65`:
-perderia 0.85 CUP por un descuento que no le corresponde. Ese error es el que
-impide usar `total_fare` como base de la comision cuando hay descuento.
+      precio del viaje          10.00
+      comision nominal (15%)     1.50
+      descuento al cliente       1.00
+      paga el cliente            9.00
+      comision que sale del Fondo 0.50  <- 1.50 - 1.00
+      conserva el chofer         8.50   <- 10.00 - 1.50
+
+* Si la comision es MENOR O IGUAL al descuento (incluye comision 0 %), el
+  chofer asume el descuento y la comision se calcula sobre lo que realmente
+  paga el cliente. Con 1.000 y 10 % de referido el chofer recibe 900.
+
+Por eso el descuento de promocion que se configura en el panel nunca puede
+superar a la comision (la plataforma no subsidia viajes); el descuento de
+referido es aparte y, con la comision actual en 0 %, lo asume el chofer.
 
 Todos los porcentajes se guardan como FRACCION (0.15, no 15), que es lo que ya
 usa `COMMISSION_RATE`. Guardarlos como 15 obligaria a convertir en cada punto y a
@@ -51,9 +56,9 @@ router = APIRouter(prefix="/admin/promociones", tags=["Promociones y Comisiones"
 
 CENT = Decimal("0.01")
 UNO = Decimal("1")
-# Tope del descuento al cliente. Es el limite de negocio, no el tecnico: la
-# plataforma se queda con `comision - descuento`, asi que un descuento sin tope
-# permitiria regalar viajes.
+# Tope del descuento de promocion. La plataforma no subsidia viajes: el panel
+# impide configurar un descuento mayor que la comision. El descuento de referido
+# (10 %) va por otro camino y, si supera la comision, lo asume el chofer.
 DESCUENTO_MAXIMO = Decimal("0.10")
 
 DEFAULT_COMISION = Decimal("0.15")

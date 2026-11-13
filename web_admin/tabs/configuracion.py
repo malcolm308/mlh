@@ -89,8 +89,9 @@ def _formulario(api, config: dict) -> None:
         st.markdown("#### Comisión y descuento")
         st.caption(
             "La comisión es la parte que se queda la plataforma. El descuento "
-            "al pasajero sale de esa comisión: nunca puede ser mayor, y el "
-            "máximo permitido es %.0f %%." % max_descuento
+            "de promoción sale de esa comisión: nunca puede ser mayor, y el "
+            "máximo permitido es %.0f %%. El descuento de referido (10 %%) es "
+            "aparte: si supera la comisión, lo asume el chófer." % max_descuento
         )
         c1, c2, c3 = st.columns(3)
         comision = c1.number_input(
@@ -114,9 +115,11 @@ def _formulario(api, config: dict) -> None:
         st.markdown("#### Pagos con billetera y transferencia")
         st.caption(
             "La comisión de la billetera se retiene cuando el pasajero paga "
-            "con saldo; el resto entra al Fondo del chófer. El recargo por "
-            "transferencia se suma al precio en los pagos externos (Zelle, "
-            "banco, etc.). El cálculo lo hace siempre el backend."
+            "con saldo; el resto entra al Fondo del chófer. La transferencia "
+            "paga la misma comisión que efectivo y billetera, descontada del "
+            "Fondo. El recargo por transferencia se suma al precio en los "
+            "pagos externos (Zelle, banco, etc.). El cálculo lo hace siempre "
+            "el backend."
         )
         p1, p2 = st.columns(2)
         comision_billetera = p1.number_input(

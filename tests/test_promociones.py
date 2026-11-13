@@ -1,9 +1,17 @@
 """
 Pruebas del reparto de dinero de un viaje.
 
-El caso que protege este archivo: el descuento al cliente lo paga la PLATAFORMA,
-nunca el chofer. Con un viaje de 10.00, comision del 15% y descuento del 10%, el
-chofer tiene que quedarse con sus 8.50 intactos y la plataforma con 0.50.
+Regla del negocio:
+
+* Si la comision nominal es MAYOR que el descuento, la plataforma absorbe el
+  descuento: al chofer se le cobra la comision menos el descuento y conserva
+  ``bruto - comision nominal``.
+* Si la comision es MENOR O IGUAL al descuento (incluye comision 0 %), el chofer
+  asume el descuento: la comision se calcula sobre lo que realmente paga el
+  cliente.
+
+Con la comision actual en 0 %, un viaje de 1.000 con 10 % de referido deja 900
+al chofer.
 
     python -m unittest tests.test_promociones -v
 """
@@ -59,10 +67,10 @@ class TestEjemploDelEnunciado(unittest.TestCase):
         # La plataforma se queda con 0.50
         self.assertEqual((precio - descuento) - (precio - comision_nominal), Decimal("0.50"))
 
-    def test_el_chofer_nunca_paga_el_descuento(self):
-        """La propiedad que da nombre al sistema: pase lo que pase, lo que se
-        descuenta del Fondo del chofer es la comision menos el descuento, nunca el
-        precio entero menos el precio rebajado."""
+    def test_el_chofer_conserva_el_bruto_menos_la_comision(self):
+        """Cuando la comision supera el descuento, la plataforma lo absorbe: lo
+        que se descuenta del Fondo es la comision menos el descuento y el chofer
+        conserva ``bruto - comision nominal``."""
         for precio in ("10.00", "7.33", "1250.75", "0.50", "999.99"):
             with self.subTest(precio=precio):
                 bruto = Decimal(precio)
@@ -82,7 +90,10 @@ class TestEjemploDelEnunciado(unittest.TestCase):
 
 class TestComisionCero(unittest.TestCase):
 
-    def test_comision_0_el_chofer_se_lleva_el_100(self):
+    def test_comision_0_apaga_el_descuento_de_promocion(self):
+        """La promocion comercial no puede dejar a la plataforma pagando: con
+        comision 0 no hay de donde descontarla. El referido es aparte y si se
+        aplica: lo asume el chofer (ver `TestReglaHibrida`)."""
         bruto = Decimal("10.00")
         p = promo(comision="0", descuento="0.10", descuento_activo=True)
         self.assertEqual(calcular_descuento_cliente(bruto, p), Decimal("0"))
@@ -104,6 +115,46 @@ class TestComisionCero(unittest.TestCase):
         nominal = _a_dinero(bruto * p["comision_porcentaje"])
         self.assertLessEqual(descuento, nominal)
         self.assertGreaterEqual(nominal - descuento, Decimal("0"))
+
+
+# ===================== REGLA HIBRIDA DE COMISION =====================
+
+class TestReglaHibrida(unittest.TestCase):
+    """`liquidar_comision` es la unica fuente de verdad del reparto."""
+
+    def _liquidar(self, bruto, cobrado, descuento, tasa):
+        from routers.Solicitud_de_viajes_v4 import liquidar_comision
+        return liquidar_comision(bruto, cobrado, descuento, tasa)
+
+    def test_comision_mayor_que_descuento_la_plataforma_absorbe(self):
+        nominal, cobrada = self._liquidar("10", "9", "1", "0.15")
+        self.assertEqual(nominal, 1.50)
+        self.assertEqual(cobrada, 0.50)
+        # Conserva bruto - comision nominal = 8.50.
+        self.assertEqual(Decimal("9") - Decimal(str(cobrada)), Decimal("8.50"))
+
+    def test_comision_menor_que_descuento_la_asume_el_chofer(self):
+        nominal, cobrada = self._liquidar("1000", "900", "100", "0.05")
+        self.assertEqual(nominal, 50.00)
+        # 5 % de lo que paga el cliente (900), no del bruto.
+        self.assertEqual(cobrada, 45.00)
+        self.assertEqual(Decimal("900") - Decimal(str(cobrada)), Decimal("855.00"))
+
+    def test_comision_cero_el_chofer_recibe_900(self):
+        nominal, cobrada = self._liquidar("1000", "900", "100", "0")
+        self.assertEqual(nominal, 0.00)
+        self.assertEqual(cobrada, 0.00)
+        self.assertEqual(Decimal("900") - Decimal(str(cobrada)), Decimal("900.00"))
+
+    def test_comision_igual_al_descuento_la_asume_el_chofer(self):
+        nominal, cobrada = self._liquidar("1000", "900", "100", "0.10")
+        self.assertEqual(nominal, 100.00)
+        self.assertEqual(cobrada, 90.00)
+
+    def test_nunca_cobra_mas_de_lo_que_se_cobro(self):
+        nominal, cobrada = self._liquidar("1000", "10", "0", "1.0")
+        self.assertEqual(nominal, 1000.00)
+        self.assertEqual(cobrada, 10.00)
 
 
 # ===================== EXPIRACION =====================

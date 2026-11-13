@@ -9,10 +9,12 @@ Reproduce, con Decimal y ROUND_HALF_UP, el mismo orden de calculo que
     4. descuento de promocion (si esta activo)
     5. descuento de referido (10 %, solo si NO hay descuento de promocion)
     6. recargo por transferencia (+10 % sobre lo que paga el cliente)
-    7. liquidacion segun el metodo de pago
-         Efectivo       -> comision nominal - descuentos, sale del Fondo
-         Transferencia  -> comision 0 (el dinero no pasa por la plataforma)
-         Billetera      -> comision de billetera sobre lo debitado
+    7. liquidacion segun el metodo de pago (misma regla para los tres)
+         comision nominal = tasa * precio bruto
+         comision nominal >  descuento -> la plataforma absorbe el descuento
+         comision nominal <= descuento -> el chofer asume el descuento y la
+                                          comision se cobra sobre lo que paga
+                                          el cliente
 
 No toca Mongo ni Postgres: son numeros para revisar antes de desplegar.
 
@@ -82,7 +84,17 @@ def calcular(
             precio_neto * Decimal(str(promo["recargo_transferencia"])))
     total_fare = money(precio_neto + recargo_transferencia)
 
-    # 7. Liquidacion.
+    # 7. Liquidacion con la regla unica (igual que `liquidar_comision`).
+    def liquidar(tasa, cobrado):
+        nominal = money(precio_bruto * Decimal(str(tasa)))
+        descuento = descuento_promo + descuento_referido
+        if nominal > descuento:
+            cobrada = money(nominal - descuento)
+        else:
+            cobrada = money(Decimal(str(cobrado)) * Decimal(str(tasa)))
+        cobrada = max(Decimal("0"), min(cobrada, Decimal(str(cobrado))))
+        return nominal, cobrada
+
     comision_nominal = Decimal("0")
     comision_cobrada = Decimal("0")
     neto_chofer = Decimal("0")
@@ -91,27 +103,24 @@ def calcular(
 
     if payment_method == "Billetera":
         saldo_debitado = money(min(saldo_cliente, float(total_fare)))
-        comision_nominal = money(
-            saldo_debitado * Decimal(str(promo["comision_billetera"])))
-        comision_cobrada = comision_nominal
+        comision_nominal, comision_cobrada = liquidar(
+            promo["comision_billetera"], saldo_debitado)
         neto_chofer = money(saldo_debitado - comision_cobrada)
         abono_chofer = saldo_debitado
         nota = ("Fondo del chofer +%s (total) y -%s (comision) = +%s"
                 % (saldo_debitado, comision_cobrada, neto_chofer))
     elif payment_method == "Transferencia":
-        comision_nominal = Decimal("0")
-        comision_cobrada = Decimal("0")
-        neto_chofer = total_fare
+        # Igual que efectivo: el chofer ya tiene el dinero de la transferencia
+        # y la comision se le descuenta del Fondo.
+        comision_nominal, comision_cobrada = liquidar(
+            comision_rate, total_fare)
+        neto_chofer = money(total_fare - comision_cobrada)
         abono_chofer = total_fare
-        nota = "Cobro externo; no se mueve ningun Fondo"
+        nota = ("El chofer cobra %s por transferencia; se le descuentan %s "
+                "del Fondo" % (total_fare, comision_cobrada))
     else:
-        comision_nominal = money(
-            precio_bruto * Decimal(str(comision_rate)))
-        # La plataforma asume la promocion Y el referido. El chofer nunca
-        # pierde por un descuento que no es suyo.
-        comision_cobrada = max(
-            Decimal("0"),
-            money(comision_nominal - descuento_promo - descuento_referido))
+        comision_nominal, comision_cobrada = liquidar(
+            comision_rate, total_fare)
         # El pasajero le paga `total_fare` en efectivo y la plataforma le
         # descuenta la comision del Fondo: neto = cobrado - comision.
         neto_chofer = money(total_fare - comision_cobrada)
@@ -210,6 +219,21 @@ def main() -> None:
     imprimir("CONTROL - BILLETERA CON COMISION 10 % (cambiable en el panel)",
              wallet_10)
 
+    transfer_15 = calcular(base=1000, payment_method="Transferencia",
+                           promo=con_comision, descuentos_referido=1)
+    imprimir("CONTROL - TRANSFERENCIA 15 % + REFERIDO (plataforma absorbe)",
+             transfer_15)
+
+    cash_5 = calcular(base=1000, payment_method="Efectivo",
+                      promo=dict(prod, comision_porcentaje=0.05),
+                      descuentos_referido=1)
+    imprimir("CONTROL - EFECTIVO 5 % + REFERIDO (comision <= descuento: "
+             "asume el chofer)", cash_5)
+
+    cash_0 = calcular(base=1000, payment_method="Efectivo", promo=prod,
+                      descuentos_referido=1)
+    imprimir("CONTROL - EFECTIVO 0 % + REFERIDO (chofer recibe 900)", cash_0)
+
     # ---------------- Assertions ----------------
     def eq(nombre, real, esperado):
         real = money(real)
@@ -226,7 +250,8 @@ def main() -> None:
 
     eq("Viaje 2 total (1000 + 10 %)", v2["total_fare"], 1100)
     eq("Viaje 2 recargo transferencia", v2["recargo_transferencia"], 100)
-    eq("Viaje 2 comision plataforma", v2["comision_cobrada"], 0)
+    eq("Viaje 2 comision plataforma (0 %)", v2["comision_cobrada"], 0)
+    eq("Viaje 2 neto chofer", v2["neto_chofer"], 1100)
 
     eq("Viaje 3 descuento referido (10 %)", v3["descuento_referido"], 100)
     eq("Viaje 3 total (1000 - 100)", v3["total_fare"], 900)
@@ -250,6 +275,25 @@ def main() -> None:
     eq("Billetera 10 %: abono - comision = neto",
        wallet_10["abono_chofer"] - wallet_10["comision_cobrada"],
        wallet_10["neto_chofer"])
+
+    # Comision 15 % > descuento 10 %: la plataforma absorbe el descuento.
+    eq("Transferencia 15 %: comision nominal", transfer_15["comision_nominal"], 150)
+    eq("Transferencia 15 % + referido: comision cobrada",
+       transfer_15["comision_cobrada"], 50)
+    eq("Transferencia 15 %: total con recargo", transfer_15["total_fare"], 990)
+    eq("Transferencia 15 %: neto chofer (bruto - nominal + recargo)",
+       transfer_15["neto_chofer"], 940)
+
+    # Comision 5 % < descuento 10 %: el chofer asume el descuento.
+    eq("Efectivo 5 %: comision nominal", cash_5["comision_nominal"], 50)
+    eq("Efectivo 5 % + referido: comision sobre lo cobrado",
+       cash_5["comision_cobrada"], 45)
+    eq("Efectivo 5 %: neto chofer", cash_5["neto_chofer"], 855)
+
+    # Comision 0 %: el chofer asume todo el descuento (caso actual).
+    eq("Efectivo 0 % + referido: comision", cash_0["comision_cobrada"], 0)
+    eq("Efectivo 0 % + referido: total", cash_0["total_fare"], 900)
+    eq("Efectivo 0 % + referido: chofer recibe", cash_0["neto_chofer"], 900)
 
     bono_referido_chofer = money(500)
     eq("Bono fijo al chofer referidor", bono_referido_chofer, 500)
