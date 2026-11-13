@@ -509,6 +509,11 @@ class CompletedTrip {
   /// chofer no tiene forma de saber si le ha tocado esperar de más.
   final int? esperaSegs;
   final int? excedenteEsperaSegs;
+  final double descuentoCliente;
+  final double descuentoReferido;
+  final double recargoReintento;
+  final double recargoTransferencia;
+  final double montoCobrado;
 
   CompletedTrip({
     required this.tripId,
@@ -530,6 +535,11 @@ class CompletedTrip {
     this.distanceFareSinCoeficiente,
     this.esperaSegs,
     this.excedenteEsperaSegs,
+    this.descuentoCliente = 0,
+    this.descuentoReferido = 0,
+    this.recargoReintento = 0,
+    this.recargoTransferencia = 0,
+    this.montoCobrado = 0,
   });
 
   factory CompletedTrip.fromJson(Map<String, dynamic> j) => CompletedTrip(
@@ -555,6 +565,11 @@ class CompletedTrip {
         esperaSegs: (j['espera_segundos'] ?? j['espera_secs'])?.toInt(),
         excedenteEsperaSegs:
             (j['excedente_espera_segundos'] ?? j['excedente_espera_secs'])?.toInt(),
+        descuentoCliente: (j['descuento_cliente'] ?? 0).toDouble(),
+        descuentoReferido: (j['descuento_referido'] ?? 0).toDouble(),
+        recargoReintento: (j['recargo_reintento'] ?? 0).toDouble(),
+        recargoTransferencia: (j['recargo_transferencia'] ?? 0).toDouble(),
+        montoCobrado: (j['monto_cobrado'] ?? j['total_fare'] ?? 0).toDouble(),
       );
 }
 

@@ -56,6 +56,13 @@ class ClientTrip {
   final double? timeFare;
   final double? totalFare;
   final double? commission;
+  final double? tip;
+  final double? descuentoCliente;
+  final double? descuentoReferido;
+  final double? recargoReintento;
+  final double? recargoTransferencia;
+  final double? montoCobrado;
+  final String? paymentMethod;
   final String? driverId;
 
   /// Nombre legible del chofer (Mongo), para el recibo y el panel.
@@ -116,6 +123,13 @@ class ClientTrip {
     this.timeFare,
     this.totalFare,
     this.commission,
+    this.tip,
+    this.descuentoCliente,
+    this.descuentoReferido,
+    this.recargoReintento,
+    this.recargoTransferencia,
+    this.montoCobrado,
+    this.paymentMethod,
     this.driverId,
     this.driverName,
     this.driverPhone,
@@ -150,6 +164,13 @@ class ClientTrip {
         timeFare: (j['time_fare'] as num?)?.toDouble(),
         totalFare: (j['total_fare'] as num?)?.toDouble(),
         commission: (j['commission'] as num?)?.toDouble(),
+        tip: (j['tip'] as num?)?.toDouble(),
+        descuentoCliente: (j['descuento_cliente'] as num?)?.toDouble(),
+        descuentoReferido: (j['descuento_referido'] as num?)?.toDouble(),
+        recargoReintento: (j['recargo_reintento'] as num?)?.toDouble(),
+        recargoTransferencia: (j['recargo_transferencia'] as num?)?.toDouble(),
+        montoCobrado: (j['monto_cobrado'] as num?)?.toDouble(),
+        paymentMethod: (j['payment_method'] ?? j['metodo_pago'])?.toString(),
         driverId: j['driver_id']?.toString(),
         driverName: j['driver_name']?.toString(),
         driverPhone: j['driver_phone']?.toString(),

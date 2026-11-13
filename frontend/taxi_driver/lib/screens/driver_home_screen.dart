@@ -2760,6 +2760,20 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                     ''),
               ),
             _row('Tiempo', '${t.timeFare.toStringAsFixed(2)} ${t.currency}'),
+            if (t.tip > 0)
+              _row('Propina', '${t.tip.toStringAsFixed(2)} ${t.currency}'),
+            if (t.descuentoCliente > 0)
+              _row('Descuento promoción',
+                  '-${t.descuentoCliente.toStringAsFixed(2)} ${t.currency}'),
+            if (t.descuentoReferido > 0)
+              _row('Descuento referido',
+                  '-${t.descuentoReferido.toStringAsFixed(2)} ${t.currency}'),
+            if (t.recargoReintento > 0)
+              _row('Recargo reintento',
+                  '+${t.recargoReintento.toStringAsFixed(2)} ${t.currency}'),
+            if (t.recargoTransferencia > 0)
+              _row('Recargo transferencia',
+                  '+${t.recargoTransferencia.toStringAsFixed(2)} ${t.currency}'),
             // La espera se muestra solo si la hubo. El chofer la cuenta como
             // tiempo facturable, asi que es parte de lo que entra en "Tiempo" y
             // conviene que se vea de donde sale ese numero.
@@ -2786,6 +2800,12 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             // desconto del Fondo del chofer, no se resta de aqui.
             _row('Total del viaje',
                 '${t.totalFare.toStringAsFixed(2)} ${t.currency}',
+                bold: true),
+            if (t.paymentMethod == 'Billetera')
+              _row('Debitado de billetera',
+                  '${(t.montoCobrado > 0 ? t.montoCobrado : t.totalFare).toStringAsFixed(2)} ${t.currency}'),
+            _row('Neto para ti',
+                '${((t.montoCobrado > 0 ? t.montoCobrado : t.totalFare) - t.commission).toStringAsFixed(2)} ${t.currency}',
                 bold: true),
             if (t.appliedRule != null)
               Padding(

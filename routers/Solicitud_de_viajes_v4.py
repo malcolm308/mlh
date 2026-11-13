@@ -572,7 +572,12 @@ def init_db():
             -- anterior expiro se cobra un 10 % mas.
             ADD COLUMN IF NOT EXISTS is_retry BOOLEAN NOT NULL DEFAULT FALSE,
             -- Lo que se sumo al precio por ser un reintento, ya en dinero.
-            ADD COLUMN IF NOT EXISTS recargo_reintento NUMERIC(12,2) DEFAULT 0;
+            ADD COLUMN IF NOT EXISTS recargo_reintento NUMERIC(12,2) DEFAULT 0,
+            -- Monto realmente cobrado al cliente. En efectivo y transferencia es
+            -- el total del viaje; en billetera puede ser menor si el saldo era
+            -- insuficiente. Se guarda aparte para que el cierre muestre lo que
+            -- realmente se debito.
+            ADD COLUMN IF NOT EXISTS monto_cobrado NUMERIC(12,2) DEFAULT 0;
     """
 
     create_transactions_table = """
@@ -1165,7 +1170,9 @@ def get_trip(trip_id: str) -> Optional[dict]:
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
-                recargo_transferencia, comision_billetera,
+                descuento_cliente, descuento_referido, comision_nominal,
+                comision_cobrada, recargo_transferencia, recargo_reintento,
+                comision_billetera, monto_cobrado,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
                 request_address, dropoff_address
             FROM trips WHERE trip_id = %s;
@@ -1583,6 +1590,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     payment_method = %s,
                     recargo_transferencia = %s,
                     recargo_reintento = %s,
+                    monto_cobrado = %s,
                     currency = 'CUP'
                 WHERE trip_id = %s
                 RETURNING *;
@@ -1594,6 +1602,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 espera_secs, excedente_secs, float(coeficiente),
                 payment_method, recargo_transferencia,
                 float(recargo_reintento),
+                float(total_fare),
                 trip_id
             ))
             updated_trip = cur.fetchone()
@@ -1630,6 +1639,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             comision_nominal = None
             commission = None
             comision_billetera = 0.0
+            monto_cobrado_result = float(total_fare)
+            neto_chofer_result = None
 
             if payment_method == "Billetera":
                 # Pago con saldo. El total del viaje se le paga al chofer y la
@@ -1670,6 +1681,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                          - Decimal(str(comision_billetera))).quantize(
                             CENT, rounding=ROUND_HALF_UP))
                     neto_chofer = max(0.0, neto_chofer)
+                    monto_cobrado_result = debito
+                    neto_chofer_result = neto_chofer
 
                     if client_oid and debito > 0:
                         cliente_coleccion.update_one(
@@ -1725,10 +1738,11 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
 
                     cur.execute(
                         "UPDATE trips SET comision_nominal = %s, "
-                        "comision_cobrada = %s, comision_billetera = %s "
+                        "comision_cobrada = %s, comision_billetera = %s, "
+                        "monto_cobrado = %s "
                         "WHERE trip_id = %s",
                         (comision_nominal, comision_billetera,
-                         comision_billetera, trip_id))
+                         comision_billetera, debito, trip_id))
                     conn.commit()
                 except Exception:
                     logger.exception(
@@ -1756,10 +1770,13 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     )
                     cur.execute(
                         "UPDATE trips SET comision_nominal = %s, "
-                        "comision_cobrada = %s, comision_billetera = 0 "
+                        "comision_cobrada = %s, comision_billetera = 0, "
+                        "monto_cobrado = %s "
                         "WHERE trip_id = %s",
-                        (comision_nominal, commission, trip_id))
+                        (comision_nominal, commission, float(total_fare), trip_id))
                     conn.commit()
+                    monto_cobrado_result = float(total_fare)
+                    neto_chofer_result = float(total_fare) - float(commission or 0)
                     registrar_comision_en_fondo(
                         trip_id, driver_id_str, commission, "Transferencia")
                 except Exception:
@@ -1791,10 +1808,13 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     # quedan guardadas para auditar el cierre.
                     cur.execute(
                         "UPDATE trips SET comision_nominal = %s, "
-                        "comision_cobrada = %s, comision_billetera = 0 "
+                        "comision_cobrada = %s, comision_billetera = 0, "
+                        "monto_cobrado = %s "
                         "WHERE trip_id = %s",
-                        (comision_nominal, commission, trip_id))
+                        (comision_nominal, commission, float(total_fare), trip_id))
                     conn.commit()
+                    monto_cobrado_result = float(total_fare)
+                    neto_chofer_result = float(total_fare) - float(commission or 0)
                     registrar_comision_en_fondo(
                         trip_id, driver_id_str, commission, "Efectivo")
                 except Exception:
@@ -1937,6 +1957,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "recargo_transferencia": recargo_transferencia,
                 "recargo_reintento": float(recargo_reintento),
                 "is_retry": bool(trip.get("is_retry")),
+                "monto_cobrado": round(monto_cobrado_result, 2),
+                "neto_chofer": round(float(neto_chofer_result if neto_chofer_result is not None else (monto_cobrado_result - float(commission or 0))), 2),
                 "comision_billetera": comision_billetera,
                 "currency": updated_trip.get("currency") or "CUP",
                 "vehicle_type": vehicle_type,
@@ -1984,8 +2006,10 @@ def get_trips_by_client(client_id: str, limit: int = 50) -> list[dict]:
                     COALESCE(started_at, NOW()) - hora_llegada)), 0))::int
                     AS espera_segundos,
                 distance_km,
-                base_fare, distance_fare, total_fare,
+                base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
+                descuento_cliente, descuento_referido, recargo_reintento,
+                recargo_transferencia, comision_cobrada, monto_cobrado,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
                 request_address, dropoff_address
             FROM trips WHERE client_id = %s ORDER BY requested_at DESC LIMIT %s;
@@ -3597,6 +3621,7 @@ async def api_get_trip_receipt(trip_id: str):
     distancia = float(trip.get("distance_fare") or 0)
     propina = float(trip.get("tip") or 0)
     total = float(trip.get("total_fare") or 0)
+    monto_cobrado = float(trip.get("monto_cobrado") or total)
     descuento = float(trip.get("descuento_cliente") or 0)
     descuento_ref = float(trip.get("descuento_referido") or 0)
     recargo_reintento = float(trip.get("recargo_reintento") or 0)
@@ -3642,6 +3667,8 @@ async def api_get_trip_receipt(trip_id: str):
         "descuento_referido": round(descuento_ref, 2),
         "recargo_reintento": round(recargo_reintento, 2),
         "recargo_transferencia": round(recargo_transferencia, 2),
+        "monto_cobrado": round(monto_cobrado, 2),
+        "neto_chofer": round(monto_cobrado - commission, 2),
         # El chofer necesita ver con que le pago el pasajero tambien cuando el
         # recibo se reconstruye por HTTP (WS caido o fin forzado desde el panel).
         "metodo_pago": metodo,

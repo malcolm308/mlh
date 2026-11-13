@@ -1327,8 +1327,31 @@ class _TripScreenState extends State<TripScreen> {
             _row('Tarifa base', dinero(t.baseFare)),
             _row('Por distancia', dinero(t.distanceFare)),
             _row('Por tiempo', dinero(t.timeFare)),
+            if ((t.tip ?? 0) > 0) _row('Propina', dinero(t.tip)),
+            if ((t.descuentoCliente ?? 0) > 0)
+              _row('Descuento promoción', '-${(t.descuentoCliente ?? 0).toStringAsFixed(2)} $moneda'),
+            if ((t.descuentoReferido ?? 0) > 0)
+              _row('Descuento referido', '-${(t.descuentoReferido ?? 0).toStringAsFixed(2)} $moneda'),
+            if ((t.recargoReintento ?? 0) > 0)
+              _row('Recargo reintento', '+${(t.recargoReintento ?? 0).toStringAsFixed(2)} $moneda'),
+            if ((t.recargoTransferencia ?? 0) > 0)
+              _row('Recargo transferencia', '+${(t.recargoTransferencia ?? 0).toStringAsFixed(2)} $moneda'),
             const Divider(height: 18),
             _row('TOTAL', dinero(total), bold: true),
+            if ((t.paymentMethod ?? '').toLowerCase().contains('billetera'))
+              _row('Debitado de tu billetera',
+                  dinero(t.montoCobrado ?? total)),
+            if ((t.paymentMethod ?? '').toLowerCase().contains('billetera') &&
+                ((t.montoCobrado ?? total ?? 0) + 0.009 < (total ?? 0)))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Saldo insuficiente: se debitó '
+                  '${(t.montoCobrado ?? 0).toStringAsFixed(2)} de '
+                  '${(total ?? 0).toStringAsFixed(2)} $moneda.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             const SizedBox(height: 22),
             Text('Conductor y vehículo',
                 style: Theme.of(context)
