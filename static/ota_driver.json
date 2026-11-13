@@ -1,11 +1,15 @@
 {
   "app": "driver",
   "latest": {
-    "version": "1.0.35",
-    "version_code": 4040,
+    "version": "1.0.36",
+    "version_code": 4041,
     "apk": "app_chofer_64bits.apk"
   },
   "releases": [
+    {
+      "version": "1.0.36",
+      "version_code": 4041
+    },
     {
       "version": "1.0.35",
       "version_code": 4040
@@ -21,45 +25,41 @@
     {
       "version": "1.0.32",
       "version_code": 4037
-    },
-    {
-      "version": "1.0.26",
-      "version_code": 4031
     }
   ],
   "patches": [
     {
-      "version": "1.0.35-p1",
-      "target_version_code": 3038,
-      "file": "patch_chofer_3038.zip",
-      "md5": "b9aa112a3da9fde360cd3b4c66da60ae",
-      "published_at": "2026-11-13T17:32:05+00:00",
+      "version": "1.0.36-p1",
+      "target_version_code": 3039,
+      "file": "patch_chofer_3039.zip",
+      "md5": "35f8890a03933b6b10e13da18335363b",
+      "published_at": "2026-11-13T18:00:34+00:00",
       "abi": "armeabi-v7a"
     },
     {
-      "version": "1.0.35-p1",
-      "target_version_code": 4038,
-      "file": "patch_chofer_4038.zip",
-      "md5": "2b185afb518db2d48a491fde3d63c93e",
-      "published_at": "2026-11-13T17:32:05+00:00",
+      "version": "1.0.36-p1",
+      "target_version_code": 4039,
+      "file": "patch_chofer_4039.zip",
+      "md5": "dbc50c1c84090cfa633c544bd4989447",
+      "published_at": "2026-11-13T18:00:33+00:00",
       "abi": "arm64-v8a"
     },
     {
-      "version": "1.0.35-p1",
-      "target_version_code": 3039,
-      "file": "patch_chofer_3039.zip",
-      "md5": "b47591cbfa972b998ef16f545d8f1578",
-      "published_at": "2026-11-13T17:32:05+00:00",
+      "version": "1.0.36-p1",
+      "target_version_code": 3040,
+      "file": "patch_chofer_3040.zip",
+      "md5": "afb05982c976cf9a4b21113fc075e639",
+      "published_at": "2026-11-13T18:00:33+00:00",
       "abi": "armeabi-v7a"
     },
     {
-      "version": "1.0.35-p1",
-      "target_version_code": 4039,
-      "file": "patch_chofer_4039.zip",
-      "md5": "c12abe240b648011642facf90c7b75fa",
-      "published_at": "2026-11-13T17:32:04+00:00",
+      "version": "1.0.36-p1",
+      "target_version_code": 4040,
+      "file": "patch_chofer_4040.zip",
+      "md5": "b13051c887549203cbf1f2572e43de39",
+      "published_at": "2026-11-13T18:00:33+00:00",
       "abi": "arm64-v8a"
     }
   ],
-  "updated_at": "2026-11-13T17:32:05+00:00"
+  "updated_at": "2026-11-13T18:00:34+00:00"
 }

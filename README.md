@@ -312,15 +312,15 @@ actualizan solas contra el backend.
 - `static/patch_cliente_<versionCode>.zip` / `static/patch_chofer_<versionCode>.zip`
   — parches ligeros (~2.8-3.5 MB). Hay uno por **APK base** y ABI, con nombre
   unico, para que publicar un parche nuevo no pise al de otra version:
-  hoy hay cuatro por app — `patch_cliente_4025.zip` (1.0.24 de 64 bits),
-  `patch_cliente_3025.zip` (1.0.24 de 32 bits), `patch_cliente_4024.zip`
-  (1.0.23 de 64 bits) y `patch_cliente_3024.zip` (1.0.23 de 32 bits); los
-  equivalentes del chofer son `patch_chofer_4039/3039/4038/3038.zip`.
+  hoy hay cuatro por app — `patch_cliente_4026.zip` (1.0.25 de 64 bits),
+  `patch_cliente_3026.zip` (1.0.25 de 32 bits), `patch_cliente_4025.zip`
+  (1.0.24 de 64 bits) y `patch_cliente_3025.zip` (1.0.24 de 32 bits); los
+  equivalentes del chofer son `patch_chofer_4040/3040/4039/3039.zip`.
 - `static/ota_client.json` / `static/ota_driver.json` — manifiestos que dicen
   cual es la ultima version, el historial de releases y los parches (con su
   `abi`, `md5` y `target_version_code`).
 - Endpoints: `GET /healthz` (liveness), `GET /readyz` (Postgres responde) y
-  `GET /app/version?version_actual=1.0.23&version_codigo=4024&app=client`
+  `GET /app/version?version_actual=1.0.25&version_codigo=4026&app=client`
   (opcional `&abi=arm64-v8a`).
 
 Regla de decision (`routers/app_updates.py`, `_MAX_PATCH_DISTANCE = 3`):
@@ -335,7 +335,7 @@ Regla de decision (`routers/app_updates.py`, `_MAX_PATCH_DISTANCE = 3`):
 Un parche solo sirve para el APK base con el que se compilo
 (`--target-version-code`), asi que las instalaciones anteriores al sistema OTA
 siempre reciben el APK completo. Un parche tampoco se sirve si su `version` no
-empieza por la version actual (`1.0.25-p1`): uno viejo dejaria la app marcada
+empieza por la version actual (`1.0.26-p1`): uno viejo dejaria la app marcada
 como parcheada en una version intermedia y no volveria a actualizarse.
 
 El APK de respaldo se elige por ABI. Los telefonos de 32 bits rechazan el APK
@@ -346,11 +346,25 @@ instalado esta en el rango 3xxx o cuando la app manda `abi=armeabi-v7a`
 
 ### Compilar
 
+**Siempre con la clave de MapTiler.** La clave se inyecta en tiempo de
+compilacion (`String.fromEnvironment`), asi que si se omite la app cae al
+estilo propio de Martin y el mapa cambia. El script hace las dos apps y copia
+los 4 APK a `static/`:
+
 ```powershell
+cd E:\Taxi_Rapid
+powershell -ExecutionPolicy Bypass -File scripts\compilar_apks.ps1
+# o a mano, para una sola app:
 cd E:\Taxi_Rapid\frontend\taxi_client   # o taxi_driver
-flutter build apk --split-per-abi
+flutter build apk --release --split-per-abi --no-pub `
+  --dart-define=MAPTILER_API_KEY=ZsGcg7EJ3Ml7wgFfXwAt
 # -> build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
+
+Un `libapp.so` compilado sin la clave tambien viaja dentro del parche: si se
+publica un parche desde un build sin clave, los telefonos que lo reciban
+pierden el mapa de MapTiler. Por eso los parches se generan **desde el APK ya
+compilado con clave**.
 
 Ojo: `--split-per-abi` desplaza el `versionCode` por ABI: `armeabi-v7a`
 suma 1000 y `arm64-v8a` suma 2000, y encima va el build number. El `arm64-v8a`
@@ -411,33 +425,34 @@ El mensaje de "Compartir App" lleva los dos enlaces (`appDownloadUrl` y
 
 ### Publicar un parche ligero (mismo APK, sin reinstalar)
 
-El parche se genera **con el mismo Flutter** y desde el APK ya compilado de la
-version nueva. Hay que generar **uno por cada APK base y ABI** que se quiera
-poder parchear (ver `_MAX_PATCH_DISTANCE`): como minimo la version inmediatamente
-anterior (`4025` y `3025` para la 1.0.24), y opcionalmente una o dos mas atras.
+El parche se genera **con el mismo Flutter** y desde el APK ya compilado (y
+compilado **con la clave de MapTiler**) de la version nueva. Hay que generar
+**uno por cada APK base y ABI** que se quiera poder parchear (ver
+`_MAX_PATCH_DISTANCE`): como minimo la version inmediatamente anterior
+(`4026` y `3026` para la 1.0.25), y opcionalmente una o dos mas atras.
 
 ```powershell
 cd E:\Taxi_Rapid\frontend\taxi_client
 dart run flutter_patcher:pack `
   --apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
-  --version 1.0.25-p1 --target-version-code 4025 --abi arm64-v8a --out dist\v125_arm64_4025
+  --version 1.0.26-p1 --target-version-code 4026 --abi arm64-v8a --out dist\v126_arm64_4026
 dart run flutter_patcher:pack `
   --apk build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk `
-  --version 1.0.25-p1 --target-version-code 3025 --abi armeabi-v7a --out dist\v125_armv7_3025
-# repite con --target-version-code 4024/3024 (1.0.23) si quieres cubrir otro salto
+  --version 1.0.26-p1 --target-version-code 3026 --abi armeabi-v7a --out dist\v126_armv7_3026
+# repite con --target-version-code 4025/3025 (1.0.24) si quieres cubrir otro salto
 # imprime el md5 de cada zip
 
 cd E:\Taxi_Rapid
-python scripts/publicar_ota.py --app client --version 1.0.25 --version-code 4026 `
+python scripts/publicar_ota.py --app client --version 1.0.26 --version-code 4027 `
   --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
   --apk-name app_cliente_64bits.apk `
-  --patch frontend/taxi_client/dist/v125_arm64_4025/patch.zip `
-  --patch-version 1.0.25-p1 --target-version-code 4025 --patch-abi arm64-v8a
-python scripts/publicar_ota.py --app client --version 1.0.25 --version-code 4026 `
+  --patch frontend/taxi_client/dist/v126_arm64_4026/patch.zip `
+  --patch-version 1.0.26-p1 --target-version-code 4026 --patch-abi arm64-v8a
+python scripts/publicar_ota.py --app client --version 1.0.26 --version-code 4027 `
   --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
   --apk-name app_cliente_64bits.apk `
-  --patch frontend/taxi_client/dist/v125_armv7_3025/patch.zip `
-  --patch-version 1.0.25-p1 --target-version-code 3025 --patch-abi armeabi-v7a
+  --patch frontend/taxi_client/dist/v126_armv7_3026/patch.zip `
+  --patch-version 1.0.26-p1 --target-version-code 3026 --patch-abi armeabi-v7a
 ```
 
 `publicar_ota.py` copia cada zip a `static/patch_<cliente|chofer>_<versionCodeBase>.zip`
