@@ -154,8 +154,15 @@ def _url_estatica(request: Request, archivo: str) -> str:
 
 
 def _version_limpia(valor: str) -> str:
-    """Quita el `+build` de una version de pubspec: `1.0.2+3` -> `1.0.2`."""
-    return (valor or "").strip().split("+", 1)[0].strip()
+    """Normaliza lo que reporta la app: `1.0.26+3` -> `1.0.26`, `1.0.26-p1` -> `1.0.26`.
+
+    Tras aplicar un parche la app reporta la version del parche (`-p1`) pero
+    conserva el `versionCode` del APK base. Sin quitar el sufijo ese telefono
+    no coincidia con ninguna release del historial y el backend lo trataba como
+    una instalacion desconocida.
+    """
+    limpia = (valor or "").strip().split("+", 1)[0].strip()
+    return limpia.split("-", 1)[0].strip()
 
 
 def _clave_version(valor: str) -> tuple:
@@ -235,17 +242,33 @@ def _apk_file(app_key: str, codigo: int | None, abi: str | None,
     return _APKS_POR_ABI[app_key]["32" if _abi_es_32(abi, codigo) else "64"]
 
 
+def _abi_del_apk(codigo: int | None, abi: str | None) -> str:
+    """ABI del APK **instalado**, que es la que debe tener el parche.
+
+    Manda el `versionCode` (3xxx = 32 bits, 4xxx = 64 bits), porque un telefono
+    de 64 bits puede tener instalado el APK de 32 bits: ahi el ABI del telefono
+    (`abi`) no sirve para elegir el parche y hacia que la app cayera al APK
+    completo. Solo si el codigo no dice nada se usa el ABI reportado.
+    """
+    if codigo is not None:
+        if 3000 <= codigo < 4000:
+            return "armeabi-v7a"
+        if 4000 <= codigo < 5000:
+            return "arm64-v8a"
+    return (abi or "").strip().lower()
+
+
 def _buscar_parche(manifiesto: dict, codigo_base: int | None,
                    version_ultima: str, abi: str | None) -> dict | None:
     """Parche compatible con el APK instalado, o `None`.
 
     Exige el `versionCode` exacto (un parche solo sirve para el APK base con
     el que se compilo), que lleve a la version actual y, si el manifiesto lo
-    declara, el mismo ABI del telefono.
+    declara, el ABI del APK instalado (no el del telefono).
     """
     if not codigo_base:
         return None
-    abi_norm = (abi or "").strip().lower()
+    abi_apk = _abi_del_apk(codigo_base, abi)
     for parche in manifiesto.get("patches") or []:
         if not isinstance(parche, dict) or not parche.get("file"):
             continue
@@ -258,7 +281,7 @@ def _buscar_parche(manifiesto: dict, codigo_base: int | None,
                 version_ultima + "-"):
             continue
         parche_abi = str(parche.get("abi") or "").strip().lower()
-        if parche_abi and abi_norm and parche_abi != abi_norm:
+        if parche_abi and abi_apk and parche_abi != abi_apk:
             continue
         return parche
     return None
