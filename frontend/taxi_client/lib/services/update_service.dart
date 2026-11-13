@@ -67,13 +67,17 @@ class UpdateService {
     try {
       final info = await PackageInfo.fromPlatform();
       final codigo = int.tryParse(info.buildNumber) ?? 0;
-      final uri = Uri.parse(ApiConfig.appVersion()).replace(
-        queryParameters: <String, String>{
-          'version_actual': info.version,
-          'version_codigo': '$codigo',
-          'app': appId,
-        },
-      );
+      // ABI real del telefono: el backend elige el APK de 32 o 64 bits sin
+      // depender de deducirlo del versionCode.
+      final abi = await FlutterPatcher.deviceAbi;
+      final parametros = <String, String>{
+        'version_actual': info.version,
+        'version_codigo': '$codigo',
+        'app': appId,
+      };
+      if (abi.isNotEmpty) parametros['abi'] = abi;
+      final uri = Uri.parse(ApiConfig.appVersion())
+          .replace(queryParameters: parametros);
       final respuesta =
           await http.get(uri).timeout(const Duration(seconds: 25));
       if (respuesta.statusCode != 200) {
@@ -149,8 +153,14 @@ class UpdateService {
       debugPrint('[OTA] parche $version instalado. '
           'Se aplicara al reabrir la app.');
     } else {
+      // Plan B: si el parche no se puede instalar (md5, base distinta o fallo
+      // del plugin), se avisa con el APK completo que ya manda el backend
+      // para esta ABI. Sin esto la app se quedaba atascada en silencio.
+      final urlApk = (datos['url_apk'] ?? '').toString();
+      if (urlApk.isNotEmpty) _apkPendiente = urlApk;
       debugPrint('[OTA] parche $version fallo: '
-          '${resultado.error?.name} ${resultado.message ?? ''}');
+          '${resultado.error?.name} ${resultado.message ?? ''} '
+          '-> APK de respaldo: $urlApk');
     }
   }
 

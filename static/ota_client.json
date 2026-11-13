@@ -29,96 +29,37 @@
   ],
   "patches": [
     {
-      "version": "1.0.22-p1",
-      "target_version_code": 4022,
-      "file": "patch_latest.zip",
-      "md5": "e358fa5e56318ff98d15baa856a4b088",
-      "published_at": "2026-11-12T01:07:12+00:00"
+      "version": "1.0.24-p1",
+      "target_version_code": 4024,
+      "file": "patch_cliente_4024.zip",
+      "md5": "016acfa3cf7933203d1af4cad060478c",
+      "abi": "arm64-v8a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     },
     {
-      "version": "1.0.17-p1",
-      "target_version_code": 4017,
-      "file": "patch_latest.zip",
-      "md5": "2214f7d3ea22f9d4a05cc0ea8302a01b",
-      "published_at": "2026-11-10T17:18:10+00:00"
+      "version": "1.0.24-p1",
+      "target_version_code": 3024,
+      "file": "patch_cliente_3024.zip",
+      "md5": "e812f5ed9e7c39b26ad7b0a79c32eab1",
+      "abi": "armeabi-v7a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     },
     {
-      "version": "1.0.16-p1",
-      "target_version_code": 4016,
-      "file": "patch_latest.zip",
-      "md5": "31d17a46362c22062df2ad7c7f385494",
-      "published_at": "2026-11-10T16:24:42+00:00"
+      "version": "1.0.24-p1",
+      "target_version_code": 4023,
+      "file": "patch_cliente_4023.zip",
+      "md5": "e1fb15c7eacbfdedb960f5d19f6a8892",
+      "abi": "arm64-v8a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     },
     {
-      "version": "1.0.15-p1",
-      "target_version_code": 4015,
-      "file": "patch_latest.zip",
-      "md5": "ba392f56af59579f659c163182e2a498",
-      "published_at": "2026-11-10T15:30:09+00:00"
-    },
-    {
-      "version": "1.0.14-p1",
-      "target_version_code": 4014,
-      "file": "patch_latest.zip",
-      "md5": "084eb0eef11f8fd0555be0adac990b8a",
-      "published_at": "2026-11-10T14:58:05+00:00"
-    },
-    {
-      "version": "1.0.13-p1",
-      "target_version_code": 4013,
-      "file": "patch_latest.zip",
-      "md5": "b230b0c078467cd4a8400d7e8bdb8f23",
-      "published_at": "2026-11-10T13:24:32+00:00"
-    },
-    {
-      "version": "1.0.12-p1",
-      "target_version_code": 4012,
-      "file": "patch_latest.zip",
-      "md5": "ec58fa72010d8d1de07062fbc4d8e0a4",
-      "published_at": "2026-11-10T04:08:21+00:00"
-    },
-    {
-      "version": "1.0.11-p1",
-      "target_version_code": 4011,
-      "file": "patch_latest.zip",
-      "md5": "9439a6bab7402f3c58c5be84f4dd68e9",
-      "published_at": "2026-11-09T21:51:43+00:00"
-    },
-    {
-      "version": "1.0.10-p1",
-      "target_version_code": 4010,
-      "file": "patch_latest.zip",
-      "md5": "d126d855a01e2eda6937798b135856dc",
-      "published_at": "2026-11-09T21:34:41+00:00"
-    },
-    {
-      "version": "1.0.9-p1",
-      "target_version_code": 4009,
-      "file": "patch_latest.zip",
-      "md5": "89112dada03099ce02477aaf2afa3b35",
-      "published_at": "2026-11-09T19:57:20+00:00"
-    },
-    {
-      "version": "1.0.8-p1",
-      "target_version_code": 4008,
-      "file": "patch_latest.zip",
-      "md5": "c191f15e00d875778680a07e02b7aecb",
-      "published_at": "2026-11-09T17:27:51+00:00"
-    },
-    {
-      "version": "1.0.6-p1",
-      "target_version_code": 2006,
-      "file": "patch_latest.zip",
-      "md5": "166f47a0d58b6e0ff14bd1ad95ca5c32",
-      "published_at": "2026-11-08T13:20:05+00:00"
-    },
-    {
-      "version": "1.0.5-p1",
-      "target_version_code": 2005,
-      "file": "patch_latest.zip",
-      "md5": "ef1d473a90ffb2c20efa9d0956cb3154",
-      "published_at": "2026-11-08T12:57:52+00:00"
+      "version": "1.0.24-p1",
+      "target_version_code": 3023,
+      "file": "patch_cliente_3023.zip",
+      "md5": "a7069e75db2de2c3638dd8c439520702",
+      "abi": "armeabi-v7a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     }
   ],
-  "updated_at": "2026-11-13T16:39:34+00:00"
+  "updated_at": "2026-11-13T17:11:12+00:00"
 }

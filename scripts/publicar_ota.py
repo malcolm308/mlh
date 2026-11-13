@@ -41,10 +41,6 @@ APK_DESTINO = {
     "client": "app_latest.apk",
     "driver": "app_chofer_latest.apk",
 }
-PARCHE_DESTINO = {
-    "client": "patch_latest.zip",
-    "driver": "patch_chofer_latest.zip",
-}
 
 # Cuantas versiones se conservan en el historial. Con 2 basta para distinguir
 # "un salto" de "muy atrasada"; se guardan 5 por comodidad al diagnosticar.
@@ -85,6 +81,11 @@ def main() -> None:
     parser.add_argument("--patch-version", help="1.0.2-p1")
     parser.add_argument("--target-version-code", type=int,
                         help="versionCode del APK base para el que sirve el parche")
+    parser.add_argument("--patch-abi", help="ABI del parche: arm64-v8a, armeabi-v7a")
+    parser.add_argument("--patch-name",
+                        help="Nombre del zip dentro de static/. Por defecto "
+                             "patch_<app>_<versionCodeBase>.zip, para no pisar "
+                             "los parches de otras bases.")
     args = parser.parse_args()
 
     if not args.apk.is_file():
@@ -118,10 +119,26 @@ def main() -> None:
         p for p in (manifiesto.get("patches") or [])
         if isinstance(p, dict) and p.get("file")
     ]
+    # Limpieza: un parche solo sirve si lleva a la version que se publica y su
+    # archivo sigue existiendo con el md5 anotado. Los parches viejos dejan la
+    # app marcada como "parcheada" en una version intermedia y no vuelven a
+    # actualizarse; los de md5 roto fallan siempre.
+    patches = [
+        p for p in patches
+        if str(p.get("version") or "").startswith(args.version + "-")
+        and (STATIC_DIR / str(p.get("file"))).is_file()
+        and _md5(STATIC_DIR / str(p.get("file"))) == str(p.get("md5") or "")
+    ]
     if args.patch:
         if not args.patch.is_file():
             raise SystemExit(f"No existe el parche: {args.patch}")
-        destino_parche = STATIC_DIR / PARCHE_DESTINO[args.app]
+        if args.patch_name:
+            nombre_parche = Path(args.patch_name).name
+            if not nombre_parche.lower().endswith(".zip"):
+                raise SystemExit("--patch-name debe terminar en .zip")
+        else:
+            nombre_parche = f"patch_{args.app}_{args.target_version_code}.zip"
+        destino_parche = STATIC_DIR / nombre_parche
         shutil.copyfile(args.patch, destino_parche)
         md5 = _md5(destino_parche)
         # Un solo parche por APK base: reemplaza el anterior de ese vc.
@@ -129,13 +146,16 @@ def main() -> None:
             p for p in patches
             if int(p.get("target_version_code", -1)) != args.target_version_code
         ]
-        patches.insert(0, {
+        entrada = {
             "version": args.patch_version,
             "target_version_code": args.target_version_code,
             "file": destino_parche.name,
             "md5": md5,
             "published_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        })
+        }
+        if args.patch_abi:
+            entrada["abi"] = args.patch_abi
+        patches.insert(0, entrada)
         print(f"[ota] parche -> {destino_parche} (md5 {md5})")
 
     manifiesto.update({

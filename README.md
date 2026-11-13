@@ -309,23 +309,39 @@ actualizan solas contra el backend.
 - `static/app_cliente_v2.apk`, `static/app_latest.apk` y
   `static/app_chofer_latest.apk` — copias de los APK de 64 bits, por
   compatibilidad con los enlaces viejos que ya circulan.
-- `static/patch_latest.zip` / `static/patch_chofer_latest.zip` — parche ligero.
+- `static/patch_cliente_<versionCode>.zip` / `static/patch_chofer_<versionCode>.zip`
+  — parches ligeros (~2.8-3.5 MB). Hay uno por **APK base** y ABI, con nombre
+  unico, para que publicar un parche nuevo no pise al de otra version:
+  `patch_cliente_4024.zip` (64 bits, base 4024), `patch_cliente_3024.zip`
+  (32 bits), `patch_cliente_4023.zip`, `patch_cliente_3023.zip` y los
+  equivalentes `patch_chofer_4038/3038/4037/3037.zip`.
 - `static/ota_client.json` / `static/ota_driver.json` — manifiestos que dicen
-  cual es la ultima version, el historial de releases y los parches.
+  cual es la ultima version, el historial de releases y los parches (con su
+  `abi`, `md5` y `target_version_code`).
 - Endpoints: `GET /healthz` (liveness), `GET /readyz` (Postgres responde) y
-  `GET /app/version?version_actual=1.0.1&version_codigo=2002&app=client`.
+  `GET /app/version?version_actual=1.0.23&version_codigo=4024&app=client`
+  (opcional `&abi=arm64-v8a`).
 
-Regla de decision (`routers/app_updates.py`):
+Regla de decision (`routers/app_updates.py`, `_MAX_PATCH_DISTANCE = 3`):
 
 - Al dia -> `tipo_actualizacion: "none"`.
-- Exactamente un salto y hay parche para **ese** `versionCode` -> `"patch"`.
-- Un salto sin parche, o dos o mas saltos -> `"apk"` (aviso bloqueante en la
-  app). El APK se ignora mientras haya un viaje activo y se reevalua al
-  terminar.
+- Hasta **3 versiones** por detras y hay parche para **ese** `versionCode` ->
+  `"patch"` (descarga ~3 MB, se aplica al reabrir).
+- Sin parche para ese APK base, o **mas de 3 versiones** de salto -> `"apk"`
+  (aviso bloqueante en la app, ~28-38 MB). El aviso se ignora mientras haya un
+  viaje activo y se reevalua al terminar.
 
 Un parche solo sirve para el APK base con el que se compilo
 (`--target-version-code`), asi que las instalaciones anteriores al sistema OTA
-siempre reciben el APK completo.
+siempre reciben el APK completo. Un parche tampoco se sirve si su `version` no
+empieza por la version actual (`1.0.24-p1`): uno viejo dejaria la app marcada
+como parcheada en una version intermedia y no volveria a actualizarse.
+
+El APK de respaldo se elige por ABI. Los telefonos de 32 bits rechazan el APK
+de 64 con "paquete no valido", asi que el endpoint devuelve
+`app_cliente_32bits.apk` / `app_chofer_32bits.apk` cuando el `versionCode`
+instalado esta en el rango 3xxx o cuando la app manda `abi=armeabi-v7a`
+(`--split-per-abi` desplaza armeabi-v7a +1000 y arm64-v8a +2000).
 
 ### Compilar
 
@@ -392,24 +408,43 @@ El mensaje de "Compartir App" lleva los dos enlaces (`appDownloadUrl` y
 ### Publicar un parche ligero (mismo APK, sin reinstalar)
 
 El parche se genera **con el mismo Flutter** y desde el APK ya compilado de la
-version nueva:
+version nueva. Hay que generar **uno por cada APK base y ABI** que se quiera
+poder parchear (ver `_MAX_PATCH_DISTANCE`): como minimo la version inmediatamente
+anterior (`4024` y `3024`), y opcionalmente una o dos mas atras.
 
 ```powershell
 cd E:\Taxi_Rapid\frontend\taxi_client
 dart run flutter_patcher:pack `
   --apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
-  --version 1.0.2-p1 --target-version-code 2002 --abi arm64-v8a --out dist
-# imprime el md5 del zip
+  --version 1.0.24-p1 --target-version-code 4024 --abi arm64-v8a --out dist\arm64_4024
+dart run flutter_patcher:pack `
+  --apk build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk `
+  --version 1.0.24-p1 --target-version-code 3024 --abi armeabi-v7a --out dist\armv7_3024
+# repite con --target-version-code 4023/3023 (1.0.22) si quieres cubrir otro salto
+# imprime el md5 de cada zip
 
 cd E:\Taxi_Rapid
-python scripts/publicar_ota.py --app client --version 1.0.2 --version-code 2003 `
+python scripts/publicar_ota.py --app client --version 1.0.24 --version-code 4025 `
   --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
-  --patch frontend/taxi_client/dist/patch.zip `
-  --patch-version 1.0.2-p1 --target-version-code 2002
+  --apk-name app_cliente_64bits.apk `
+  --patch frontend/taxi_client/dist/arm64_4024/patch.zip `
+  --patch-version 1.0.24-p1 --target-version-code 4024 --patch-abi arm64-v8a
+python scripts/publicar_ota.py --app client --version 1.0.24 --version-code 4025 `
+  --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
+  --apk-name app_cliente_64bits.apk `
+  --patch frontend/taxi_client/dist/armv7_3024/patch.zip `
+  --patch-version 1.0.24-p1 --target-version-code 3024 --patch-abi armeabi-v7a
 ```
 
+`publicar_ota.py` copia cada zip a `static/patch_<app>_<versionCodeBase>.zip`
+(nombre unico por base, asi no pisa los demas; se puede forzar con
+`--patch-name`), anota `abi`/`md5`/`target_version_code` y **poda** las entradas
+del manifiesto cuyo archivo falta, cuyo md5 ya no coincide o que no llevan a la
+version publicada.
+
 El parche se aplica en el **siguiente arranque en frio**, nunca en caliente, y
-se revierte solo si la app no arranca.
+se revierte solo si la app no arranca. Si no existe parche para el APK base
+instalado (o el salto es de mas de 3 versiones), la app recibe el APK completo.
 
 ### Probar OTA contra un servidor local
 

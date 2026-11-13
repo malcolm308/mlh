@@ -24,8 +24,8 @@ El estado vive en `static/ota_client.json` y `static/ota_driver.json`. Formato:
     {"version": "1.0.0", "version_code": 1}
   ],
   "patches": [
-    {"version": "1.0.2-p1", "target_version_code": 2,
-     "file": "patch_latest.zip", "md5": "..."}
+    {"version": "1.0.2-p1", "target_version_code": 2, "abi": "arm64-v8a",
+     "file": "patch_cliente_2.zip", "md5": "..."}
   ]
 }
 ```
@@ -33,17 +33,21 @@ El estado vive en `static/ota_client.json` y `static/ota_driver.json`. Formato:
 Reglas (estrictas):
 
 * app == latest                       -> `none`
-* app == release inmediatamente anterior:
+* app hasta `_MAX_PATCH_DISTANCE` versiones por detras:
     * si hay un parche compilado para SU `versionCode` -> `patch`
     * si no hay parche para ese APK base             -> `apk`
-* app 2+ versiones por detras          -> `apk`
+* app mas atras que `_MAX_PATCH_DISTANCE`           -> `apk`
 * version desconocida y mas nueva que `latest` -> `none` (no degradar)
-* version desconocida y anterior       -> `apk`
+* version desconocida y anterior       -> `apk` (salvo parche exacto)
 
 El parche se ata al `versionCode` del APK instalado (`target_version_code`).
 Asi un parche construido para la 1.0.1 nunca se aplica sobre la 1.0.0: esa
 instalacion no tiene ni siquiera el plugin nativo de parches y recibiria el
 APK completo.
+
+Un parche solo se sirve si lleva a la version ACTUAL (`version` empieza por
+`latest.version + '-'`). Si se sirviera uno viejo, la app quedaria marcada
+como parcheada en una version intermedia y no volveria a actualizarse.
 """
 
 from __future__ import annotations
@@ -82,6 +86,17 @@ _DEFAULT_APKS = {
     "client": "app_latest.apk",
     "driver": "app_chofer_latest.apk",
 }
+
+# APK por arquitectura. Los telefonos de 32 bits rechazan el de 64 con
+# "paquete no valido", asi que el endpoint tiene que devolver el correcto.
+_APKS_POR_ABI = {
+    "client": {"32": "app_cliente_32bits.apk", "64": "app_cliente_64bits.apk"},
+    "driver": {"32": "app_chofer_32bits.apk", "64": "app_chofer_64bits.apk"},
+}
+
+# Cuantas versiones atras se acepta un parche. Mas atras, APK completo: los
+# cambios nativos entre versiones lejanas pueden romper el parche.
+_MAX_PATCH_DISTANCE = 3
 
 
 class VersionRequest(BaseModel):
@@ -134,7 +149,7 @@ def _base_publica(request: Request) -> str:
 
 def _url_estatica(request: Request, archivo: str) -> str:
     # quote() protege nombres con espacios aunque los manifiestos solo usen
-    # nombres ASCII simples ("app_latest.apk", "patch_latest.zip").
+    # nombres ASCII simples ("app_cliente_64bits.apk", "patch_cliente_4024.zip").
     return f"{_base_publica(request)}/static/{quote(archivo)}"
 
 
@@ -200,6 +215,85 @@ def _leer_manifiesto(app_key: str) -> dict[str, Any]:
     }
 
 
+def _abi_es_32(abi: str | None, codigo: int | None) -> bool:
+    """`true` si el APK instalado es de 32 bits.
+
+    La app manda su ABI cuando puede. Si no, se deduce del `versionCode`:
+    `flutter build apk --split-per-abi` desplaza armeabi-v7a +1000 (3xxx) y
+    arm64-v8a +2000 (4xxx) sobre la base 2xxx.
+    """
+    abi_norm = (abi or "").strip().lower()
+    if abi_norm:
+        return "armeabi" in abi_norm or "armv7" in abi_norm
+    return codigo is not None and 3000 <= codigo < 4000
+
+
+def _apk_file(app_key: str, codigo: int | None, abi: str | None,
+              por_defecto: str) -> str:
+    if app_key not in _APKS_POR_ABI:
+        return por_defecto
+    return _APKS_POR_ABI[app_key]["32" if _abi_es_32(abi, codigo) else "64"]
+
+
+def _buscar_parche(manifiesto: dict, codigo_base: int | None,
+                   version_ultima: str, abi: str | None) -> dict | None:
+    """Parche compatible con el APK instalado, o `None`.
+
+    Exige el `versionCode` exacto (un parche solo sirve para el APK base con
+    el que se compilo), que lleve a la version actual y, si el manifiesto lo
+    declara, el mismo ABI del telefono.
+    """
+    if not codigo_base:
+        return None
+    abi_norm = (abi or "").strip().lower()
+    for parche in manifiesto.get("patches") or []:
+        if not isinstance(parche, dict) or not parche.get("file"):
+            continue
+        try:
+            if int(parche.get("target_version_code", -1)) != codigo_base:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if not str(parche.get("version") or "").startswith(
+                version_ultima + "-"):
+            continue
+        parche_abi = str(parche.get("abi") or "").strip().lower()
+        if parche_abi and abi_norm and parche_abi != abi_norm:
+            continue
+        return parche
+    return None
+
+
+def _respuesta_parche(request: Request, comun: dict, parche: dict) -> dict:
+    patch_url = _url_estatica(request, str(parche["file"]))
+    destino = int(parche.get("target_version_code") or 0)
+    return {
+        **comun,
+        "tipo_actualizacion": "patch",
+        "url": patch_url,
+        "patch_url": patch_url,
+        "patch_version": str(parche.get("version") or ""),
+        "patch_md5": str(parche.get("md5") or ""),
+        "target_version_code": destino,
+        "patch": {
+            "version": str(parche.get("version") or ""),
+            "patch_url": patch_url,
+            "md5": str(parche.get("md5") or ""),
+            "target_version_code": destino,
+        },
+        "mensaje": "Parche ligero disponible. Se aplicara al reabrir.",
+    }
+
+
+def _respuesta_apk(comun: dict, mensaje: str) -> dict:
+    return {
+        **comun,
+        "tipo_actualizacion": "apk",
+        "url": comun["url_apk"],
+        "mensaje": mensaje,
+    }
+
+
 def _respuesta_version(
     request: Request,
     app_key: str,
@@ -214,8 +308,7 @@ def _respuesta_version(
     latest = manifiesto.get("latest") or {}
     version_ultima = str(latest.get("version", "1.0.0"))
     codigo_ultima = int(latest.get("version_code", 1))
-    apk_file = str(latest.get("apk") or _DEFAULT_APKS[app_key])
-    url_apk = _url_estatica(request, apk_file)
+    apk_manifiesto = str(latest.get("apk") or _DEFAULT_APKS[app_key])
 
     releases = [
         r
@@ -235,6 +328,15 @@ def _respuesta_version(
             indice = i
             break
 
+    # `versionCode` instalado: lo manda la app; si no, se toma del historial.
+    codigo_instalado = version_codigo
+    if codigo_instalado is None and indice is not None:
+        codigo_instalado = int(releases[indice].get("version_code", 0) or 0)
+
+    # APK completo segun el ABI. Los telefonos de 32 bits rechazan el de 64.
+    apk_file = _apk_file(app_key, codigo_instalado, abi, apk_manifiesto)
+    url_apk = _url_estatica(request, apk_file)
+
     comun = {
         "app": app_key,
         "version_actual": version_actual_limpia,
@@ -252,56 +354,22 @@ def _respuesta_version(
     if indice is None and clave_actual > _clave_version(version_ultima):
         return {**comun, "tipo_actualizacion": "none", "url": None}
 
-    # Exactamente un salto: solo se puede parchear si el APK base tiene el
-    # plugin y existe un parche construido para SU versionCode.
-    if indice == 1:
-        codigo_base = version_codigo
-        if codigo_base is None:
-            codigo_base = int(releases[1].get("version_code", 0) or 0)
-        parche = next(
-            (
-                p
-                for p in (manifiesto.get("patches") or [])
-                if isinstance(p, dict)
-                and int(p.get("target_version_code", -1)) == codigo_base
-                and p.get("file")
-            ),
-            None,
-        )
+    # Parche ligero si existe uno compilado para el `versionCode` EXACTO del
+    # APK instalado y la app no se salto demasiadas versiones. El parche se
+    # ata al codigo base, asi que cada ABI (3xxx/4xxx) recibe el suyo.
+    if indice is None or indice <= _MAX_PATCH_DISTANCE:
+        parche = _buscar_parche(
+            manifiesto, codigo_instalado, version_ultima, abi)
         if parche is not None:
-            patch_url = _url_estatica(request, str(parche["file"]))
-            return {
-                **comun,
-                "tipo_actualizacion": "patch",
-                "url": patch_url,
-                "patch_url": patch_url,
-                "patch_version": str(parche.get("version") or ""),
-                "patch_md5": str(parche.get("md5") or ""),
-                "target_version_code": codigo_base,
-                "patch": {
-                    "version": str(parche.get("version") or ""),
-                    "patch_url": patch_url,
-                    "md5": str(parche.get("md5") or ""),
-                    "target_version_code": codigo_base,
-                },
-                "mensaje": "Parche ligero disponible. Se aplicara al reabrir.",
-            }
-        # Hay un salto de una version pero no hay parche para este APK base
-        # (por ejemplo, una instalacion anterior al sistema OTA): APK completo.
-        return {
-            **comun,
-            "tipo_actualizacion": "apk",
-            "url": url_apk,
-            "mensaje": "No hay parche para esta instalacion. Instala el APK.",
-        }
+            return _respuesta_parche(request, comun, parche)
 
-    # Dos o mas saltos, o version desconocida mas antigua: APK completo.
-    return {
-        **comun,
-        "tipo_actualizacion": "apk",
-        "url": url_apk,
-        "mensaje": "Tu version esta demasiado atrasada. Instala el APK.",
-    }
+    # Sin parche compatible (instalacion anterior al sistema OTA) o salto
+    # demasiado grande: APK completo.
+    if indice is not None and indice > _MAX_PATCH_DISTANCE:
+        return _respuesta_apk(
+            comun, "Tu version esta demasiado atrasada. Instala el APK.")
+    return _respuesta_apk(
+        comun, "No hay parche para esta instalacion. Instala el APK.")
 
 
 # --------------------------------------------------------------------------
@@ -368,14 +436,13 @@ def app_version_get(
     abi: str | None = Query(None),
 ) -> dict[str, Any]:
     """Consulta de version. Ver las reglas en el docstring del modulo."""
-    del abi  # reservado: hoy el cliente no necesita distinguir ABI aqui
     response.headers["Cache-Control"] = "no-store"
     return _respuesta_version(
         request=request,
         app_key=_normalizar_app(app),
         version_actual=version_actual,
         version_codigo=version_codigo,
-        abi=None,
+        abi=abi,
     )
 
 

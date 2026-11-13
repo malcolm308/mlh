@@ -29,131 +29,37 @@
   ],
   "patches": [
     {
-      "version": "1.0.32-p1",
-      "target_version_code": 4031,
-      "file": "patch_chofer_latest.zip",
-      "md5": "264e4666eb639a3dd3c4b45f652e4958",
-      "published_at": "2026-11-12T01:07:19+00:00"
+      "version": "1.0.34-p1",
+      "target_version_code": 4038,
+      "file": "patch_chofer_4038.zip",
+      "md5": "10a94704638709837ccc19eae483fe10",
+      "abi": "arm64-v8a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     },
     {
-      "version": "1.0.26-p1",
-      "target_version_code": 4030,
-      "file": "patch_chofer_4030.zip",
-      "md5": "22f7f4267be4e232799a7254c51be14f",
-      "published_at": "2026-11-11T02:05:33+00:00"
+      "version": "1.0.34-p1",
+      "target_version_code": 3038,
+      "file": "patch_chofer_3038.zip",
+      "md5": "3b01faa8b97f8b63a6f7555d43df11c0",
+      "abi": "armeabi-v7a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     },
     {
-      "version": "1.0.22-p1",
-      "target_version_code": 4026,
-      "file": "patch_chofer_latest.zip",
-      "md5": "c20cfc2fb97553f4c2bf5a3be7b3eabf",
-      "published_at": "2026-11-10T23:39:36+00:00"
+      "version": "1.0.34-p1",
+      "target_version_code": 4037,
+      "file": "patch_chofer_4037.zip",
+      "md5": "75aaf2399c87e9ffb6b147bb2dd55a21",
+      "abi": "arm64-v8a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     },
     {
-      "version": "1.0.21-p1",
-      "target_version_code": 4025,
-      "file": "patch_chofer_latest.zip",
-      "md5": "325f7c0cd8ffe32407666b34e0ff79c4",
-      "published_at": "2026-11-10T22:44:38+00:00"
-    },
-    {
-      "version": "1.0.20-p1",
-      "target_version_code": 4024,
-      "file": "patch_chofer_latest.zip",
-      "md5": "d3ca71b2654aac1a1d2e0807a1f7d5f0",
-      "published_at": "2026-11-10T17:13:04+00:00"
-    },
-    {
-      "version": "1.0.19-p1",
-      "target_version_code": 4023,
-      "file": "patch_chofer_latest.zip",
-      "md5": "c97037870d7a016536c6d2548b89667e",
-      "published_at": "2026-11-10T16:19:40+00:00"
-    },
-    {
-      "version": "1.0.18-p1",
-      "target_version_code": 4022,
-      "file": "patch_chofer_latest.zip",
-      "md5": "5d85d4ebd4e6fcc340e3dde9e7bbcbd8",
-      "published_at": "2026-11-10T15:19:51+00:00"
-    },
-    {
-      "version": "1.0.17-p1",
-      "target_version_code": 4021,
-      "file": "patch_chofer_latest.zip",
-      "md5": "00b0176291158603c2418512036a079a",
-      "published_at": "2026-11-10T15:07:13+00:00"
-    },
-    {
-      "version": "1.0.16-p1",
-      "target_version_code": 4020,
-      "file": "patch_chofer_latest.zip",
-      "md5": "dfbc1948ab1e9496f9b17f2e601ed73d",
-      "published_at": "2026-11-10T14:53:20+00:00"
-    },
-    {
-      "version": "1.0.15-p1",
-      "target_version_code": 4019,
-      "file": "patch_chofer_latest.zip",
-      "md5": "a5aa57000c62e1177a031a158c92d99b",
-      "published_at": "2026-11-10T14:47:40+00:00"
-    },
-    {
-      "version": "1.0.14-p1",
-      "target_version_code": 4018,
-      "file": "patch_chofer_latest.zip",
-      "md5": "a60e9039f127bc40ac4e8333ac261bdf",
-      "published_at": "2026-11-10T13:54:08+00:00"
-    },
-    {
-      "version": "1.0.13-p1",
-      "target_version_code": 4017,
-      "file": "patch_chofer_latest.zip",
-      "md5": "83fb9baf7dceceafc50e1d80bb6ebe8a",
-      "published_at": "2026-11-10T13:30:14+00:00"
-    },
-    {
-      "version": "1.0.12-p1",
-      "target_version_code": 4016,
-      "file": "patch_chofer_latest.zip",
-      "md5": "a103f71fb709d90c2b52006ed39abe15",
-      "published_at": "2026-11-10T04:08:18+00:00"
-    },
-    {
-      "version": "1.0.11-p1",
-      "target_version_code": 4015,
-      "file": "patch_chofer_latest.zip",
-      "md5": "9154a05f5baf9efb642b50c65bdb5406",
-      "published_at": "2026-11-10T02:17:07+00:00"
-    },
-    {
-      "version": "1.0.10-p1",
-      "target_version_code": 4014,
-      "file": "patch_chofer_latest.zip",
-      "md5": "7591b2dfc43315d5b46c89636c7353f0",
-      "published_at": "2026-11-09T21:24:38+00:00"
-    },
-    {
-      "version": "1.0.9-p1",
-      "target_version_code": 4013,
-      "file": "patch_chofer_latest.zip",
-      "md5": "d90bc3ed2a7fb086fb0a8ed6b365a687",
-      "published_at": "2026-11-09T19:51:24+00:00"
-    },
-    {
-      "version": "1.0.6-p1",
-      "target_version_code": 2006,
-      "file": "patch_chofer_latest.zip",
-      "md5": "07a35f3545e645d51488f97ee0a42980",
-      "published_at": "2026-11-09T12:57:04+00:00"
-    },
-    {
-      "version": "1.0.5-p1",
-      "target_version_code": 2005,
-      "file": "patch_chofer_latest.zip",
-      "md5": "3efbe90b076f2b045e6f4d334c639ad8",
-      "published_at": "2026-11-08T12:58:19+00:00"
+      "version": "1.0.34-p1",
+      "target_version_code": 3037,
+      "file": "patch_chofer_3037.zip",
+      "md5": "e6a5f184c0b2bee539106877a72bf359",
+      "abi": "armeabi-v7a",
+      "published_at": "2026-11-13T17:11:12+00:00"
     }
   ],
-  "updated_at": "2026-11-13T16:39:34+00:00"
+  "updated_at": "2026-11-13T17:11:12+00:00"
 }
