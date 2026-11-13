@@ -335,7 +335,7 @@ Regla de decision (`routers/app_updates.py`, `_MAX_PATCH_DISTANCE = 3`):
 Un parche solo sirve para el APK base con el que se compilo
 (`--target-version-code`), asi que las instalaciones anteriores al sistema OTA
 siempre reciben el APK completo. Un parche tampoco se sirve si su `version` no
-empieza por la version actual (`1.0.24-p1`): uno viejo dejaria la app marcada
+empieza por la version actual (`1.0.25-p1`): uno viejo dejaria la app marcada
 como parcheada en una version intermedia y no volveria a actualizarse.
 
 El APK de respaldo se elige por ABI. Los telefonos de 32 bits rechazan el APK
