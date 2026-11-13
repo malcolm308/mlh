@@ -938,6 +938,16 @@ def _a_json(promo: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "comision_porcentaje": float(promo["comision_porcentaje"]),
         "comision_porcentaje_texto": _porcentaje(promo["comision_porcentaje"]),
+        # La comision de la billetera y el recargo por transferencia tienen que
+        # viajar en esta respuesta: el panel los edita y, si no llegaran, el
+        # formulario los pintaria en 0 y al guardar borraria el 10 % del
+        # recargo o la tasa de billetera vigente.
+        "comision_billetera": float(promo["comision_billetera"]),
+        "comision_billetera_texto": _porcentaje(promo["comision_billetera"]),
+        "comision_billetera_maxima": float(COMISION_BILLETERA_MAXIMA),
+        "recargo_transferencia": float(promo["recargo_transferencia"]),
+        "recargo_transferencia_texto":
+            _porcentaje(promo["recargo_transferencia"]),
         "bono_chofer_activo": promo["bono_chofer_activo"],
         "bono_chofer_monto": float(promo["bono_chofer_monto"]),
         "bono_chofer_viajes_requeridos": promo["bono_chofer_viajes_requeridos"],

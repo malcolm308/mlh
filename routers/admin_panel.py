@@ -1438,6 +1438,8 @@ async def forzar_fin(
         "distancia_km": result.get("distance_km"),
         "duracion_segundos": result.get("duration_secs"),
         "descuento_cliente": result.get("descuento_cliente"),
+        "descuento_referido": result.get("descuento_referido"),
+        "recargo_reintento": result.get("recargo_reintento"),
         "forzado_por": admin.get("email"),
         "message": "Viaje completado manualmente. Precio calculado por el backend.",
         "viaje": _json_trip(result),
