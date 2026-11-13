@@ -312,9 +312,10 @@ actualizan solas contra el backend.
 - `static/patch_cliente_<versionCode>.zip` / `static/patch_chofer_<versionCode>.zip`
   — parches ligeros (~2.8-3.5 MB). Hay uno por **APK base** y ABI, con nombre
   unico, para que publicar un parche nuevo no pise al de otra version:
-  `patch_cliente_4024.zip` (64 bits, base 4024), `patch_cliente_3024.zip`
-  (32 bits), `patch_cliente_4023.zip`, `patch_cliente_3023.zip` y los
-  equivalentes `patch_chofer_4038/3038/4037/3037.zip`.
+  hoy hay cuatro por app — `patch_cliente_4025.zip` (1.0.24 de 64 bits),
+  `patch_cliente_3025.zip` (1.0.24 de 32 bits), `patch_cliente_4024.zip`
+  (1.0.23 de 64 bits) y `patch_cliente_3024.zip` (1.0.23 de 32 bits); los
+  equivalentes del chofer son `patch_chofer_4039/3039/4038/3038.zip`.
 - `static/ota_client.json` / `static/ota_driver.json` — manifiestos que dicen
   cual es la ultima version, el historial de releases y los parches (con su
   `abi`, `md5` y `target_version_code`).
@@ -396,10 +397,13 @@ python scripts/publicar_ota.py --app client --version 1.0.22 --version-code 4023
 ```
 
 Haz lo mismo con `taxi_driver` y `app_chofer_64bits.apk` /
-`app_chofer_32bits.apk` (`--app driver`). Recuerda refrescar tambien las copias
-legacy de 64 bits (`app_cliente_v2.apk`, `app_latest.apk`,
-`app_chofer_latest.apk`) para que los enlaces viejos sigan sirviendo la version
-nueva.
+`app_chofer_32bits.apk` (`--app driver`). Las copias legacy de 64 bits
+(`app_cliente_v2.apk`, `app_latest.apk`, `app_chofer_latest.apk`) se pueden
+dejar como estan: un enlace viejo instala esa version y la app se actualiza
+sola con el parche en el primer arranque (por eso conviene tener parche para
+la base anterior). Refrescarlas solo sirve para que el enlace viejo entregue
+directamente el build nuevo, a costa de ~100 MB mas en el repositorio por
+release.
 
 El mensaje de "Compartir App" lleva los dos enlaces (`appDownloadUrl` y
 `appDownloadUrl32` / `driverDownloadUrl` y `driverDownloadUrl32`, en
@@ -410,33 +414,33 @@ El mensaje de "Compartir App" lleva los dos enlaces (`appDownloadUrl` y
 El parche se genera **con el mismo Flutter** y desde el APK ya compilado de la
 version nueva. Hay que generar **uno por cada APK base y ABI** que se quiera
 poder parchear (ver `_MAX_PATCH_DISTANCE`): como minimo la version inmediatamente
-anterior (`4024` y `3024`), y opcionalmente una o dos mas atras.
+anterior (`4025` y `3025` para la 1.0.24), y opcionalmente una o dos mas atras.
 
 ```powershell
 cd E:\Taxi_Rapid\frontend\taxi_client
 dart run flutter_patcher:pack `
   --apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
-  --version 1.0.24-p1 --target-version-code 4024 --abi arm64-v8a --out dist\arm64_4024
+  --version 1.0.25-p1 --target-version-code 4025 --abi arm64-v8a --out dist\v125_arm64_4025
 dart run flutter_patcher:pack `
   --apk build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk `
-  --version 1.0.24-p1 --target-version-code 3024 --abi armeabi-v7a --out dist\armv7_3024
-# repite con --target-version-code 4023/3023 (1.0.22) si quieres cubrir otro salto
+  --version 1.0.25-p1 --target-version-code 3025 --abi armeabi-v7a --out dist\v125_armv7_3025
+# repite con --target-version-code 4024/3024 (1.0.23) si quieres cubrir otro salto
 # imprime el md5 de cada zip
 
 cd E:\Taxi_Rapid
-python scripts/publicar_ota.py --app client --version 1.0.24 --version-code 4025 `
+python scripts/publicar_ota.py --app client --version 1.0.25 --version-code 4026 `
   --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
   --apk-name app_cliente_64bits.apk `
-  --patch frontend/taxi_client/dist/arm64_4024/patch.zip `
-  --patch-version 1.0.24-p1 --target-version-code 4024 --patch-abi arm64-v8a
-python scripts/publicar_ota.py --app client --version 1.0.24 --version-code 4025 `
+  --patch frontend/taxi_client/dist/v125_arm64_4025/patch.zip `
+  --patch-version 1.0.25-p1 --target-version-code 4025 --patch-abi arm64-v8a
+python scripts/publicar_ota.py --app client --version 1.0.25 --version-code 4026 `
   --apk frontend/taxi_client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk `
   --apk-name app_cliente_64bits.apk `
-  --patch frontend/taxi_client/dist/armv7_3024/patch.zip `
-  --patch-version 1.0.24-p1 --target-version-code 3024 --patch-abi armeabi-v7a
+  --patch frontend/taxi_client/dist/v125_armv7_3025/patch.zip `
+  --patch-version 1.0.25-p1 --target-version-code 3025 --patch-abi armeabi-v7a
 ```
 
-`publicar_ota.py` copia cada zip a `static/patch_<app>_<versionCodeBase>.zip`
+`publicar_ota.py` copia cada zip a `static/patch_<cliente|chofer>_<versionCodeBase>.zip`
 (nombre unico por base, asi no pisa los demas; se puede forzar con
 `--patch-name`), anota `abi`/`md5`/`target_version_code` y **poda** las entradas
 del manifiesto cuyo archivo falta, cuyo md5 ya no coincide o que no llevan a la

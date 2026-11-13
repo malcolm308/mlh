@@ -42,6 +42,9 @@ APK_DESTINO = {
     "driver": "app_chofer_latest.apk",
 }
 
+# Los archivos usan el nombre en espanol (coherente con los APK publicados).
+NOMBRE_APP = {"client": "cliente", "driver": "chofer"}
+
 # Cuantas versiones se conservan en el historial. Con 2 basta para distinguir
 # "un salto" de "muy atrasada"; se guardan 5 por comodidad al diagnosticar.
 MAX_RELEASES = 5
@@ -137,7 +140,8 @@ def main() -> None:
             if not nombre_parche.lower().endswith(".zip"):
                 raise SystemExit("--patch-name debe terminar en .zip")
         else:
-            nombre_parche = f"patch_{args.app}_{args.target_version_code}.zip"
+            nombre_parche = (
+                f"patch_{NOMBRE_APP[args.app]}_{args.target_version_code}.zip")
         destino_parche = STATIC_DIR / nombre_parche
         shutil.copyfile(args.patch, destino_parche)
         md5 = _md5(destino_parche)

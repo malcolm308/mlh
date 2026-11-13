@@ -1993,9 +1993,13 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                         (str(updated_trip.get("driver_id")),))
                     total_completados = int(cur.fetchone()[0] or 0)
 
+                    # `>= 1` en vez de `== 1`: si el abono fallo (Postgres o
+                    # Mongo caidos) el bono se reintenta en el siguiente viaje
+                    # completado. El flag `referido_recompensado` lo hace
+                    # idempotente: solo se marca tras acreditar de verdad.
                     if (driver_doc.get("referido_por")
                             and not driver_doc.get("referido_recompensado")
-                            and total_completados == 1):
+                            and total_completados >= 1):
                         from routers import billetera
 
                         nombre = " ".join(filter(None, [

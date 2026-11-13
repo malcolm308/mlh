@@ -1,11 +1,15 @@
 {
   "app": "client",
   "latest": {
-    "version": "1.0.24",
-    "version_code": 4025,
+    "version": "1.0.25",
+    "version_code": 4026,
     "apk": "app_cliente_64bits.apk"
   },
   "releases": [
+    {
+      "version": "1.0.25",
+      "version_code": 4026
+    },
     {
       "version": "1.0.24",
       "version_code": 4025
@@ -21,45 +25,41 @@
     {
       "version": "1.0.21",
       "version_code": 4022
-    },
-    {
-      "version": "1.0.17",
-      "version_code": 4018
     }
   ],
   "patches": [
     {
-      "version": "1.0.24-p1",
-      "target_version_code": 4024,
-      "file": "patch_cliente_4024.zip",
-      "md5": "016acfa3cf7933203d1af4cad060478c",
-      "abi": "arm64-v8a",
-      "published_at": "2026-11-13T17:11:12+00:00"
-    },
-    {
-      "version": "1.0.24-p1",
+      "version": "1.0.25-p1",
       "target_version_code": 3024,
       "file": "patch_cliente_3024.zip",
-      "md5": "e812f5ed9e7c39b26ad7b0a79c32eab1",
-      "abi": "armeabi-v7a",
-      "published_at": "2026-11-13T17:11:12+00:00"
+      "md5": "08e9ae9cd9efbc65406abf6950c492d6",
+      "published_at": "2026-11-13T17:31:56+00:00",
+      "abi": "armeabi-v7a"
     },
     {
-      "version": "1.0.24-p1",
-      "target_version_code": 4023,
-      "file": "patch_cliente_4023.zip",
-      "md5": "e1fb15c7eacbfdedb960f5d19f6a8892",
-      "abi": "arm64-v8a",
-      "published_at": "2026-11-13T17:11:12+00:00"
+      "version": "1.0.25-p1",
+      "target_version_code": 4024,
+      "file": "patch_cliente_4024.zip",
+      "md5": "e55ae08db324e3602a3ebd75dcb7c2fc",
+      "published_at": "2026-11-13T17:31:55+00:00",
+      "abi": "arm64-v8a"
     },
     {
-      "version": "1.0.24-p1",
-      "target_version_code": 3023,
-      "file": "patch_cliente_3023.zip",
-      "md5": "a7069e75db2de2c3638dd8c439520702",
-      "abi": "armeabi-v7a",
-      "published_at": "2026-11-13T17:11:12+00:00"
+      "version": "1.0.25-p1",
+      "target_version_code": 3025,
+      "file": "patch_cliente_3025.zip",
+      "md5": "d3817a465433cd8177a61f6838465ed8",
+      "published_at": "2026-11-13T17:31:55+00:00",
+      "abi": "armeabi-v7a"
+    },
+    {
+      "version": "1.0.25-p1",
+      "target_version_code": 4025,
+      "file": "patch_cliente_4025.zip",
+      "md5": "f93ed564187c532b8b2619a736ade772",
+      "published_at": "2026-11-13T17:31:55+00:00",
+      "abi": "arm64-v8a"
     }
   ],
-  "updated_at": "2026-11-13T17:11:12+00:00"
+  "updated_at": "2026-11-13T17:31:56+00:00"
 }
