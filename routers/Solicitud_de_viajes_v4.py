@@ -544,6 +544,10 @@ def init_db():
             -- aparte del de promocion porque no son acumulables y la comision
             -- cobrada debe poder auditarse despues.
             ADD COLUMN IF NOT EXISTS descuento_referido NUMERIC(12,2) DEFAULT 0,
+            -- Descuento automatico del 10 % para clientes con 0 viajes. Va
+            -- separado para poder auditarlo; quien lo absorbe lo decide la
+            -- regla hibrida de comisiones.
+            ADD COLUMN IF NOT EXISTS descuento_primer_viaje NUMERIC(12,2) DEFAULT 0,
             ADD COLUMN IF NOT EXISTS comision_nominal NUMERIC(12,2),
             ADD COLUMN IF NOT EXISTS hora_llegada TIMESTAMP,
             ADD COLUMN IF NOT EXISTS espera_secs INTEGER DEFAULT 0,
@@ -932,12 +936,38 @@ def _cortesia_minutos_actual() -> float:
 def calculate_estimated_price(distance_km: float, vehicle_type: str) -> float:
     return _price_breakdown(distance_km, vehicle_type)["precio_estimado"]
 
+
+def _cliente_es_nuevo(client_id: Optional[str]) -> bool:
+    """True si el cliente existe y todavia no ha completado ningun viaje.
+
+    El contador `viajes_completados` se incrementa al cerrar el viaje. Antes
+    del primero vale 0 (o no existe), que es justo cuando aplica el 10 %.
+    """
+    if not client_id:
+        return False
+    oid = to_mongo_id(client_id)
+    if not oid:
+        return False
+    doc = cliente_coleccion.find_one({"_id": oid})
+    if not doc:
+        return False
+    return int(doc.get("viajes_completados", 0) or 0) == 0
+
+
+def _descuento_primer_viaje(precio: float, client_id: Optional[str]) -> Decimal:
+    if not _cliente_es_nuevo(client_id):
+        return Decimal("0")
+    return (Decimal(str(precio)) * PRIMER_VIAJE_DISCOUNT_RATE).quantize(
+        CENT, rounding=ROUND_HALF_UP)
+
+
 def estimate_trip_price(
     request_lat: float,
     request_lng: float,
     dropoff_lat: float,
     dropoff_lng: float,
     vehicle_type: str = "basico",
+    client_id: Optional[str] = None,
 ) -> dict:
     """Calcula la tarifa estimada sin crear el viaje (misma distancia y formula que create_trip)."""
     distance_km = distancia_por_calle_km(
@@ -947,9 +977,22 @@ def estimate_trip_price(
         dropoff_lat, dropoff_lng)
     promo = leer_promocion()
     recargo_rate = float(promo["recargo_transferencia"])
+
+    original = float(desglose["precio_estimado"])
+    descuento = _descuento_primer_viaje(original, client_id)
+    final = float((Decimal(str(original)) - descuento).quantize(
+        CENT, rounding=ROUND_HALF_UP))
+
+    desglose["precio_original"] = round(original, 2)
+    desglose["precio_final"] = round(final, 2)
+    desglose["precio_estimado"] = round(final, 2)
+    desglose["descuento_aplicado"] = descuento > 0
+    desglose["descuento_primer_viaje"] = float(descuento)
+    desglose["descuento_porcentaje"] = (
+        float(PRIMER_VIAJE_DISCOUNT_RATE) if descuento > 0 else 0.0)
     desglose["recargo_transferencia_porcentaje"] = recargo_rate
     desglose["precio_transferencia"] = round(
-        float(desglose["precio_estimado"]) * (1 + recargo_rate), 2)
+        final * (1 + recargo_rate), 2)
     desglose["comision_billetera_porcentaje"] = float(
         promo["comision_billetera"])
     return desglose
@@ -960,6 +1003,7 @@ def estimate_all_vehicles(
     request_lng: float,
     dropoff_lat: float,
     dropoff_lng: float,
+    client_id: Optional[str] = None,
 ) -> dict:
     """Calcula precios para los 4 vehículos en una sola llamada.
     
@@ -979,13 +1023,24 @@ def estimate_all_vehicles(
     comision_billetera = float(promo["comision_billetera"])
 
     vehicles = []
+    descuento_global = Decimal("0")
     for vehicle_type in ["moto", "triciclo", "basico", "confort"]:
         breakdown = _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
+        original = float(breakdown["precio_estimado"])
+        descuento = _descuento_primer_viaje(original, client_id)
+        final = float((Decimal(str(original)) - descuento).quantize(
+            CENT, rounding=ROUND_HALF_UP))
+        descuento_global = max(descuento_global, descuento)
         vehicles.append({
             "vehicle_type": vehicle_type,
-            "price": breakdown["precio_estimado"],
-            "price_transferencia": round(
-                float(breakdown["precio_estimado"]) * (1 + recargo_rate), 2),
+            "price": round(final, 2),
+            "precio_original": round(original, 2),
+            "precio_final": round(final, 2),
+            "descuento_aplicado": descuento > 0,
+            "descuento_primer_viaje": float(descuento),
+            "descuento_porcentaje": (
+                float(PRIMER_VIAJE_DISCOUNT_RATE) if descuento > 0 else 0.0),
+            "price_transferencia": round(final * (1 + recargo_rate), 2),
             "base_fare": breakdown["base_fare"],
             "distance_fare": breakdown["distance_fare"],
             "time_fare": breakdown["time_fare"],
@@ -999,6 +1054,10 @@ def estimate_all_vehicles(
         "payment_method": "Efectivo",
         "recargo_transferencia": recargo_rate,
         "comision_billetera": comision_billetera,
+        "descuento_aplicado": descuento_global > 0,
+        "descuento_primer_viaje": float(descuento_global),
+        "descuento_porcentaje": (
+            float(PRIMER_VIAJE_DISCOUNT_RATE) if descuento_global > 0 else 0.0),
         "vehicles": vehicles,
     }
 # ===================== TRIPS =====================
@@ -1012,6 +1071,12 @@ RETRY_SURCHARGE_RATE = float(os.getenv("RETRY_SURCHARGE_RATE", "0.10"))
 # No es acumulable con una promocion activa (si `descuento_cliente` > 0 no se
 # aplica). Se calcula con Decimal y se redondea a centimos.
 REFERRAL_DISCOUNT_RATE = Decimal("0.10")
+
+# Descuento automatico del 10 % para clientes con 0 viajes completados. No se
+# acumula con promocion ni con referidos. Quien lo absorbe lo decide la regla
+# hibrida de `liquidar_comision` (plataforma si la comision supera el
+# descuento; chofer si la comision es cero o menor). No hay subsidio aparte.
+PRIMER_VIAJE_DISCOUNT_RATE = Decimal("0.10")
 
 def create_trip(
     client_id: str,
@@ -1075,6 +1140,18 @@ def create_trip(
             # Recargo por transferencia: SIEMPRE lo calcula el backend. El
             # 10% se configura en el panel; aqui solo se aplica.
             promo = leer_promocion()
+
+            # Descuento automatico del primer viaje: el mismo 10 % que muestra
+            # la cotizacion, para que la oferta al chofer y la fila del viaje
+            # guarden lo que el cliente realmente va a pagar. Se calcula sobre
+            # la tarifa + recargo por reintento, sin recargo de transferencia.
+            descuento_primer_viaje = _descuento_primer_viaje(
+                precio_base, client_id)
+            if descuento_primer_viaje > 0:
+                precio_base = float(
+                    (Decimal(str(precio_base)) - descuento_primer_viaje)
+                    .quantize(CENT, rounding=ROUND_HALF_UP))
+
             recargo = 0.0
             if payment_method == "Transferencia":
                 recargo = float(
@@ -1134,6 +1211,10 @@ def create_trip(
                 "status": initial_status,
                 "precio_estimado": precio_estimado,
                 "precio_base_estimado": float(precio_base),
+                "precio_original": round(
+                    float(precio_base) + float(descuento_primer_viaje), 2),
+                "descuento_aplicado": descuento_primer_viaje > 0,
+                "descuento_primer_viaje": float(descuento_primer_viaje),
                 "recargo_transferencia": recargo,
                 "recargo_reintento": recargo_reintento,
                 "is_retry": is_retry,
@@ -1149,6 +1230,15 @@ def create_trip(
             raise e
         finally:
             cur.close()
+
+
+def _con_descuento_aplicado(row: dict) -> dict:
+    """Agrega `descuento_aplicado` al viaje segun los descuentos guardados."""
+    total = (float(row.get("descuento_cliente") or 0)
+             + float(row.get("descuento_referido") or 0)
+             + float(row.get("descuento_primer_viaje") or 0))
+    row["descuento_aplicado"] = total > 0
+    return row
 
 
 def get_trip(trip_id: str) -> Optional[dict]:
@@ -1170,7 +1260,8 @@ def get_trip(trip_id: str) -> Optional[dict]:
                 distance_km, duration_secs,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
-                descuento_cliente, descuento_referido, comision_nominal,
+                descuento_cliente, descuento_referido, descuento_primer_viaje,
+                comision_nominal,
                 comision_cobrada, recargo_transferencia, recargo_reintento,
                 comision_billetera, monto_cobrado,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
@@ -1182,7 +1273,7 @@ def get_trip(trip_id: str) -> Optional[dict]:
         row = cur.fetchone()
         cur.close()
         if row:
-            row = dict(row)
+            row = _con_descuento_aplicado(dict(row))
         return row
 
 
@@ -1516,40 +1607,60 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                  + Decimal(str(tip))).quantize(CENT, rounding=ROUND_HALF_UP))
 
             # 8b. Descuento al cliente con la promocion ya leida.
-            descuento_cliente = calcular_descuento_cliente(
+            descuento_promo = calcular_descuento_cliente(
                 Decimal(str(precio_bruto)), promo)
 
-            # 8c. Descuento por sistema de referidos.
-            # Regla: NO es acumulable con otras promociones.
-            # Solo se aplica si descuento_cliente == 0 y el interruptor global
-            # `referidos_activos` esta encendido.
+            # 8c. Descuento automatico del primer viaje (10 %).
+            #
+            # Es excluyente con la promocion y con los referidos: el cliente
+            # nuevo recibe el 10 %, no una suma de descuentos. Se calcula sobre
+            # la tarifa del trayecto (con el recargo por reintento si lo hubo),
+            # sin incluir la propina, igual que en la cotizacion. Quien lo
+            # absorbe lo decide `liquidar_comision`.
             referidos_activos = bool(promo.get("referidos_activos", True))
             cliente_oid = to_mongo_id(trip.get("client_id") or "")
             cliente_doc = cliente_coleccion.find_one({"_id": cliente_oid}) if cliente_oid else None
-            descuentos_disponibles = (
-                int(cliente_doc.get("descuentos_disponibles", 0) or 0)
-                if (cliente_doc and referidos_activos) else 0
-            )
-            descuento_referido = Decimal("0")
-            aplicar_descuento_referido = False
-            
-            if referidos_activos and descuentos_disponibles > 0 and descuento_cliente == 0:
-                # Solo aplicar si no hay descuento de promocion: los dos
-                # descuentos NO son acumulables.
-                descuento_referido = (
-                    Decimal(str(precio_bruto)) * REFERRAL_DISCOUNT_RATE
-                ).quantize(CENT, rounding=ROUND_HALF_UP)
-                aplicar_descuento_referido = True
+            es_primer_viaje = bool(cliente_doc) and int(
+                cliente_doc.get("viajes_completados", 0) or 0) == 0
 
-            # Lo que paga el pasajero. El descuento se le resta al total que
-            # cobra el chofer; `liquidar_comision` decide despues si lo asume
-            # el chofer o la plataforma.
+            descuento_cliente = Decimal("0")
+            descuento_referido = Decimal("0")
+            descuento_primer_viaje = Decimal("0")
+            aplicar_descuento_referido = False
+
+            if es_primer_viaje:
+                base_descuento = (Decimal(str(precio_base_viaje))
+                                  + recargo_reintento)
+                descuento_primer_viaje = (
+                    base_descuento * PRIMER_VIAJE_DISCOUNT_RATE
+                ).quantize(CENT, rounding=ROUND_HALF_UP)
+            else:
+                descuento_cliente = descuento_promo
+                descuentos_disponibles = (
+                    int(cliente_doc.get("descuentos_disponibles", 0) or 0)
+                    if (cliente_doc and referidos_activos) else 0
+                )
+                if (referidos_activos and descuentos_disponibles > 0
+                        and descuento_cliente == 0):
+                    # Solo aplicar si no hay descuento de promocion: los dos
+                    # descuentos NO son acumulables.
+                    descuento_referido = (
+                        Decimal(str(precio_bruto)) * REFERRAL_DISCOUNT_RATE
+                    ).quantize(CENT, rounding=ROUND_HALF_UP)
+                    aplicar_descuento_referido = True
+
+            # Lo que paga el pasajero. El descuento se le resta al total y
+            # `liquidar_comision` decide quien lo absorbe con la regla hibrida
+            # de siempre: si la comision nominal supera el descuento lo pierde
+            # la plataforma; si la comision es cero (o menor) lo asume el
+            # chofer. El primer viaje no agrega ningun subsidio aparte.
             descuento_total = (
                 Decimal(str(descuento_cliente))
-                + Decimal(str(descuento_referido))).quantize(
+                + Decimal(str(descuento_referido))
+                + Decimal(str(descuento_primer_viaje))).quantize(
                     CENT, rounding=ROUND_HALF_UP)
             precio_neto = float(
-                Decimal(str(precio_bruto)) - descuento_cliente - descuento_referido)
+                Decimal(str(precio_bruto)) - descuento_total)
 
             # Pago por transferencia: se suma el recargo configurado (10% por
             # defecto) al precio final. El calculo vive aqui, no en la app.
@@ -1583,6 +1694,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     total_fare = %s,
                     descuento_cliente = %s,
                     descuento_referido = %s,
+                    descuento_primer_viaje = %s,
                     comision_nominal = %s,
                     espera_secs = %s,
                     excedente_espera_secs = %s,
@@ -1598,7 +1710,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 dropoff_lng, dropoff_lat, now,
                 distance_km, duracion_facturable,
                 base_fare, distance_fare, tip, total_fare,
-                float(descuento_cliente), float(descuento_referido), None,
+                float(descuento_cliente), float(descuento_referido),
+                float(descuento_primer_viaje), None,
                 espera_secs, excedente_secs, float(coeficiente),
                 payment_method, recargo_transferencia,
                 float(recargo_reintento),
@@ -1676,6 +1789,10 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                              / Decimal(str(total_fare))).quantize(
                                 CENT, rounding=ROUND_HALF_UP))
                         comision_billetera = min(comision_billetera, debito)
+                    # La regla hibrida de `liquidar_comision` decide quien
+                    # absorbe el descuento: mientras la comision nominal sea
+                    # mayor que el descuento lo pierde la plataforma; si es
+                    # cero (o menor) lo asume el chofer. No se subsidia.
                     neto_chofer = float(
                         (Decimal(str(debito))
                          - Decimal(str(comision_billetera))).quantize(
@@ -1776,7 +1893,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                         (comision_nominal, commission, float(total_fare), trip_id))
                     conn.commit()
                     monto_cobrado_result = float(total_fare)
-                    neto_chofer_result = float(total_fare) - float(commission or 0)
+                    neto_chofer_result = (
+                        float(total_fare) - float(commission or 0))
                     registrar_comision_en_fondo(
                         trip_id, driver_id_str, commission, "Transferencia")
                 except Exception:
@@ -1946,6 +2064,10 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 "precio_final": float(updated_trip.get("total_fare") or 0),
                 "descuento_cliente": float(descuento_cliente),
                 "descuento_referido": float(descuento_referido),
+                "descuento_primer_viaje": float(descuento_primer_viaje),
+                "descuento_aplicado": bool(descuento_total > 0),
+                "descuento_total": float(descuento_total),
+                "precio_original": round(float(precio_bruto), 2),
                 "total_fare": float(updated_trip.get("total_fare") or 0),
                 "commission": commission,
                 "commission_nominal": comision_nominal,
@@ -2008,7 +2130,8 @@ def get_trips_by_client(client_id: str, limit: int = 50) -> list[dict]:
                 distance_km,
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
-                descuento_cliente, descuento_referido, recargo_reintento,
+                descuento_cliente, descuento_referido, descuento_primer_viaje,
+                recargo_reintento,
                 recargo_transferencia, comision_cobrada, monto_cobrado,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
                 request_address, dropoff_address
@@ -2016,7 +2139,7 @@ def get_trips_by_client(client_id: str, limit: int = 50) -> list[dict]:
             """,
             (client_id, limit),
         )
-        rows = [dict(r) for r in cur.fetchall()]
+        rows = [_con_descuento_aplicado(dict(r)) for r in cur.fetchall()]
         cur.close()
         return rows
 
@@ -3144,6 +3267,7 @@ class TripEstimateRequest(BaseModel):
     dropoff_lat: float
     dropoff_lng: float
     vehicle_type: str = "basico"
+    client_id: Optional[str] = None
 
 class TripStatusUpdate(BaseModel):
     status: str
@@ -3327,6 +3451,7 @@ async def api_estimate_trip(body: TripEstimateRequest):
             dropoff_lat=body.dropoff_lat,
             dropoff_lng=body.dropoff_lng,
             vehicle_type=body.vehicle_type,
+            client_id=body.client_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3340,6 +3465,7 @@ class EstimateAllRequest(BaseModel):
     request_lng: float
     dropoff_lat: float
     dropoff_lng: float
+    client_id: Optional[str] = None
 
 
 @router.post("/trips/estimate-all")
@@ -3351,6 +3477,7 @@ async def api_estimate_all(body: EstimateAllRequest):
             request_lng=body.request_lng,
             dropoff_lat=body.dropoff_lat,
             dropoff_lng=body.dropoff_lng,
+            client_id=body.client_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3624,6 +3751,7 @@ async def api_get_trip_receipt(trip_id: str):
     monto_cobrado = float(trip.get("monto_cobrado") or total)
     descuento = float(trip.get("descuento_cliente") or 0)
     descuento_ref = float(trip.get("descuento_referido") or 0)
+    descuento_primer = float(trip.get("descuento_primer_viaje") or 0)
     recargo_reintento = float(trip.get("recargo_reintento") or 0)
     recargo_transferencia = float(trip.get("recargo_transferencia") or 0)
     # El tiempo no se guarda como columna propia: se reconstruye del total.
@@ -3632,12 +3760,12 @@ async def api_get_trip_receipt(trip_id: str):
     # reintento, transferencia o referido.
     tiempo = max(0.0, total - base - distancia - propina
                  - recargo_reintento - recargo_transferencia
-                 + descuento + descuento_ref)
+                 + descuento + descuento_ref + descuento_primer)
 
     metodo = _normalizar_metodo_pago(trip.get("payment_method"))
     nominal = float(trip.get("comision_nominal") or 0)
     cobrada = trip.get("comision_cobrada")
-    descuento_total = descuento + descuento_ref
+    descuento_total = descuento + descuento_ref + descuento_primer
     precio_bruto = max(0.0, total + descuento_total - recargo_transferencia)
     if cobrada is not None:
         # Viajes cerrados con la regla hibrida: lo retenido esta guardado.
@@ -3665,6 +3793,11 @@ async def api_get_trip_receipt(trip_id: str):
         "commission_discount": False,
         "descuento_cliente": round(descuento, 2),
         "descuento_referido": round(descuento_ref, 2),
+        "descuento_primer_viaje": round(descuento_primer, 2),
+        "descuento_aplicado": (
+            round(descuento_total, 2) > 0 or descuento_primer > 0),
+        "descuento_total": round(descuento_total, 2),
+        "precio_original": round(precio_bruto, 2),
         "recargo_reintento": round(recargo_reintento, 2),
         "recargo_transferencia": round(recargo_transferencia, 2),
         "monto_cobrado": round(monto_cobrado, 2),
@@ -4612,7 +4745,8 @@ async def api_driver_commission_history(
         cur.execute(
             """
             SELECT trip_id, client_id, completed_at, total_fare,
-                   descuento_cliente, descuento_referido, comision_nominal,
+                   descuento_cliente, descuento_referido,
+                   descuento_primer_viaje, comision_nominal,
                    comision_cobrada, comision_billetera,
                    recargo_transferencia, payment_method, currency
             FROM trips
@@ -4644,6 +4778,7 @@ async def api_driver_commission_history(
         cobrada = fila.get("comision_cobrada")
         descuento = float(fila.get("descuento_cliente") or 0)
         descuento_ref = float(fila.get("descuento_referido") or 0)
+        descuento_primer = float(fila.get("descuento_primer_viaje") or 0)
         if cobrada is not None:
             # Viajes cerrados con la regla nueva: se guarda exactamente lo que
             # salio del Fondo.
@@ -4671,6 +4806,7 @@ async def api_driver_commission_history(
             "comision_nominal": round(nominal, 2),
             "descuento_cliente": round(descuento, 2),
             "descuento_referido": round(descuento_ref, 2),
+            "descuento_primer_viaje": round(descuento_primer, 2),
             "recargo_transferencia": round(
                 float(fila.get("recargo_transferencia") or 0), 2),
             "currency": fila.get("currency") or "CUP",

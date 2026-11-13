@@ -1332,6 +1332,8 @@ class _TripScreenState extends State<TripScreen> {
               _row('Descuento promoción', '-${(t.descuentoCliente ?? 0).toStringAsFixed(2)} $moneda'),
             if ((t.descuentoReferido ?? 0) > 0)
               _row('Descuento referido', '-${(t.descuentoReferido ?? 0).toStringAsFixed(2)} $moneda'),
+            if ((t.descuentoPrimerViaje ?? 0) > 0)
+              _row('Descuento 1er Viaje', '-${(t.descuentoPrimerViaje ?? 0).toStringAsFixed(2)} $moneda'),
             if ((t.recargoReintento ?? 0) > 0)
               _row('Recargo reintento', '+${(t.recargoReintento ?? 0).toStringAsFixed(2)} $moneda'),
             if ((t.recargoTransferencia ?? 0) > 0)

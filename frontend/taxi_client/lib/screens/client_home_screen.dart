@@ -938,6 +938,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         requestLng: pickup.longitude,
         dropoffLat: dropoff.latitude,
         dropoffLng: dropoff.longitude,
+        clientId: widget.clientId,
       );
       if (!mounted || req != _estReq) return;
       final vehiclesList = (res['vehicles'] as List)

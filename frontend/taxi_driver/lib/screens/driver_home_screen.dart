@@ -2768,6 +2768,9 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             if (t.descuentoReferido > 0)
               _row('Descuento referido',
                   '-${t.descuentoReferido.toStringAsFixed(2)} ${t.currency}'),
+            if (t.descuentoPrimerViaje > 0)
+              _row('Descuento 1er Viaje',
+                  '-${t.descuentoPrimerViaje.toStringAsFixed(2)} ${t.currency}'),
             if (t.recargoReintento > 0)
               _row('Recargo reintento',
                   '+${t.recargoReintento.toStringAsFixed(2)} ${t.currency}'),

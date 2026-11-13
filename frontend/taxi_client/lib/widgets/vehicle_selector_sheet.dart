@@ -13,6 +13,19 @@ class VehicleOption {
   /// (10% por defecto), calculado por el backend.
   final double priceTransferencia;
 
+  /// Precio sin el descuento del primer viaje. Si no hay descuento vale lo
+  /// mismo que [price].
+  final double precioOriginal;
+
+  /// True cuando el backend aplico el 10 % automatico de cliente nuevo.
+  final bool descuentoAplicado;
+
+  /// Monto descontado (precio original - precio final).
+  final double descuentoPrimerViaje;
+
+  /// Porcentaje del descuento (0.10 = 10 %).
+  final double descuentoPorcentaje;
+
   final String iconPath;
   final String displayName;
 
@@ -22,11 +35,38 @@ class VehicleOption {
     required this.iconPath,
     required this.displayName,
     double? priceTransferencia,
-  }) : priceTransferencia = priceTransferencia ?? price * 1.10;
+    double? precioOriginal,
+    bool? descuentoAplicado,
+    double? descuentoPrimerViaje,
+    double? descuentoPorcentaje,
+  })  : priceTransferencia = priceTransferencia ?? price * 1.10,
+        precioOriginal = precioOriginal ?? price,
+        descuentoAplicado = descuentoAplicado ?? false,
+        descuentoPrimerViaje = descuentoPrimerViaje ?? 0,
+        descuentoPorcentaje = descuentoPorcentaje ?? 0;
 
   /// Precio final segun el metodo de pago elegido.
   double priceFor(String metodo) =>
       metodo == 'Transferencia' ? priceTransferencia : price;
+
+  /// Precio original (tachado) para el metodo de pago elegido. En
+  /// transferencia se le aplica el mismo recargo que al precio final para que
+  /// la comparacion sea justa.
+  double priceOriginalFor(String metodo) {
+    if (!descuentoAplicado || precioOriginal <= price) return priceFor(metodo);
+    if (metodo == 'Transferencia' && price > 0) {
+      return precioOriginal * (priceTransferencia / price);
+    }
+    return precioOriginal;
+  }
+
+  /// Texto del badge del descuento, p. ej. "¡10% Dcto. 1er Viaje!".
+  String get badgeDescuento {
+    final pct = (descuentoPorcentaje * 100).round();
+    return pct > 0
+        ? '¡$pct% Dcto. 1er Viaje!'
+        : '¡Dcto. 1er Viaje!';
+  }
 
   factory VehicleOption.fromApi(Map<String, dynamic> json) {
     final type = json['vehicle_type'] as String;
@@ -61,6 +101,12 @@ class VehicleOption {
       price: precio,
       priceTransferencia: (json['price_transferencia'] as num?)?.toDouble() ??
           precio * 1.10,
+      precioOriginal: (json['precio_original'] as num?)?.toDouble() ?? precio,
+      descuentoAplicado: json['descuento_aplicado'] == true,
+      descuentoPrimerViaje:
+          (json['descuento_primer_viaje'] as num?)?.toDouble() ?? 0,
+      descuentoPorcentaje:
+          (json['descuento_porcentaje'] as num?)?.toDouble() ?? 0,
       iconPath: iconPath,
       displayName: displayName,
     );
@@ -326,12 +372,42 @@ class VehicleSelectorSheet extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _DetailColumn(
-                  icon: Icons.attach_money,
-                  label: 'Precio',
-                  value:
-                      '${_selected.priceFor(paymentMethod).toStringAsFixed(0)} CUP',
-                  valueColor: AppColors.ambar,
+                Expanded(
+                  child: Column(
+                    children: [
+                      Icon(Icons.attach_money,
+                          size: 20, color: Colors.grey[600]),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Precio',
+                        style: TextStyle(
+                            fontSize: 10, color: Colors.grey[600]),
+                      ),
+                      const SizedBox(height: 2),
+                      if (_selected.descuentoAplicado)
+                        Text(
+                          '${_selected.priceOriginalFor(paymentMethod).toStringAsFixed(0)} CUP',
+                          maxLines: 1,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.secundario,
+                            decoration: TextDecoration.lineThrough,
+                            decorationColor: AppColors.secundario,
+                          ),
+                        ),
+                      Text(
+                        '${_selected.priceFor(paymentMethod).toStringAsFixed(0)} CUP',
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: _selected.descuentoAplicado ? 18 : 14,
+                          fontWeight: FontWeight.bold,
+                          color: _selected.descuentoAplicado
+                              ? AppColors.exito
+                              : AppColors.ambar,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 _DetailColumn(
                   icon: Icons.payment,
@@ -346,6 +422,43 @@ class VehicleSelectorSheet extends StatelessWidget {
               ],
             ),
           ),
+          if (_selected.descuentoAplicado) ...[
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.exito.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.exito.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.local_offer_rounded,
+                        size: 16, color: AppColors.exito),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        _selected.badgeDescuento,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.exito,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
@@ -827,13 +940,11 @@ class _DetailColumn extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  final Color? valueColor;
 
   const _DetailColumn({
     required this.icon,
     required this.label,
     required this.value,
-    this.valueColor,
   });
 
   @override
@@ -854,7 +965,7 @@ class _DetailColumn extends StatelessWidget {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: valueColor ?? Colors.grey[900],
+              color: Colors.grey[900],
             ),
             maxLines: 1,
           ),

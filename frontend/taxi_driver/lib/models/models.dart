@@ -511,6 +511,10 @@ class CompletedTrip {
   final int? excedenteEsperaSegs;
   final double descuentoCliente;
   final double descuentoReferido;
+
+  /// Descuento automatico del 10 % del primer viaje del cliente. Va aparte
+  /// para que el recibo del chofer muestre por que cobro menos.
+  final double descuentoPrimerViaje;
   final double recargoReintento;
   final double recargoTransferencia;
   final double montoCobrado;
@@ -537,6 +541,7 @@ class CompletedTrip {
     this.excedenteEsperaSegs,
     this.descuentoCliente = 0,
     this.descuentoReferido = 0,
+    this.descuentoPrimerViaje = 0,
     this.recargoReintento = 0,
     this.recargoTransferencia = 0,
     this.montoCobrado = 0,
@@ -567,6 +572,7 @@ class CompletedTrip {
             (j['excedente_espera_segundos'] ?? j['excedente_espera_secs'])?.toInt(),
         descuentoCliente: (j['descuento_cliente'] ?? 0).toDouble(),
         descuentoReferido: (j['descuento_referido'] ?? 0).toDouble(),
+        descuentoPrimerViaje: (j['descuento_primer_viaje'] ?? 0).toDouble(),
         recargoReintento: (j['recargo_reintento'] ?? 0).toDouble(),
         recargoTransferencia: (j['recargo_transferencia'] ?? 0).toDouble(),
         montoCobrado: (j['monto_cobrado'] ?? j['total_fare'] ?? 0).toDouble(),

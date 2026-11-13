@@ -59,6 +59,10 @@ class ClientTrip {
   final double? tip;
   final double? descuentoCliente;
   final double? descuentoReferido;
+
+  /// Descuento automatico del 10 % del primer viaje (cliente nuevo). El
+  /// backend lo separa del de promocion/referido para mostrarlo en el recibo.
+  final double? descuentoPrimerViaje;
   final double? recargoReintento;
   final double? recargoTransferencia;
   final double? montoCobrado;
@@ -126,6 +130,7 @@ class ClientTrip {
     this.tip,
     this.descuentoCliente,
     this.descuentoReferido,
+    this.descuentoPrimerViaje,
     this.recargoReintento,
     this.recargoTransferencia,
     this.montoCobrado,
@@ -167,6 +172,8 @@ class ClientTrip {
         tip: (j['tip'] as num?)?.toDouble(),
         descuentoCliente: (j['descuento_cliente'] as num?)?.toDouble(),
         descuentoReferido: (j['descuento_referido'] as num?)?.toDouble(),
+        descuentoPrimerViaje:
+            (j['descuento_primer_viaje'] as num?)?.toDouble(),
         recargoReintento: (j['recargo_reintento'] as num?)?.toDouble(),
         recargoTransferencia: (j['recargo_transferencia'] as num?)?.toDouble(),
         montoCobrado: (j['monto_cobrado'] as num?)?.toDouble(),

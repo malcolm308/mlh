@@ -301,12 +301,14 @@ class ApiService {
     required double requestLng,
     required double dropoffLat,
     required double dropoffLng,
+    String? clientId,
   }) async {
     return _map('POST', '/trips/estimate-all', body: {
       'request_lat': requestLat,
       'request_lng': requestLng,
       'dropoff_lat': dropoffLat,
       'dropoff_lng': dropoffLng,
+      if (clientId != null && clientId.isNotEmpty) 'client_id': clientId,
     });
   }
 
