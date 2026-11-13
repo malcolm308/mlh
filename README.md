@@ -312,10 +312,16 @@ actualizan solas contra el backend.
 - `static/patch_cliente_<versionCode>.zip` / `static/patch_chofer_<versionCode>.zip`
   — parches ligeros (~2.8-3.5 MB). Hay uno por **APK base** y ABI, con nombre
   unico, para que publicar un parche nuevo no pise al de otra version:
-  hoy hay cuatro por app — `patch_cliente_4026.zip` (1.0.25 de 64 bits),
+  hoy hay seis por app — `patch_cliente_4026.zip` (1.0.25 de 64 bits),
   `patch_cliente_3026.zip` (1.0.25 de 32 bits), `patch_cliente_4025.zip`
-  (1.0.24 de 64 bits) y `patch_cliente_3025.zip` (1.0.24 de 32 bits); los
-  equivalentes del chofer son `patch_chofer_4040/3040/4039/3039.zip`.
+  (1.0.24 de 64 bits), `patch_cliente_3025.zip` (1.0.24 de 32 bits),
+  `patch_cliente_4024.zip` (1.0.23 de 64 bits) y `patch_cliente_3024.zip`
+  (1.0.23 de 32 bits); los equivalentes del chofer son
+  `patch_chofer_4040/3040/4039/3039/4038/3038.zip`.
+  Hay que mantener las tres versiones anteriores, no solo la inmediata: un
+  telefono que **ya aplico un parche** reporta la version del parche
+  (`1.0.25-p1`) pero conserva su `versionCode` base (`4024`), asi que sigue
+  necesitando el parche de esa base para no caer al APK completo.
 - `static/ota_client.json` / `static/ota_driver.json` — manifiestos que dicen
   cual es la ultima version, el historial de releases y los parches (con su
   `abi`, `md5` y `target_version_code`).
@@ -427,9 +433,15 @@ El mensaje de "Compartir App" lleva los dos enlaces (`appDownloadUrl` y
 
 El parche se genera **con el mismo Flutter** y desde el APK ya compilado (y
 compilado **con la clave de MapTiler**) de la version nueva. Hay que generar
-**uno por cada APK base y ABI** que se quiera poder parchear (ver
-`_MAX_PATCH_DISTANCE`): como minimo la version inmediatamente anterior
-(`4026` y `3026` para la 1.0.25), y opcionalmente una o dos mas atras.
+**uno por cada APK base y ABI** que se quiera poder parchear: las **tres
+versiones anteriores** (para 1.0.26: `4026/3026` de 1.0.25, `4025/3025` de
+1.0.24 y `4024/3024` de 1.0.23), porque `_MAX_PATCH_DISTANCE = 3`.
+
+Ojo con `publicar_ota.py`: **poda** los parches cuya version no empiece por la
+version publicada, asi que al publicar `1.0.26` hay que regenerar de una vez
+todos los parches `1.0.26-p1` de las bases que se quieran conservar. Si se
+publica solo el de la base inmediata, los telefonos que ya habian aplicado un
+parche (conservan su `versionCode` viejo) reciben el APK completo.
 
 ```powershell
 cd E:\Taxi_Rapid\frontend\taxi_client
@@ -439,8 +451,8 @@ dart run flutter_patcher:pack `
 dart run flutter_patcher:pack `
   --apk build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk `
   --version 1.0.26-p1 --target-version-code 3026 --abi armeabi-v7a --out dist\v126_armv7_3026
-# repite con --target-version-code 4025/3025 (1.0.24) si quieres cubrir otro salto
-# imprime el md5 de cada zip
+# repite con --target-version-code 4025/3025 (1.0.24) y 4024/3024 (1.0.23)
+# para cubrir las tres versiones anteriores; imprime el md5 de cada zip
 
 cd E:\Taxi_Rapid
 python scripts/publicar_ota.py --app client --version 1.0.26 --version-code 4027 `
