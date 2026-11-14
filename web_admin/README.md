@@ -129,11 +129,12 @@ Cadena completa:
 4. `POST /admin/eventos/prueba` (botón **🔔 Probar aviso** de la barra
    lateral) recorre el mismo camino para probarlo sin esperar a un viaje real.
 
-**Primera vez:** al entrar, pulsa el botón flotante **🔔 Activar avisos** y
-permite las notificaciones. Ese gesto es obligatorio: sin un clic previo el
-navegador mantiene el audio bloqueado. El estado queda en `localStorage`. Si el
-permiso está denegado, el panel sigue avisando con sonido y un cartel dentro de
-la página.
+**Primera vez:** al entrar, pulsa la campana **🔔 Activar avisos** de la
+esquina superior derecha y permite las notificaciones. Ese gesto es
+obligatorio: sin un clic previo el navegador mantiene el audio bloqueado. El
+estado queda en `localStorage`. Si el permiso está denegado, el panel sigue
+avisando con sonido y un cartel dentro de la página, que se retira solo a los
+3 segundos.
 
 `server.enableStaticServing = true` sirve `web_admin/static/sw.js` en
 `/app/static/sw.js`; el service worker es necesario para que Android muestre

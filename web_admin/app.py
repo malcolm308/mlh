@@ -419,9 +419,9 @@ def _sidebar(api: ApiClient, permitidas: Optional[list[str]] = None) -> None:
                 )
 
         st.caption(
-            "La primera vez pulsa el botón flotante 🔔 y permite las "
-            "notificaciones: así los avisos llegan con sonido aunque estés "
-            "en otra pestaña."
+            "La primera vez pulsa la campana 🔔 de la esquina superior derecha "
+            "y permite las notificaciones: así los avisos llegan con sonido "
+            "aunque estés en otra pestaña."
         )
 
         st.caption(

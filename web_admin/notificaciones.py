@@ -16,8 +16,8 @@ la Notification API y el audio funcionan en el documento principal. Un
 El vigilante se instala una sola vez por documento (`window.__rapitaxiBell`);
 los reruns de Streamlit solo actualizan la configuracion (sobre todo el access
 token, que caduca a las 2 h). El permiso y el desbloqueo del audio los da el
-administrador con el boton flotante «🔔»: sin un gesto previo el navegador
-bloquea el sonido.
+administrador con la campana «🔔» de la cabecera (arriba a la derecha): sin un
+gesto previo el navegador bloquea el sonido.
 
 Limite conocido: hace falta la pestana abierta (aunque este en segundo plano).
 Avisar con la pestana cerrada exige Web Push con service worker + VAPID, que
@@ -38,23 +38,33 @@ from config import get_api_base_url
 CLAVE_ACTIVO = "rapitaxi_avisos_v1"
 
 _CSS = """
+/* La campana vive en la franja superior derecha de la cabecera, a la izquierda
+   del boton Deploy y del menu de Streamlit. Antes estaba fija abajo a la
+   derecha y tapaba la ultima fila de las tablas. */
 #rapitaxi-campana {
-  position: fixed; right: 18px; bottom: 72px; z-index: 2147483600;
-  border: 0; border-radius: 999px; padding: 12px 18px; cursor: pointer;
-  font: 600 14px/1 system-ui, sans-serif; color: #241a00;
-  background: #ffc107; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  position: fixed; top: 14px; right: 120px; z-index: 2147483600;
+  border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer;
+  font: 600 13px/1 system-ui, sans-serif; color: #241a00;
+  background: #ffc107; box-shadow: 0 3px 12px rgba(0,0,0,.3);
 }
+#rapitaxi-campana:hover { filter: brightness(1.06); }
 #rapitaxi-campana.activo {
-  padding: 10px 12px; font-size: 18px; background: #1f7a3d; color: #fff;
+  padding: 7px 10px; font-size: 16px; background: #1f7a3d; color: #fff;
 }
 .rapitaxi-aviso {
-  position: fixed; top: 16px; right: 16px; z-index: 2147483600;
+  position: fixed; top: 72px; right: 16px; z-index: 2147483600;
   max-width: 340px; padding: 14px 16px; border-radius: 10px;
   background: #16243a; color: #e8eef6; border: 1px solid #ffc107;
   box-shadow: 0 10px 30px rgba(0,0,0,.45);
   font: 14px/1.35 system-ui, sans-serif;
 }
 .rapitaxi-aviso strong { color: #ffc107; display: block; margin-bottom: 4px; }
+/* En pantallas estrechas no cabe junto al menu: baja justo debajo de la
+   cabecera para seguir sin tapar el contenido. */
+@media (max-width: 640px) {
+  #rapitaxi-campana { top: 62px; right: 10px; }
+  .rapitaxi-aviso { top: 112px; }
+}
 """
 
 _JS = r"""
@@ -173,7 +183,10 @@ _JS = r"""
       body: cuerpo || "",
       tag: etiqueta || "rapitaxi",
       renotify: true,
-      requireInteraction: true
+      // Sin `requireInteraction`: con esa opcion la notificacion del sistema
+      // se queda en pantalla hasta que el usuario la cierra. Aqui es un
+      // aviso rapido; el sonido y el cartel de la pagina ya llaman la atencion.
+      requireInteraction: false
     };
     if (cfg.icono) { opciones.icon = cfg.icono; }
     if (!("Notification" in window)) {
@@ -207,9 +220,10 @@ _JS = r"""
     caja.appendChild(fuerte);
     caja.appendChild(texto);
     document.body.appendChild(caja);
+    // El cartel es un aviso, no un cuadro de dialogo: se retira solo a los 3 s.
     window.setTimeout(function () {
       if (caja.parentNode) { caja.parentNode.removeChild(caja); }
-    }, 45000);
+    }, 3000);
   }
 
   function programar() {
