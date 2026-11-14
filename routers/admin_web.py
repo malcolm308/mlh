@@ -27,6 +27,7 @@ solo un cliente HTTP y toda la escritura sigue pasando por la API.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -61,6 +62,7 @@ from routers.promociones import (
     leer_promocion,
     obtener_tarifas_espera,
 )
+from services import eventos_admin
 from services.telefono import buscar_por_telefono, normalizar_telefono
 from services.telegram_huerfanos import (
     TelegramError,
@@ -382,6 +384,30 @@ async def revisar_viajes_huerfanos(_: dict = Depends(require_api_key)):
 
         enviados += 1
         detalle.append({"trip_id": trip_id, "enviado": True})
+
+        # Ademas de Telegram, avisar al panel web (notificacion + sonido).
+        # `publicar` nunca lanza; se manda a un hilo para no bloquear el cron
+        # si Mongo esta lento.
+        origen = (viaje.get("request_address") or "origen sin datos").strip()
+        destino = (viaje.get("dropoff_address") or "destino sin datos").strip()
+        try:
+            precio_txt = "{:,.2f} CUP".format(float(viaje.get("precio_estimado")))
+        except (TypeError, ValueError):
+            precio_txt = "precio por confirmar"
+        await asyncio.to_thread(
+            eventos_admin.publicar,
+            "viaje_huerfano",
+            "Viaje sin chofer",
+            "%s → %s · %s" % (origen, destino, precio_txt),
+            datos={
+                "trip_id": trip_id,
+                "origen": origen,
+                "destino": destino,
+                "precio": viaje.get("precio_estimado"),
+                "tipo_vehiculo": viaje.get("vehicle_type"),
+            },
+            roles=["trip_operator"],
+        )
 
     return {
         "ok": True,
@@ -780,3 +806,50 @@ async def guardar_configuracion(
     respuesta = await _configuracion_actual()
     respuesta["message"] = "Configuración guardada"
     return respuesta
+
+
+# ===================== AVISOS DEL PANEL (NOTIFICACIONES) =====================
+#
+# El panel Streamlit no puede recibir conexiones: su vigilante JavaScript hace
+# polling a `GET /admin/eventos`. Los eventos los publica el backend al detectar
+# un viaje huerfano (`/trips/check-orphaned`) o un registro de chofer
+# (`documentos.py`). Aqui solo se leen y se permite lanzar uno de prueba.
+
+@router.get("/eventos")
+async def leer_eventos(
+    desde: str = "",
+    limite: int = 20,
+    admin: dict = Depends(require_admin),
+):
+    """Eventos criticos posteriores a `desde` para el navegador del admin.
+
+    Sin `desde` devuelve solo el puntero actual: abrir el panel (o pulsar F5)
+    no debe disparar avisos de eventos viejos. `super_admin` ve todos; los
+    demas roles solo los que les correspondan (viajes para `trip_operator`,
+    registros para `user_operator`).
+    """
+    return eventos_admin.listar(
+        desde=desde,
+        rol=(admin.get("rol") or "").strip(),
+        limite=limite,
+    )
+
+
+@router.post("/eventos/prueba")
+async def evento_de_prueba(admin: dict = Depends(require_admin)):
+    """Publica un aviso de prueba para verificar sonido y notificacion.
+
+    Lo lanza el boton «Probar aviso» del panel. El aviso llega por el mismo
+    camino que los reales (Mongo -> polling del navegador), asi que prueba de
+    verdad la cadena completa y no un atajo.
+    """
+    rol = (admin.get("rol") or "").strip()
+    evento = eventos_admin.publicar(
+        tipo="prueba",
+        titulo="Prueba de aviso",
+        mensaje=("Si ves esta notificación y suena el timbre, las alertas del "
+                 "panel están funcionando."),
+        datos={"por": admin.get("email"), "rol": rol},
+        roles=[rol] if rol else [],
+    )
+    return {"ok": evento is not None, "evento": evento}

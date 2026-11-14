@@ -18,6 +18,7 @@ la `url` segura de la nube. Si no hay credenciales se cae al respaldo de disco
 `uploads/documentos/`, util en desarrollo.
 El administrador las revisa desde el panel y aprueba o rechaza el chofer.
 """
+import asyncio
 import logging
 import os
 import uuid
@@ -32,6 +33,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
+from services import eventos_admin
 from services.codigos_referido import generar_codigo
 from services.fotos_nube import borrar as borrar_nube
 from services.fotos_nube import subir as subir_nube
@@ -450,6 +452,28 @@ async def registro_con_fotos(
     chofer_coleccion.update_one(
         {"_id": resultado.inserted_id},
         {"$set": {"documentos": guardados, "documentos_subidos_at": ahora.isoformat()}},
+    )
+
+    # Aviso al panel web (ademas del alta). Va en un hilo aparte para que un
+    # Mongo lento no retrase la respuesta al chofer que acaba de registrarse.
+    await asyncio.to_thread(
+        eventos_admin.publicar,
+        "registro_chofer",
+        "Nuevo chófer registrado",
+        "%s %s · %s %s (%s) · %s" % (
+            doc["Nombre"], doc["Apellidos"], marca.strip(), model.strip(),
+            chapa.strip(), servicio.strip() or "basico"),
+        datos={
+            "driver_id": driver_id,
+            "email": email,
+            "telefono": doc["numero_de_telefono"],
+            "nombre": "%s %s" % (doc["Nombre"], doc["Apellidos"]),
+            "vehiculo": "%s %s" % (marca.strip(), model.strip()),
+            "chapa": chapa.strip(),
+            "servicio": servicio.strip(),
+            "documentos": len(guardados),
+        },
+        roles=["user_operator"],
     )
 
     # El garaje es una coleccion aparte: el vehiculo del registro se crea ya
