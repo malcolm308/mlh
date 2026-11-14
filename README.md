@@ -320,12 +320,12 @@ actualizan solas contra el backend.
 - `static/patch_cliente_<versionCode>.zip` / `static/patch_chofer_<versionCode>.zip`
   — parches ligeros (~2.8-3.5 MB). Hay uno por **APK base** y ABI, con nombre
   unico, para que publicar un parche nuevo no pise al de otra version:
-  hoy hay seis por app — `patch_cliente_4026.zip` (1.0.25 de 64 bits),
-  `patch_cliente_3026.zip` (1.0.25 de 32 bits), `patch_cliente_4025.zip`
-  (1.0.24 de 64 bits), `patch_cliente_3025.zip` (1.0.24 de 32 bits),
-  `patch_cliente_4024.zip` (1.0.23 de 64 bits) y `patch_cliente_3024.zip`
-  (1.0.23 de 32 bits); los equivalentes del chofer son
-  `patch_chofer_4040/3040/4039/3039/4038/3038.zip`.
+  hoy hay seis por app para 1.0.27 — `patch_cliente_4027.zip` (1.0.26 de 64
+  bits), `patch_cliente_3027.zip` (1.0.26 de 32 bits), `patch_cliente_4026.zip`
+  (1.0.25 de 64 bits), `patch_cliente_3026.zip` (1.0.25 de 32 bits),
+  `patch_cliente_4025.zip` (1.0.24 de 64 bits) y `patch_cliente_3025.zip`
+  (1.0.24 de 32 bits); los equivalentes del chofer son
+  `patch_chofer_4041/3041/4040/3040/4039/3039.zip`.
   Hay que mantener las tres versiones anteriores, no solo la inmediata: un
   telefono que **ya aplico un parche** reporta la version del parche
   (`1.0.25-p1`) pero conserva su `versionCode` base (`4024`), asi que sigue
@@ -443,12 +443,12 @@ constantes `appDownloadUrl`/`appDownloadUrl32` y
 El parche se genera **con el mismo Flutter** y desde el APK ya compilado (y
 compilado **con la clave de MapTiler**) de la version nueva. Hay que generar
 **uno por cada APK base y ABI** que se quiera poder parchear: las **tres
-versiones anteriores** (para 1.0.26: `4026/3026` de 1.0.25, `4025/3025` de
-1.0.24 y `4024/3024` de 1.0.23), porque `_MAX_PATCH_DISTANCE = 3`.
+versiones anteriores** (para 1.0.27: `4027/3027` de 1.0.26, `4026/3026` de
+1.0.25 y `4025/3025` de 1.0.24), porque `_MAX_PATCH_DISTANCE = 3`.
 
 Ojo con `publicar_ota.py`: **poda** los parches cuya version no empiece por la
-version publicada, asi que al publicar `1.0.26` hay que regenerar de una vez
-todos los parches `1.0.26-p1` de las bases que se quieran conservar. Si se
+version publicada, asi que al publicar `1.0.27` hay que regenerar de una vez
+todos los parches `1.0.27-p1` de las bases que se quieran conservar. Si se
 publica solo el de la base inmediata, los telefonos que ya habian aplicado un
 parche (conservan su `versionCode` viejo) reciben el APK completo.
 
