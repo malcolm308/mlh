@@ -8,6 +8,9 @@ font = "sans serif"
 
 [server]
 headless = true
+# Sirve `web_admin/static/` en `/app/static/`. Lo usa el service worker de las
+# notificaciones (sw.js): sin él, Android no puede mostrar notificaciones.
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false

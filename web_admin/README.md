@@ -104,6 +104,46 @@ vehículo. Devuelve el status code y el JSON exacto de `getChat` y
 `sendMessage` (200 = enviado, 400 = `chat_id` incorrecto o bot fuera del
 grupo, 403 = el bot no es administrador).
 
+## Avisos con sonido (notificaciones)
+
+El panel avisa de dos eventos críticos sin depender de Firebase ni de un
+servicio de pago:
+
+| Evento | Quién lo publica | Quién lo ve |
+| --- | --- | --- |
+| Viaje sin chófer | `POST /admin/trips/check-orphaned` (cron), justo después de Telegram | `trip_operator` y `super_admin` |
+| Nuevo chófer registrado | `POST /documentos/registro`, después de guardar las fotos | `user_operator` y `super_admin` |
+
+Cadena completa:
+
+1. El backend guarda el evento en Mongo (`Chofer.eventos_admin`, TTL de 7 días;
+   si Mongo falla, cae a una cola en memoria para no bloquear el cron ni el
+   registro).
+2. `notificaciones.py` inyecta un vigilante JavaScript en la **página
+   principal** con `st.html(..., unsafe_allow_javascript=True)`. No usa
+   `components.html` porque eso va en un iframe y el navegador bloquea ahí la
+   Notification API y el audio.
+3. El vigilante consulta `GET /admin/eventos` cada 15 s con el access token de
+   la sesión y muestra una notificación del sistema más un timbre (Web Audio,
+   WAV generado en el propio panel, sin CDN).
+4. `POST /admin/eventos/prueba` (botón **🔔 Probar aviso** de la barra
+   lateral) recorre el mismo camino para probarlo sin esperar a un viaje real.
+
+**Primera vez:** al entrar, pulsa el botón flotante **🔔 Activar avisos** y
+permite las notificaciones. Ese gesto es obligatorio: sin un clic previo el
+navegador mantiene el audio bloqueado. El estado queda en `localStorage`. Si el
+permiso está denegado, el panel sigue avisando con sonido y un cartel dentro de
+la página.
+
+`server.enableStaticServing = true` sirve `web_admin/static/sw.js` en
+`/app/static/sw.js`; el service worker es necesario para que Android muestre
+la notificación del sistema. El `GET /admin/eventos` sin `desde` solo devuelve
+el puntero actual, así que abrir el panel o pulsar F5 no dispara avisos viejos.
+
+**Límite conocido:** hace falta la pestaña abierta, aunque esté en segundo
+plano (Chrome puede retrasar el polling a ~1/min cuando la pestaña está oculta).
+Avisar con la pestaña cerrada exigiría Web Push con VAPID, que no se usa aquí.
+
 ## Comportamiento
 
 - **Auto-refresco:** `@st.fragment(run_every=10)` en Viajes críticos. Solo esa

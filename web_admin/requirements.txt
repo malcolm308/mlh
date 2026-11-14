@@ -9,3 +9,8 @@ requests>=2.31,<3
 pandas>=2.1,<3
 Pillow>=10.2,<13
 pillow-heif>=0.16,<2
+# Pedido en el encargo de notificaciones. Se instala, pero NO se importa:
+# su paquete se llama "streamlit-notifications" (con guion) y su __init__.py
+# tiene un SyntaxError; además usa components.html (iframe), donde el navegador
+# bloquea Notification y el audio. La cadena real está en notificaciones.py.
+streamlit-notifications==0.1

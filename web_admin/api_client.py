@@ -209,6 +209,19 @@ class ApiClient:
         """Email + rol del admin en sesion (define las pestanas visibles)."""
         return self._json("GET", "/admin/perfil")
 
+    # ---------------- avisos del panel ----------------
+
+    def eventos(self, desde: str = "", limite: int = 20) -> dict:
+        """Eventos criticos posteriores a `desde` (los usa el navegador)."""
+        params: dict = {"limite": limite}
+        if desde:
+            params["desde"] = desde
+        return self._json("GET", "/admin/eventos", params=params)
+
+    def evento_prueba(self) -> dict:
+        """Publica un aviso de prueba para verificar sonido y notificacion."""
+        return self._json("POST", "/admin/eventos/prueba")
+
     def listar_administradores(self) -> dict:
         return self._json("GET", "/admin/administradores")
 

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 
+import notificaciones
 import ui
 from api_client import ApiClient, ApiError, SesionExpirada, explicar_error
 from config import get_api_base_url
@@ -240,9 +241,23 @@ def _seguro(funcion, api: ApiClient) -> None:
         st.error(explicar_error(exc))
 
 
+# ===================== NOTIFICACIONES =====================
+
+def notificar(titulo: str, mensaje: str, *, clave: Optional[str] = None) -> None:
+    """Notificación push web con sonido para un evento crítico.
+
+    `clave` es el identificador del evento: si se repite en un rerun, no se
+    vuelve a avisar. La cadena completa (Mongo -> polling -> navegador) vive en
+    `notificaciones.py`; esto es el punto de entrada que pide el panel.
+    """
+    notificaciones.notificar(titulo, mensaje, clave=clave)
+
+
 # ===================== LOGIN =====================
 
 def _login() -> None:
+    # Si se acaba de cerrar sesión, apaga el vigilante que quedó en la página.
+    notificaciones.detener()
     st.markdown(
         """
         <div style="text-align:center; padding: 2.2rem 0 1.2rem;">
@@ -383,6 +398,32 @@ def _sidebar(api: ApiClient, permitidas: Optional[list[str]] = None) -> None:
             ui.invalidar()
             st.rerun()
 
+        if st.button("🔔 Probar aviso", key="btn_probar_aviso"):
+            try:
+                api.evento_prueba()
+            except ApiError as exc:
+                ui.flash("warning", "No se pudo enviar el aviso: %s"
+                         % explicar_error(exc))
+                st.rerun()
+            else:
+                st.success("Aviso de prueba enviado. Debe sonar ahora mismo.")
+                # Además de dejarlo en el buzón (lo recoge el polling), se
+                # dispara ya para que la prueba no espere 15 s. La `clave`
+                # lleva la hora para que cada clic reinyecte el script: con un
+                # contenido idéntico Streamlit no lo volvería a ejecutar.
+                notificar(
+                    "Prueba de aviso",
+                    "Si ves esta notificación y suena el timbre, las alertas "
+                    "del panel están funcionando.",
+                    clave="prueba:%.6f" % time.time(),
+                )
+
+        st.caption(
+            "La primera vez pulsa el botón flotante 🔔 y permite las "
+            "notificaciones: así los avisos llegan con sonido aunque estés "
+            "en otra pestaña."
+        )
+
         st.caption(
             "Viajes críticos se actualiza solo cada 10 s. Las demás pestañas "
             "usan caché para no saturar el backend."
@@ -403,12 +444,25 @@ def _keep_alive(api: ApiClient) -> None:
         pass
 
 
+@st.fragment(run_every=120)
+def _avisos(api: ApiClient) -> None:
+    """Mantiene vivo el vigilante de eventos y le pasa el token al día.
+
+    El access token caduca a las 2 h. `_keep_alive` lo renueva y este fragmento
+    reinyecta la configuración; si el token cambió, el JavaScript se actualiza
+    y reanuda el polling sin recargar la página.
+    """
+    notificaciones.campana(api)
+
+
 def _panel(api: ApiClient) -> None:
     # Refresca la cookie de sesion en cada carga (si el paquete esta instalado).
     _guardar_cookies(api)
     # Keep-alive: evita que Render duerma la instancia y renueva el access
     # token de forma proactiva cada 4 min (antes de que caduque a las 2 h).
     _keep_alive(api)
+    # Vigilante de eventos críticos: notificación + sonido en el navegador.
+    _avisos(api)
     if not st.session_state.get("admin_rol"):
         _cargar_rol(api)
 
