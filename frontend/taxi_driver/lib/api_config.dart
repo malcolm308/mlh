@@ -29,26 +29,23 @@ class ApiConfig {
   /// que siguen yendo a Render. En produccion se deja vacio.
   static const String otaBaseUrl = String.fromEnvironment('OTA_BASE_URL');
 
-  /// APK publicado por el backend en `/static` y que se comparte por WhatsApp.
-  /// Es el `arm64-v8a` de `--split-per-abi` (el que usa casi todo telefono) y
-  /// el enlace por defecto.
-  static const String appDownloadUrl =
-      '$baseUrl/static/app_cliente_64bits.apk';
+  /// Enlace corto de descarga del cliente que se comparte por WhatsApp. El
+  /// backend lo redirige (302) al APK `arm64-v8a` de `/static`, sin acortadores
+  /// externos ni paginas intermedias con publicidad.
+  static const String appDownloadUrl = '$baseUrl/c64';
 
-  /// APK `armeabi-v7a` (32 bits) del cliente para telefonos antiguos que
-  /// rechazan el de 64 bits con "paquete no valido" (por ejemplo un Samsung A02).
-  static const String appDownloadUrl32 =
-      '$baseUrl/static/app_cliente_32bits.apk';
+  /// Enlace corto del APK `armeabi-v7a` (32 bits) del cliente para telefonos
+  /// antiguos que rechazan el de 64 bits con "paquete no valido" (por ejemplo un
+  /// Samsung A02).
+  static const String appDownloadUrl32 = '$baseUrl/c32';
 
   /// APK de la app del CHOFER. Es el que reparte un chofer al invitar a otro
   /// chofer: quien se lo descarga termina en el registro de choferes, no en
-  /// el del pasajero. Es el `arm64-v8a` (64 bits) por defecto.
-  static const String driverDownloadUrl =
-      '$baseUrl/static/app_chofer_64bits.apk';
+  /// el del pasajero. Enlace corto al `arm64-v8a` (64 bits) por defecto.
+  static const String driverDownloadUrl = '$baseUrl/d64';
 
   /// APK de chófer `armeabi-v7a` (32 bits) para telefonos antiguos.
-  static const String driverDownloadUrl32 =
-      '$baseUrl/static/app_chofer_32bits.apk';
+  static const String driverDownloadUrl32 = '$baseUrl/d32';
 
   /// Clave de MapTiler. Se inyecta al compilar con
   /// `--dart-define=MAPTILER_API_KEY=...`. Si no se pasa, queda vacia y se

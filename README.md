@@ -299,13 +299,21 @@ actualizan solas contra el backend.
 **Distribucion hibrida (64/32 bits).** Cada app se publica partida con
 `--split-per-abi` para no obligar a descargar el APK universal (~60 MB):
 
-- `static/app_cliente_64bits.apk` — cliente `arm64-v8a` (~34 MB). Es el enlace
-  **principal** (`ApiConfig.appDownloadUrl`) que comparte la app.
+- `static/app_cliente_64bits.apk` — cliente `arm64-v8a` (~34 MB). Se comparte con
+  el enlace corto **`/c64`** (`ApiConfig.appDownloadUrl`).
 - `static/app_cliente_32bits.apk` — cliente `armeabi-v7a` (~28 MB), para
   telefonos antiguos que rechazan el de 64 bits con "paquete no valido".
-- `static/app_chofer_64bits.apk` — chofer `arm64-v8a` (~37 MB), enlace
-  principal de la app del chofer.
-- `static/app_chofer_32bits.apk` — chofer `armeabi-v7a` (~32 MB).
+  Enlace corto: **`/c32`**.
+- `static/app_chofer_64bits.apk` — chofer `arm64-v8a` (~37 MB). Enlace corto:
+  **`/d64`**.
+- `static/app_chofer_32bits.apk` — chofer `armeabi-v7a` (~32 MB). Enlace corto:
+  **`/d32`**.
+- `routers/descargas.py` — los cuatro enlaces cortos (`/c64`, `/c32`, `/d64`,
+  `/d32`) responden `302` directo al archivo de `/static`, sin pagina
+  intermedia. Sustituyen a los acortadores externos (shty.in), que fallaban o
+  metian publicidad, y son del propio dominio para que WhatsApp los marque como
+  clicables. Si el APK todavia no se publico devuelven `404` con el nombre del
+  archivo.
 - `static/app_cliente_v2.apk`, `static/app_latest.apk` y
   `static/app_chofer_latest.apk` — copias de los APK de 64 bits, por
   compatibilidad con los enlaces viejos que ya circulan.
@@ -425,9 +433,10 @@ la base anterior). Refrescarlas solo sirve para que el enlace viejo entregue
 directamente el build nuevo, a costa de ~100 MB mas en el repositorio por
 release.
 
-El mensaje de "Compartir App" lleva los dos enlaces (`appDownloadUrl` y
-`appDownloadUrl32` / `driverDownloadUrl` y `driverDownloadUrl32`, en
-`lib/api_config.dart`).
+El mensaje de "Compartir App" lleva los enlaces cortos del backend
+(`https://<host>/c64` y `/c32` en el cliente, `/d64` y `/d32` en el chofer;
+constantes `appDownloadUrl`/`appDownloadUrl32` y
+`driverDownloadUrl`/`driverDownloadUrl32` en `lib/api_config.dart`).
 
 ### Publicar un parche ligero (mismo APK, sin reinstalar)
 

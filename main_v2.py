@@ -36,6 +36,7 @@ from routers import auth_reset
 from routers import auth_refresh
 from routers import app_init
 from routers import app_updates
+from routers import descargas
 from routers import tiempo_real
 from routers import app_init
 from services import indices
@@ -160,6 +161,9 @@ app.include_router(app_init.router)
 # OTA: /healthz, /readyz y /app/version. Va antes de cualquier router con
 # parametros de ruta para que /app/version nunca se confunda con otra ruta.
 app.include_router(app_updates.router)
+# Enlaces cortos de descarga (/c64, /c32, /d64, /d32) que se comparten por
+# WhatsApp en lugar de un acortador externo.
+app.include_router(descargas.router)
 app.include_router(tiempo_real.router)
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la
