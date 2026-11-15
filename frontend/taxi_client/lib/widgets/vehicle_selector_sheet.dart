@@ -307,333 +307,361 @@ class VehicleSelectorSheet extends StatelessWidget {
     return GlassSheet(
       showHandle: false,
       padding: EdgeInsets.zero,
-      // El selector de pago agrega alto: la hoja se puede desplazar en
-      // pantallas pequenas sin recortar el boton de confirmar.
-      child: SingleChildScrollView(
-        physics: const ClampingScrollPhysics(),
+      // La hoja nunca debe pasar del alto util de la pantalla. El contenido
+      // (direcciones, vehiculos, pago y desglose) se desplaza dentro de un
+      // `Flexible`, y el boton de confirmar queda SIEMPRE visible abajo: el
+      // aviso del 10 % de Transferencia y el desglose de la campana agregan
+      // alto y antes empujaban el boton fuera de la pantalla.
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.92,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 10),
-          // Cabecera: botón "Cambiar ruta" + indicador de arrastre
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                if (onBack != null)
-                  InkWell(
-                    onTap: onBack,
-                    borderRadius: BorderRadius.circular(20),
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
+            Flexible(
+              child: SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 10),
+                    // Cabecera: botón "Cambiar ruta" + indicador de arrastre
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Icon(Icons.arrow_back, size: 18),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Cambiar ruta',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.grey[700],
+                          if (onBack != null)
+                            InkWell(
+                              onTap: onBack,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.arrow_back, size: 18),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Cambiar ruta',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          else
+                            const SizedBox(width: 80),
+                          Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFD2D6DB),
+                              borderRadius: BorderRadius.circular(2),
                             ),
+                          ),
+                          const SizedBox(width: 80),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _AddressRow(
+                            icon: Icons.circle,
+                            iconColor: Colors.green,
+                            address: pickupAddress,
+                            label: 'Recogida',
+                          ),
+                          const SizedBox(height: 8),
+                          _AddressRow(
+                            icon: Icons.flag,
+                            iconColor: const Color(0xFFB91C1C),
+                            address: dropoffAddress,
+                            label: 'Destino',
+                          ),
+                          // Distancia y tiempo REALES del trazado (OSRM). Si la ruta
+                          // aun no tiene datos no se muestra nada en vez de un "0.0 km"
+                          // que parezca un fallo.
+                          if (distanceKm > 0) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Icon(Icons.route_rounded,
+                                    size: 15, color: AppColors.secundario),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '${distanceKm.toStringAsFixed(1)} km · '
+                                  '${durationMin.ceil()} min',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.secundario,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      height: 110,
+                      child: ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        itemCount: vehicles.length,
+                        itemBuilder: (context, index) {
+                          final isSelected = index == selectedIndex;
+                          return _VehicleCard(
+                            vehicle: vehicles[index],
+                            isSelected: isSelected,
+                            onTap: () => onVehicleSelected(index),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Pasajeros / equipaje / mascota: se envian con la solicitud y el
+                    // chofer los ve antes de aceptar.
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.people_alt_rounded,
+                                  size: 18, color: AppColors.secundario),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Pasajeros',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.tinta,
+                                ),
+                              ),
+                              const Spacer(),
+                              _PassengerCounter(
+                                value: numPasajes,
+                                onChanged: onPasajerosChanged,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _ExtraToggle(
+                                  icon: Icons.luggage_rounded,
+                                  label: 'Equipaje',
+                                  value: equipaje,
+                                  onChanged: onEquipajeChanged,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _ExtraToggle(
+                                  icon: Icons.pets_rounded,
+                                  label: 'Mascota',
+                                  value: mascota,
+                                  onChanged: onMascotaChanged,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
-                  )
-                else
-                  const SizedBox(width: 80),
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD2D6DB),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(width: 80),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _AddressRow(
-                  icon: Icons.circle,
-                  iconColor: Colors.green,
-                  address: pickupAddress,
-                  label: 'Recogida',
-                ),
-                const SizedBox(height: 8),
-                _AddressRow(
-                  icon: Icons.flag,
-                  iconColor: const Color(0xFFB91C1C),
-                  address: dropoffAddress,
-                  label: 'Destino',
-                ),
-                // Distancia y tiempo REALES del trazado (OSRM). Si la ruta
-                // aun no tiene datos no se muestra nada en vez de un "0.0 km"
-                // que parezca un fallo.
-                if (distanceKm > 0) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Icon(Icons.route_rounded,
-                          size: 15, color: AppColors.secundario),
-                      const SizedBox(width: 6),
-                      Text(
-                        '${distanceKm.toStringAsFixed(1)} km · '
-                        '${durationMin.ceil()} min',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.secundario,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 110,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              itemCount: vehicles.length,
-              itemBuilder: (context, index) {
-                final isSelected = index == selectedIndex;
-                return _VehicleCard(
-                  vehicle: vehicles[index],
-                  isSelected: isSelected,
-                  onTap: () => onVehicleSelected(index),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Pasajeros / equipaje / mascota: se envian con la solicitud y el
-          // chofer los ve antes de aceptar.
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.people_alt_rounded,
-                        size: 18, color: AppColors.secundario),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Pasajeros',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.tinta,
+                    const SizedBox(height: 14),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: _PaymentSelector(
+                        value: paymentMethod,
+                        walletBalance: walletBalance,
+                        transferSurchargeRate: transferSurchargeRate,
+                        montoRestanteBilletera:
+                            _selected.montoRestanteFor('Billetera'),
+                        montoRestanteTransferencia:
+                            _selected.montoRestanteFor('Transferencia'),
+                        onChanged: onPaymentMethodChanged,
                       ),
                     ),
-                    const Spacer(),
-                    _PassengerCounter(
-                      value: numPasajes,
-                      onChanged: onPasajerosChanged,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _ExtraToggle(
-                        icon: Icons.luggage_rounded,
-                        label: 'Equipaje',
-                        value: equipaje,
-                        onChanged: onEquipajeChanged,
+                    const SizedBox(height: 14),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              children: [
+                                Icon(Icons.attach_money,
+                                    size: 20, color: Colors.grey[600]),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Precio',
+                                  style: TextStyle(
+                                      fontSize: 10, color: Colors.grey[600]),
+                                ),
+                                const SizedBox(height: 2),
+                                if (_selected.descuentoAplicado)
+                                  Text(
+                                    '${_formatoPrecio(_selected.priceOriginalFor(paymentMethod))} CUP',
+                                    maxLines: 1,
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: AppColors.secundario,
+                                      decoration: TextDecoration.lineThrough,
+                                      decorationColor: AppColors.secundario,
+                                    ),
+                                  ),
+                                Text(
+                                  '${_formatoPrecio(_selected.priceFor(paymentMethod))} CUP',
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    fontSize: _selected.descuentoAplicado ? 18 : 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: _selected.descuentoAplicado
+                                        ? AppColors.exito
+                                        : AppColors.ambar,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          _DetailColumn(
+                            icon: Icons.payment,
+                            label: 'Pago',
+                            value: paymentMethod,
+                          ),
+                          _DetailColumn(
+                            icon: Icons.access_time,
+                            label: 'Llegada',
+                            value: etaText,
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _ExtraToggle(
-                        icon: Icons.pets_rounded,
-                        label: 'Mascota',
-                        value: mascota,
-                        onChanged: onMascotaChanged,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: _PaymentSelector(
-              value: paymentMethod,
-              walletBalance: walletBalance,
-              transferSurchargeRate: transferSurchargeRate,
-              montoRestanteBilletera:
-                  _selected.montoRestanteFor('Billetera'),
-              montoRestanteTransferencia:
-                  _selected.montoRestanteFor('Transferencia'),
-              onChanged: onPaymentMethodChanged,
-            ),
-          ),
-          const SizedBox(height: 14),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    children: [
-                      Icon(Icons.attach_money,
-                          size: 20, color: Colors.grey[600]),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Precio',
-                        style: TextStyle(
-                            fontSize: 10, color: Colors.grey[600]),
-                      ),
-                      const SizedBox(height: 2),
-                      if (_selected.descuentoAplicado)
-                        Text(
-                          '${_formatoPrecio(_selected.priceOriginalFor(paymentMethod))} CUP',
-                          maxLines: 1,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: AppColors.secundario,
-                            decoration: TextDecoration.lineThrough,
-                            decorationColor: AppColors.secundario,
+                    if (_selected.tieneCampana) ...[
+                      const SizedBox(height: 10),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Container(
+                          width: double.infinity,
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: AppColors.secundario.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: AppColors.secundario.withValues(alpha: 0.35),
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              _filaDesglose(
+                                'Precio total',
+                                _selected.priceFor(paymentMethod),
+                                color: AppColors.tinta,
+                              ),
+                              const SizedBox(height: 4),
+                              _filaDesglose(
+                                'Saldo Promocional',
+                                -_selected.saldoPromocionalUsado,
+                                color: AppColors.exito,
+                              ),
+                              const Divider(height: 12),
+                              _filaDesglose(
+                                paymentMethod == 'Transferencia'
+                                    ? 'A pagar por Transferencia'
+                                    : paymentMethod == 'Billetera'
+                                        ? 'A pagar con Billetera'
+                                        : 'A pagar en Efectivo',
+                                _selected.montoRestanteFor(paymentMethod),
+                                color: AppColors.ambar,
+                                destacado: true,
+                              ),
+                            ],
                           ),
                         ),
-                      Text(
-                        '${_formatoPrecio(_selected.priceFor(paymentMethod))} CUP',
-                        maxLines: 1,
-                        style: TextStyle(
-                          fontSize: _selected.descuentoAplicado ? 18 : 14,
-                          fontWeight: FontWeight.bold,
-                          color: _selected.descuentoAplicado
-                              ? AppColors.exito
-                              : AppColors.ambar,
+                      ),
+                    ],
+                    if (_selected.descuentoAplicado) ...[
+                      const SizedBox(height: 10),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Container(
+                          width: double.infinity,
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: AppColors.exito.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: AppColors.exito.withValues(alpha: 0.35),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.local_offer_rounded,
+                                  size: 16, color: AppColors.exito),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  _selected.badgeDescuento,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.exito,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
-                  ),
-                ),
-                _DetailColumn(
-                  icon: Icons.payment,
-                  label: 'Pago',
-                  value: paymentMethod,
-                ),
-                _DetailColumn(
-                  icon: Icons.access_time,
-                  label: 'Llegada',
-                  value: etaText,
-                ),
-              ],
-            ),
-          ),
-          if (_selected.tieneCampana) ...[
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                decoration: BoxDecoration(
-                  color: AppColors.secundario.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: AppColors.secundario.withValues(alpha: 0.35),
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    _filaDesglose(
-                      'Precio total',
-                      _selected.priceFor(paymentMethod),
-                      color: AppColors.tinta,
-                    ),
-                    const SizedBox(height: 4),
-                    _filaDesglose(
-                      'Saldo Promocional',
-                      -_selected.saldoPromocionalUsado,
-                      color: AppColors.exito,
-                    ),
-                    const Divider(height: 12),
-                    _filaDesglose(
-                      paymentMethod == 'Transferencia'
-                          ? 'A pagar por Transferencia'
-                          : paymentMethod == 'Billetera'
-                              ? 'A pagar con Billetera'
-                              : 'A pagar en Efectivo',
-                      _selected.montoRestanteFor(paymentMethod),
-                      color: AppColors.ambar,
-                      destacado: true,
-                    ),
+                    const SizedBox(height: 16),
                   ],
                 ),
               ),
             ),
-          ],
-          if (_selected.descuentoAplicado) ...[
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                decoration: BoxDecoration(
-                  color: AppColors.exito.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: AppColors.exito.withValues(alpha: 0.35),
+            // El boton vive FUERA del scroll: queda fijo al pie de la hoja y
+            // se ve aunque Transferencia agregue el aviso del recargo o la
+            // campana sume el desglose de tres lineas.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.94),
+                border: Border(
+                  top: BorderSide(
+                    color: const Color(0xFFE5E7EB).withValues(alpha: 0.9),
                   ),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.local_offer_rounded,
-                        size: 16, color: AppColors.exito),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        _selected.badgeDescuento,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.exito,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              ),
+              child: PillButton(
+                label: isLoading ? 'Solicitando...' : 'Viajar ahora',
+                loading: isLoading,
+                loadingLabel: 'Solicitando...',
+                icon: Icons.local_taxi_rounded,
+                onPressed:
+                    isLoading || !_puedeConfirmar ? null : onConfirmTrip,
               ),
             ),
-          ],
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-            child: PillButton(
-              label: isLoading ? 'Solicitando...' : 'Viajar ahora',
-              loading: isLoading,
-              loadingLabel: 'Solicitando...',
-              icon: Icons.local_taxi_rounded,
-              onPressed: isLoading || !_puedeConfirmar ? null : onConfirmTrip,
-            ),
-          ),
           ],
         ),
       ),
