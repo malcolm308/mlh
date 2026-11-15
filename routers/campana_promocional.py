@@ -184,7 +184,8 @@ def info_promocional(doc: Optional[dict]) -> dict:
     bono = bono_promocional(doc) if vigente else Decimal("0.00")
     return {
         "saldo_promocional": float(saldo),
-        "fecha_expiracion_promocional": expira.isoformat() if expira else None,
+        "fecha_expiracion_promocional": (
+            expira.isoformat() + "Z" if expira else None),
         "campana_promocional_activa": vigente,
         "monto_bono_chofer_campana": float(bono),
     }
@@ -264,7 +265,7 @@ async def lanzar_promocion(datos: LanzarPromoIn,
         "clientes_afectados": int(resultado.matched_count or 0),
         "monto_cliente": float(monto),
         "monto_bono_chofer": float(bono),
-        "fecha_expiracion": expira.isoformat(),
+        "fecha_expiracion": expira.isoformat() + "Z",
         "campana_promocional_activa": True,
     }
 
@@ -328,6 +329,6 @@ async def estado_promocion(admin: dict = Depends(require_admin)):
         "lanzada_at": (
             a_utc_naive((documento or {}).get("lanzada_at")).isoformat()
             if (documento or {}).get("lanzada_at") else None),
-        "fecha_expiracion": expira.isoformat() if expira else None,
+        "fecha_expiracion": (expira.isoformat() + "Z") if expira else None,
         "lanzada_por": (documento or {}).get("lanzada_por"),
     }

@@ -76,8 +76,10 @@ def render(api, admin_email: str = "") -> None:
         try:
             res = api.lanzar_promo(monto_cliente, monto_bono_chofer,
                                    horas_expiracion)
+            st.write("RESPUESTA BACKEND:", res)
         except ApiError as exc:
             st.error(explicar_error(exc))
+            st.write("ERROR:", str(exc))
         else:
             st.success(
                 "Promocion lanzada: %s clientes afectados, vence el %s."

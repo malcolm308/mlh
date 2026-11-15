@@ -1195,8 +1195,6 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
               Text('Válido hasta: ${_formatearFechaPromo(expira)}'),
             ],
             const SizedBox(height: 8),
-            const Text('Válido hasta las 6:00 AM.',
-                style: TextStyle(fontStyle: FontStyle.italic)),
           ],
         ),
         actions: [
