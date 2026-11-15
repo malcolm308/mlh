@@ -12,7 +12,7 @@ import ui
 from api_client import ApiError, explicar_error
 
 
-def render(api, admin_email: str) -> None:
+def render(api, admin_email: str = "") -> None:
     st.header("Gestion de Promociones")
     st.caption(
         "Campana 'Sabado de RapiTaxi': saldo promocional por cliente, con "
