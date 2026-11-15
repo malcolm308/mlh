@@ -1100,7 +1100,9 @@ def estimate_all_vehicles(
     vehicles = []
     cliente_doc = _datos_cliente_descuento(client_id)
     descuento_global = Decimal("0")
-    referido_global = False
+    primer_viaje_global = Decimal("0")
+    referido_global = Decimal("0")
+    porcentaje_global = 0.0
     for vehicle_type in ["moto", "triciclo", "basico", "confort"]:
         breakdown = _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
         original = float(breakdown["precio_estimado"])
@@ -1109,8 +1111,13 @@ def estimate_all_vehicles(
         final = descuentos["precio_final"]
         descuento_global = max(
             descuento_global, Decimal(str(descuentos["descuento_total"])))
-        referido_global = (
-            referido_global or descuentos["descuento_referido_aplicado"])
+        primer_viaje_global = max(
+            primer_viaje_global,
+            Decimal(str(descuentos["descuento_primer_viaje"])))
+        referido_global = max(
+            referido_global, Decimal(str(descuentos["descuento_referido"])))
+        if descuentos["descuento_aplicado"] and not porcentaje_global:
+            porcentaje_global = float(descuentos["descuento_porcentaje"])
         vehicles.append({
             "vehicle_type": vehicle_type,
             "price": round(final, 2),
@@ -1138,13 +1145,11 @@ def estimate_all_vehicles(
         "recargo_transferencia": recargo_rate,
         "comision_billetera": comision_billetera,
         "descuento_aplicado": descuento_global > 0,
-        "descuento_referido_aplicado": referido_global,
-        "descuento_primer_viaje": float(descuento_global),
-        "descuento_porcentaje": (
-            float(REFERRAL_DISCOUNT_RATE)
-            if referido_global else
-            float(PRIMER_VIAJE_DISCOUNT_RATE)
-            if descuento_global > 0 else 0.0),
+        "descuento_referido_aplicado": referido_global > 0,
+        "descuento_total": float(descuento_global),
+        "descuento_primer_viaje": float(primer_viaje_global),
+        "descuento_referido": float(referido_global),
+        "descuento_porcentaje": porcentaje_global,
         "vehicles": vehicles,
     }
 # ===================== TRIPS =====================
