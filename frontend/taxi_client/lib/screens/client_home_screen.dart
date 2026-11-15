@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,6 +17,7 @@ import '../services/location_service.dart';
 import '../services/osrm_service.dart';
 import '../services/token_store.dart';
 import '../services/update_service.dart';
+import '../utils/hora_cuba.dart';
 import '../theme/app_theme.dart';
 import '../widgets/client_map_view.dart';
 import '../widgets/menu_lateral_cliente.dart';
@@ -1166,8 +1166,7 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   /// Los tokens los borra `ApiClient` antes de llamar aqui.
   String _formatearFechaPromo(String iso) {
     try {
-      final dt = DateTime.parse(iso).toLocal();
-      return DateFormat('dd/MM/yyyy hh:mm a').format(dt);
+      return formatearHoraCuba(iso);
     } catch (_) {
       return iso;
     }

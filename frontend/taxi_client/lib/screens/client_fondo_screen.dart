@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/hora_cuba.dart';
 import 'client_transfer_history_screen.dart';
 
 /// Fondo del pasajero: saldo de la billetera, transferencias de billetera a
@@ -108,8 +108,7 @@ class _ClientFondoScreenState extends State<ClientFondoScreen> {
 
   String _formatearFecha(String iso) {
     try {
-      final dt = DateTime.parse(iso).toLocal();
-      return DateFormat('dd/MM/yyyy hh:mm a').format(dt);
+      return formatearHoraCuba(iso);
     } catch (_) {
       return iso;
     }
