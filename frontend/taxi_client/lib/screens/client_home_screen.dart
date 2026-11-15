@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api_config.dart';
 import '../models/models.dart';
@@ -1666,6 +1667,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _CanalWhatsAppBanner(onTap: _abrirCanalWhatsApp),
+          const SizedBox(height: 10),
           Text(
             'Hola, $nombre',
             style: const TextStyle(
@@ -1944,6 +1947,29 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     );
   }
 
+  /// Abre el canal oficial de WhatsApp en la app externa.
+  ///
+  /// No se usa `canLaunchUrl`: en Android 11+ la consulta de visibilidad puede
+  /// devolver `false` aunque WhatsApp o el navegador existan. Se lanza el intent
+  /// directo y el try-catch cubre el caso de que ninguna app pueda abrirlo.
+  Future<void> _abrirCanalWhatsApp() async {
+    final uri = Uri.parse(whatsappChannelUrl);
+    try {
+      final abierto =
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!abierto) {
+        throw Exception('No se pudo abrir el canal de WhatsApp');
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('No se pudo abrir WhatsApp. Revisa que esté instalado.'),
+        ));
+    }
+  }
+
   Future<void> _shareApp() async {
     // El código viene en el perfil que se cargó al iniciar sesión. Si la
     // sesión se restauró con un perfil antiguo (sin código), se pide al
@@ -1996,6 +2022,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         Navigator.of(context).push(MaterialPageRoute(
           builder: (_) => PromocionesScreen(api: widget.api),
         ));
+      },
+      onCanalWhatsApp: () {
+        // Cierra el menu antes de salir a WhatsApp para que al volver a la app
+        // el pasajero encuentre el mapa, no el drawer abierto.
+        Navigator.of(context).pop();
+        _abrirCanalWhatsApp();
       },
       onHistorial: () {
         Navigator.of(context).pop();
@@ -2181,6 +2213,78 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
       },
       onBack: widget.onBack,
       isLoading: widget.isLoading,
+    );
+  }
+}
+
+/// Tarjeta compacta que invita a seguir el canal oficial de WhatsApp.
+///
+/// Se pinta en la parte superior del panel inferior (encima del saludo) para
+/// que el pasajero la vea al abrir la app sin tapar el mapa ni los botones
+/// flotantes. Toda la tarjeta es tocable.
+class _CanalWhatsAppBanner extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _CanalWhatsAppBanner({required this.onTap});
+
+  static const Color _verde = Color(0xFF25D366);
+  static const Color _verdeFondo = Color(0xFFE9FAF0);
+  static const Color _verdeTexto = Color(0xFF0B6B3A);
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: _verdeFondo,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _verde.withValues(alpha: 0.35)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: _verde,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.forum_rounded,
+                  size: 18,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  '¡Entérate de las promociones antes que nadie! '
+                  'Síguenos en WhatsApp',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.25,
+                    fontWeight: FontWeight.w700,
+                    color: _verdeTexto,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: _verdeTexto,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

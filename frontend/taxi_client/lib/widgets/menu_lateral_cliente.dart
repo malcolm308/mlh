@@ -30,6 +30,7 @@ class MenuLateralCliente extends StatelessWidget {
   final ClientProfile profile;
   final VoidCallback onPerfil;
   final VoidCallback onPromociones;
+  final VoidCallback onCanalWhatsApp;
   final VoidCallback onHistorial;
   final VoidCallback onFondo;
   final VoidCallback onFavoritas;
@@ -44,6 +45,7 @@ class MenuLateralCliente extends StatelessWidget {
     required this.profile,
     required this.onPerfil,
     required this.onPromociones,
+    required this.onCanalWhatsApp,
     required this.onHistorial,
     required this.onFondo,
     required this.onFavoritas,
@@ -91,6 +93,12 @@ class MenuLateralCliente extends StatelessWidget {
                         icono: Icons.local_offer_outlined,
                         texto: 'Promociones',
                         onTap: onPromociones,
+                      ),
+                      PilulaMenu(
+                        icono: Icons.forum_rounded,
+                        colorIcono: const Color(0xFF25D366),
+                        texto: 'Sigue nuestro Canal de Ofertas 📢',
+                        onTap: onCanalWhatsApp,
                       ),
                       PilulaMenu(
                         icono: Icons.history,
@@ -330,6 +338,10 @@ class PilulaMenu extends StatelessWidget {
   final VoidCallback onTap;
   final bool activo;
 
+  /// Color opcional del icono (el del canal de WhatsApp usa el verde de la
+  /// marca). Si es `null` se usa el mismo color que el texto.
+  final Color? colorIcono;
+
   /// Cambia icono/texto a rojo (para "Borrar cuenta").
   final bool destacadoEnRojo;
   final Color colorRojo = const Color(0xFFB3261E);
@@ -341,6 +353,7 @@ class PilulaMenu extends StatelessWidget {
     required this.texto,
     required this.onTap,
     this.activo = false,
+    this.colorIcono,
     this.destacadoEnRojo = false,
     this.mostrarChevron = true,
   });
@@ -363,7 +376,7 @@ class PilulaMenu extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                Icon(icono, size: 20, color: tinta),
+                Icon(icono, size: 20, color: colorIcono ?? tinta),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(

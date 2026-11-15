@@ -1,5 +1,13 @@
 import 'package:latlong2/latlong.dart';
 
+/// Canal oficial de WhatsApp de RapiTaxi.
+///
+/// Se comparte como enlace universal (`https://`), no como `whatsapp://`, para
+/// que funcione igual con WhatsApp instalado (abre la app en la pantalla del
+/// canal) o sin el (el navegador muestra la pagina con el boton "Seguir").
+const String whatsappChannelUrl =
+    'https://whatsapp.com/channel/0029Vb9JG2f5fM5hayk9g12C';
+
 /// Configuración central de la app de cliente.
 ///
 /// Por defecto apunta a los servicios desplegados en Render (backend FastAPI
