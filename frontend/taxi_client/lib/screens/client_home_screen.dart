@@ -279,7 +279,12 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_promoDialogShown) return;
+      // Sin saldo o sin fecha de vencimiento no hay campana que anunciar.
+      // Antes solo se miraba el saldo: con la campana expirada/desactivada la
+      // respuesta trae `fecha_expiracion_promocional: null` y el dialogo
+      // intentaba formatear una fecha inexistente.
       if (widget.profile.saldoPromocional <= 0) return;
+      if (widget.profile.fechaExpiracionPromocional == null) return;
       _promoDialogShown = true;
       unawaited(_mostrarMensajePromo());
     });

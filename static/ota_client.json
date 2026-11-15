@@ -1,11 +1,15 @@
 {
   "app": "client",
   "latest": {
-    "version": "1.0.33",
-    "version_code": 4034,
+    "version": "1.0.34",
+    "version_code": 4035,
     "apk": "app_cliente_64bits.apk"
   },
   "releases": [
+    {
+      "version": "1.0.34",
+      "version_code": 4035
+    },
     {
       "version": "1.0.33",
       "version_code": 4034
@@ -21,61 +25,57 @@
     {
       "version": "1.0.30",
       "version_code": 4031
-    },
-    {
-      "version": "1.0.29",
-      "version_code": 4030
     }
   ],
   "patches": [
     {
-      "version": "1.0.33-p1",
-      "target_version_code": 3031,
-      "file": "patch_cliente_3031.zip",
-      "md5": "f5a2e673933e7cf4182d845b9dfd12ff",
-      "published_at": "2026-11-15T09:35:31+00:00",
-      "abi": "armeabi-v7a"
-    },
-    {
-      "version": "1.0.33-p1",
+      "version": "1.0.34-p1",
       "target_version_code": 3032,
       "file": "patch_cliente_3032.zip",
-      "md5": "6275aa491b9afb0c70f731151d568102",
-      "published_at": "2026-11-15T09:35:30+00:00",
+      "md5": "23b59601d5fae858be856c0b4b004b21",
+      "published_at": "2026-11-15T13:03:29+00:00",
       "abi": "armeabi-v7a"
     },
     {
-      "version": "1.0.33-p1",
+      "version": "1.0.34-p1",
       "target_version_code": 3033,
       "file": "patch_cliente_3033.zip",
-      "md5": "ec9ad4157af6d196673d12456cbea6d1",
-      "published_at": "2026-11-15T09:35:30+00:00",
+      "md5": "afe3614b60fc0e13750d0d05ddcd19ec",
+      "published_at": "2026-11-15T13:03:29+00:00",
       "abi": "armeabi-v7a"
     },
     {
-      "version": "1.0.33-p1",
-      "target_version_code": 4031,
-      "file": "patch_cliente_4031.zip",
-      "md5": "f96cde6f92238dffbf7f257ea1a58b48",
-      "published_at": "2026-11-15T09:35:30+00:00",
-      "abi": "arm64-v8a"
+      "version": "1.0.34-p1",
+      "target_version_code": 3034,
+      "file": "patch_cliente_3034.zip",
+      "md5": "0fa67f68346de74d27b48fb5dd49d824",
+      "published_at": "2026-11-15T13:03:29+00:00",
+      "abi": "armeabi-v7a"
     },
     {
-      "version": "1.0.33-p1",
+      "version": "1.0.34-p1",
       "target_version_code": 4032,
       "file": "patch_cliente_4032.zip",
-      "md5": "a3f0e5cc27e69ee4e57fa072d9d18e34",
-      "published_at": "2026-11-15T09:35:29+00:00",
+      "md5": "c55e31705fbb3a21f931d4aeda30ebac",
+      "published_at": "2026-11-15T13:03:29+00:00",
       "abi": "arm64-v8a"
     },
     {
-      "version": "1.0.33-p1",
+      "version": "1.0.34-p1",
       "target_version_code": 4033,
       "file": "patch_cliente_4033.zip",
-      "md5": "b7ad9e0b7901b9d2a8523c8003b2fd78",
-      "published_at": "2026-11-15T09:35:29+00:00",
+      "md5": "76f160433d6a2238bad880e64938a536",
+      "published_at": "2026-11-15T13:03:28+00:00",
+      "abi": "arm64-v8a"
+    },
+    {
+      "version": "1.0.34-p1",
+      "target_version_code": 4034,
+      "file": "patch_cliente_4034.zip",
+      "md5": "392604f8bda4056435f2517a88ee5d91",
+      "published_at": "2026-11-15T13:03:28+00:00",
       "abi": "arm64-v8a"
     }
   ],
-  "updated_at": "2026-11-15T09:35:31+00:00"
+  "updated_at": "2026-11-15T13:03:29+00:00"
 }

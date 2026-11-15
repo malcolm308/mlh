@@ -1,5 +1,37 @@
 import 'package:latlong2/latlong.dart';
 
+/// Texto opcional de un JSON. Devuelve `null` si falta, no es un String o
+/// viene vacio. Nunca lanza: escribir `j['x'] as String` sobre un `null`
+/// rompe el login completo con "type 'Null' is not a subtype of type
+/// 'String' in type cast".
+String? _textoOpcional(dynamic valor) {
+  if (valor is! String) return null;
+  final texto = valor.trim();
+  return texto.isEmpty ? null : texto;
+}
+
+/// Numero opcional de un JSON. Acepta `num` y tambien cadenas numericas
+/// (algunos documentos viejos guardan el saldo como texto). Cualquier otra
+/// cosa (null, "", fecha, objeto) cae al valor por defecto.
+double _numeroOpcional(dynamic valor, {double porDefecto = 0}) {
+  if (valor is num) return valor.toDouble();
+  if (valor is String) {
+    final texto = valor.trim();
+    if (texto.isEmpty) return porDefecto;
+    return double.tryParse(texto) ?? porDefecto;
+  }
+  return porDefecto;
+}
+
+/// Fecha ISO opcional de un JSON. `null`/vacio/objetos no textuales se
+/// devuelven como `null`; el dialogo de la promo exige fecha no nula.
+String? _fechaOpcional(dynamic valor) {
+  if (valor is DateTime) return valor.toIso8601String();
+  if (valor is! String) return null;
+  final texto = valor.trim();
+  return texto.isEmpty ? null : texto;
+}
+
 /// Perfil del cliente que entra en la app de pasajeros.
 class ClientProfile {
   final String id;
@@ -51,23 +83,16 @@ class ClientProfile {
         fullName: '${j['Nombre'] ?? ''} ${j['Apellidos'] ?? ''}'.trim(),
         email: j['email']?.toString() ?? '',
         telefono: j['numero_de_telefono']?.toString(),
-        fondo: ((j['fondo'] ?? j['Fondo']) as num?)?.toDouble() ?? 0,
-        saldoPromocional:
-            (j['saldo_promocional'] as num?)?.toDouble() ?? 0,
+        fondo: _numeroOpcional(j['fondo'] ?? j['Fondo']),
+        saldoPromocional: _numeroOpcional(j['saldo_promocional']),
         fechaExpiracionPromocional:
-            j['fecha_expiracion_promocional']?.toString(),
+            _fechaOpcional(j['fecha_expiracion_promocional']),
         campanaPromocionalActiva:
             j['campana_promocional_activa'] == true,
         montoBonoChoferCampana:
-            (j['monto_bono_chofer_campana'] as num?)?.toDouble() ?? 0,
-        tituloPromo: (j['titulo_promo'] ?? '') is String &&
-                (j['titulo_promo'] as String).trim().isNotEmpty
-            ? (j['titulo_promo'] as String).trim()
-            : null,
-        codigoReferido: (j['codigo_referido'] ?? '') is String &&
-                (j['codigo_referido'] as String).trim().isNotEmpty
-            ? (j['codigo_referido'] as String).trim()
-            : null,
+            _numeroOpcional(j['monto_bono_chofer_campana']),
+        tituloPromo: _textoOpcional(j['titulo_promo']),
+        codigoReferido: _textoOpcional(j['codigo_referido']),
       );
 }
 
