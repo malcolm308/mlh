@@ -326,7 +326,7 @@ def _control_manual(api) -> None:
                     st.rerun()
 
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     st.subheader("🚨 Viajes críticos")
     st.caption(
         "Viajes que siguen en cola y no tienen chófer. El primero es el "

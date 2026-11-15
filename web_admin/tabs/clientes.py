@@ -43,7 +43,7 @@ def _etiqueta(c: dict) -> str:
                         c.get("telefono") or c.get("email") or c["id"])
 
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     st.markdown("### 👤 Clientes")
     st.caption("Todas las cuentas de la app del cliente. El buscador filtra "
                "por teléfono, correo o nombre; aquí también puedes borrar una "

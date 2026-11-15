@@ -26,7 +26,7 @@ ETIQUETAS_ROL = {
 }
 
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     # Limpieza del formulario de alta DESPUÉS de una creación correcta. Se hace
     # al principio del run, antes de crear los widgets: Streamlit no permite
     # borrar la clave de un widget ya instanciado en el mismo run.

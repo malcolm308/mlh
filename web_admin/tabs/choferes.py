@@ -202,7 +202,7 @@ def _detalle(api, chofer: dict) -> None:
                 st.rerun()
 
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     st.subheader("🧑‍✈️ Habilitación de chóferes")
     st.caption(
         "El administrador decide quién puede entrar a la app del chófer. "

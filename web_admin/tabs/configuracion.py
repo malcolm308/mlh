@@ -304,7 +304,7 @@ def _formulario(api, config: dict) -> None:
     st.rerun()
 
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     st.subheader("🎁 Promociones, comisiones y tarifas")
     st.caption(
         "Estos valores se aplican a todos los chóferes y a todos los viajes: "

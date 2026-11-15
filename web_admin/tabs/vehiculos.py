@@ -165,7 +165,7 @@ def _detalle(api, vehiculo: dict) -> None:
         st.rerun()
 
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     st.subheader("🚗 Aprobación de vehículos")
     st.caption(
         "Un vehículo nuevo entra como pendiente. Solo uno aprobado puede "

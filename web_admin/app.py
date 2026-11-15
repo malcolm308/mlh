@@ -236,8 +236,9 @@ def _manejar_sesion(exc: SesionExpirada) -> None:
 
 def _seguro(funcion, api: ApiClient) -> None:
     """Ejecuta una pestaña y traduce los errores de red a algo legible."""
+    admin_email = st.session_state.get("admin_email", "")
     try:
-        funcion(api)
+        funcion(api, admin_email)
     except SesionExpirada as exc:
         _manejar_sesion(exc)
     except ApiError as exc:

@@ -41,7 +41,7 @@ def _fila_detalle(v: dict) -> dict:
     }
 
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     st.subheader("📊 Viajes por día")
     st.caption(
         "Totales del día y evolución de los últimos días, en hora oficial de "

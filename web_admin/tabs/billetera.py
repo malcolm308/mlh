@@ -313,7 +313,7 @@ def _render_clientes(api) -> None:
 
 # ===================== ENTRADA =====================
 
-def render(api) -> None:
+def render(api, admin_email: str = "") -> None:
     tipo = st.radio("Tipo de billetera", [TIPO_CHOFERES, TIPO_CLIENTES],
                     horizontal=True, key="billetera_tipo")
 
