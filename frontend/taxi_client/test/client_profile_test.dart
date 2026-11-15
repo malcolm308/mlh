@@ -59,6 +59,34 @@ void main() {
       expect(perfil.codigoReferido, isNull);
       expect(perfil.montoBonoChoferCampana, 0);
     });
+    test('respuesta real de produccion sin promo (auditoria)', () {
+      // Payload exacto devuelto por GET /cliente/<id> para una cuenta nueva sin
+      // campana: `titulo_promo: null` era el que disparaba el cast a String.
+      final perfil = ClientProfile.fromJson({
+        'Apellidos': 'SinPromo',
+        'Enable': true,
+        'Fondo': 0.0,
+        'Nombre': 'Prueba',
+        '_id': '6af9ae9c51f57e152e502e72',
+        'campana_promocional_activa': false,
+        'codigo_referido': 'GNRGCDIT',
+        'email': 'sinpromo.1794747932@example.com',
+        'fecha_expiracion_promocional': null,
+        'monto_bono_chofer_campana': 0.0,
+        'numero_de_telefono': '55997932',
+        'saldo_promocional': 0.0,
+        'titulo_promo': null,
+      });
+
+      expect(perfil.id, '6af9ae9c51f57e152e502e72');
+      expect(perfil.fullName, 'Prueba SinPromo');
+      expect(perfil.email, 'sinpromo.1794747932@example.com');
+      expect(perfil.saldoPromocional, 0);
+      expect(perfil.fechaExpiracionPromocional, isNull);
+      expect(perfil.campanaPromocionalActiva, isFalse);
+      expect(perfil.tituloPromo, isNull);
+      expect(perfil.codigoReferido, 'GNRGCDIT');
+    });
   });
 
   group('ClientProfile.fromJson con promocion activa', () {
