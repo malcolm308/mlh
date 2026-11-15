@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 import pandas as pd
 import streamlit as st
 
@@ -46,13 +44,13 @@ def _fila_detalle(v: dict) -> dict:
 def render(api) -> None:
     st.subheader("📊 Viajes por día")
     st.caption(
-        "Totales del día y evolución de los últimos días. Las fechas son las "
-        "del servidor, no las del navegador."
+        "Totales del día y evolución de los últimos días, en hora oficial de "
+        "Cuba (la misma que muestran las apps)."
     )
 
     c1, c2 = st.columns([1, 1])
     with c1:
-        hasta = st.date_input("Día a consultar", value=date.today(),
+        hasta = st.date_input("Día a consultar", value=ui.fecha_cuba(),
                               key="viajes_fecha")
     with c2:
         dias = st.selectbox("Días del gráfico", [7, 14, 30], index=0,

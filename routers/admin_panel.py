@@ -33,6 +33,8 @@ from routers.admin_roles import (ROLES_VALIDOS, REQUIERE_OPERADOR_REGISTROS,
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel
 
+from tiempo_cuba import fecha_cuba, offset_cuba
+
 from db.Administración.auth import verify_token as verify_admin_token
 from db.Administración.connection import admin_db
 from db.tokens import create_access_token, create_refresh_token, ACCESS_TOKEN_EXPIRE_MINUTES
@@ -55,6 +57,10 @@ from routers.Solicitud_de_viajes_v4 import (
 )
 
 logger = logging.getLogger(__name__)
+
+# `requested_at`/`created_at` son TIMESTAMP UTC naive. Para agrupar por el dia
+# que ve el usuario en Cuba se les suma este desfase antes del `::date`.
+_DESFASE_CUBA = timedelta(hours=offset_cuba())
 
 router = APIRouter(prefix="/admin", tags=["Administracion"])
 
@@ -188,7 +194,10 @@ def _chofer_out(doc: dict) -> dict:
 
 def _validar_fecha(valor: Optional[str]) -> date:
     if not valor:
-        return date.today()
+        # El dia del panel es el de Cuba, no el del servidor (UTC). A las 20:00
+        # en La Habana en UTC ya es el dia siguiente y el panel abriria en un
+        # dia sin viajes.
+        return fecha_cuba()
     try:
         return datetime.strptime(valor, "%Y-%m-%d").date()
     except ValueError:
@@ -667,7 +676,7 @@ async def viajes_diarios(dias: int = 7, hasta: Optional[str] = None,
 
     sql = """
         SELECT
-            requested_at::date                       AS dia,
+            (requested_at + %s)::date                AS dia,
             COUNT(*)                                 AS total,
             COUNT(*) FILTER (WHERE status = 'completed')   AS completados,
             COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelados,
@@ -680,13 +689,13 @@ async def viajes_diarios(dias: int = 7, hasta: Optional[str] = None,
             COALESCE(SUM(distance_km) FILTER (WHERE status = 'completed'), 0) AS km_recorridos,
             COUNT(DISTINCT driver_id) FILTER (WHERE status = 'completed')      AS choferes
           FROM trips
-         WHERE requested_at::date BETWEEN %s AND %s
+         WHERE (requested_at + %s)::date BETWEEN %s AND %s
          GROUP BY dia
          ORDER BY dia
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, (inicio, fin))
+        cur.execute(sql, (_DESFASE_CUBA, _DESFASE_CUBA, inicio, fin))
         filas = [dict(r) for r in cur.fetchall()]
         cur.close()
 
@@ -783,13 +792,13 @@ async def viajes_del_dia(fecha: Optional[str] = None, admin: dict = Depends(requ
                base_fare, distance_fare, precio_estimado, total_fare, tip, currency,
                requested_at, started_at, completed_at
           FROM trips
-         WHERE requested_at::date = %s
+         WHERE (requested_at + %s)::date = %s
          ORDER BY requested_at DESC
          LIMIT 500
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, (dia,))
+        cur.execute(sql, (_DESFASE_CUBA, dia))
         rows = [dict(r) for r in cur.fetchall()]
         cur.close()
 
@@ -822,11 +831,11 @@ async def resumen_del_dia(fecha: Optional[str] = None, admin: dict = Depends(req
             COALESCE(SUM(distance_fare) FILTER (WHERE status = 'completed'), 0)
                                                                  AS ingreso_choferes
           FROM trips
-         WHERE requested_at::date = %s
+         WHERE (requested_at + %s)::date = %s
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, (dia,))
+        cur.execute(sql, (_DESFASE_CUBA, dia))
         row = dict(cur.fetchone() or {})
         cur.close()
 
@@ -847,7 +856,7 @@ async def choferes_top(fecha: Optional[str] = None, limite: int = 10,
                COALESCE(SUM(total_fare), 0)               AS facturado,
                COALESCE(SUM(distance_km), 0)              AS km
           FROM trips
-         WHERE requested_at::date = %s
+         WHERE (requested_at + %s)::date = %s
            AND status = 'completed'
            AND driver_id IS NOT NULL
          GROUP BY driver_id
@@ -856,7 +865,7 @@ async def choferes_top(fecha: Optional[str] = None, limite: int = 10,
     """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, (dia, min(limite, 50)))
+        cur.execute(sql, (_DESFASE_CUBA, dia, min(limite, 50)))
         rows = [dict(r) for r in cur.fetchall()]
         cur.close()
 

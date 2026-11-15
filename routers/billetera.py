@@ -25,13 +25,15 @@ Endpoints (todos requieren token de administrador salvo el saldo):
 """
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import psycopg2
 import psycopg2.extras
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
+
+from tiempo_cuba import fecha_cuba, offset_cuba
 
 from db.Administración.connection import admin_db
 from db.Chofer.connection import chofer_db
@@ -459,9 +461,11 @@ async def movimientos(driver_id: Optional[str] = None, limit: int = 100,
 
 @router.get("/resumen")
 async def resumen(admin: dict = Depends(require_admin)):
-    """Totales de recargas del dia actual."""
+    """Totales de recargas del dia actual (hora de Cuba)."""
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # `created_at` es UTC naive: se le suma el desfase de Cuba antes del
+        # `::date` para que "hoy" sea el mismo dia que ven las apps.
         cur.execute(
             """
             SELECT
@@ -471,8 +475,9 @@ async def resumen(admin: dict = Depends(require_admin)):
                 COUNT(*) FILTER (WHERE tipo = 'debito')                  AS num_debitos
               FROM wallet_movements
              WHERE user_type = 'driver'
-               AND created_at::date = CURRENT_DATE
-            """
+               AND (created_at + %s)::date = %s
+            """,
+            (timedelta(hours=offset_cuba()), fecha_cuba()),
         )
         row = dict(cur.fetchone() or {})
         cur.close()

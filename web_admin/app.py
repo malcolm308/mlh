@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 # Permite `streamlit run app.py` desde cualquier directorio y que los imports
@@ -323,7 +323,7 @@ def _cargar_rol(cliente: ApiClient) -> None:
 def _cabecera(api: ApiClient) -> None:
     st.title("Panel de administración")
     st.caption("Hoy es %s · Backend: %s"
-               % (date.today().strftime("%d/%m/%Y"), get_api_base_url()))
+               % (ui.fecha_cuba().strftime("%d/%m/%Y"), get_api_base_url()))
     ui.mostrar_flash()
 
     try:

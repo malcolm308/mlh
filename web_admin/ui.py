@@ -12,8 +12,9 @@ desincronizarian a la primera:
 from __future__ import annotations
 
 import io
+import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Optional
 
 import pandas as pd
@@ -70,6 +71,56 @@ def numero(valor: Any, decimales: int = 2) -> str:
         return "—"
 
 
+# ===================== HORA OFICIAL DE CUBA =====================
+#
+# El panel corre en Render (UTC) y los timestamps del backend llegan en UTC
+# naive: Postgres guarda `datetime.now(timezone.utc)` en columnas TIMESTAMP y
+# Mongo devuelve `datetime.utcnow()`. Las apps de cliente y chofer pintan la
+# hora de Cuba, asi que el panel tiene que hacer la misma conversion o muestra
+# las fechas 4 horas adelantadas (y de noche, un dia de mas).
+#
+# En 2026 Cuba NO atraso el reloj: se quedo en horario de verano (UTC-4) todo
+# el ano. El desfase se puede cambiar con `CUBA_UTC_OFFSET` sin tocar codigo,
+# igual que en el backend (`tiempo_cuba.py`).
+_DEFECTO_CUBA = -4
+
+
+def offset_cuba() -> int:
+    """Desfase de Cuba respecto a UTC, en horas (negativo)."""
+    try:
+        return int(os.getenv("CUBA_UTC_OFFSET", str(_DEFECTO_CUBA)))
+    except (TypeError, ValueError):
+        return _DEFECTO_CUBA
+
+
+CUBA_TZ = timezone(timedelta(hours=offset_cuba()), "Cuba")
+
+
+def ahora_cuba() -> datetime:
+    """Ahora en hora oficial de Cuba (aware)."""
+    return datetime.now(CUBA_TZ)
+
+
+def fecha_cuba() -> date:
+    """Dia actual en hora oficial de Cuba."""
+    return ahora_cuba().date()
+
+
+def _solo_fecha(valor: Any) -> bool:
+    """True si el valor es un dia sin hora (no debe cruzar de zona).
+
+    Lo usan campos como `fecha_expiracion` o el dia de las metricas: ahi
+    `2026-11-14` significa el 14, no las 20:00 del 13 en Cuba.
+    """
+    if isinstance(valor, datetime):
+        return False
+    if isinstance(valor, date):
+        return True
+    texto = str(valor).strip()
+    return (len(texto) == 10 and texto[4] == "-" and texto[7] == "-"
+            and texto.replace("-", "").isdigit())
+
+
 def _parsear(valor: Any) -> Optional[datetime]:
     if valor is None or valor == "":
         return None
@@ -84,14 +135,28 @@ def _parsear(valor: Any) -> Optional[datetime]:
         return None
 
 
+def _a_hora_cuba(momento: datetime) -> datetime:
+    """UTC naive (o aware) -> hora de Cuba."""
+    if momento.tzinfo is None:
+        momento = momento.replace(tzinfo=timezone.utc)
+    return momento.astimezone(CUBA_TZ)
+
+
 def fecha_hora(valor: Any) -> str:
     momento = _parsear(valor)
     if not momento:
         return "—"
+    if not _solo_fecha(valor):
+        momento = _a_hora_cuba(momento)
     return momento.strftime("%d/%m/%Y %H:%M")
 
 
 def fecha(valor: Any) -> str:
+    """Dia tal cual viene (sin conversion de zona).
+
+    Es para fechas de calendario (`fecha_expiracion`, `dia` de las metricas),
+    no para timestamps. Un timestamp se pinta con `fecha_hora`.
+    """
     momento = _parsear(valor)
     if not momento:
         return "—"
