@@ -98,6 +98,10 @@ class MenuLateralCliente extends StatelessWidget {
                         icono: Icons.forum_rounded,
                         colorIcono: const Color(0xFF25D366),
                         texto: 'Sigue nuestro Canal de Ofertas 📢',
+                        // Dos lineas: el texto completo no cabe en una sola
+                        // pildora del ancho del menu (se cortaba con "...").
+                        maxLines: 2,
+                        altura: 62,
                         onTap: onCanalWhatsApp,
                       ),
                       PilulaMenu(
@@ -342,6 +346,13 @@ class PilulaMenu extends StatelessWidget {
   /// marca). Si es `null` se usa el mismo color que el texto.
   final Color? colorIcono;
 
+  /// Cuantas lineas puede ocupar el texto (la pildora del canal de WhatsApp
+  /// necesita dos para mostrar el mensaje completo).
+  final int maxLines;
+
+  /// Alto de la pildora; 48 es el de una sola linea.
+  final double altura;
+
   /// Cambia icono/texto a rojo (para "Borrar cuenta").
   final bool destacadoEnRojo;
   final Color colorRojo = const Color(0xFFB3261E);
@@ -354,6 +365,8 @@ class PilulaMenu extends StatelessWidget {
     required this.onTap,
     this.activo = false,
     this.colorIcono,
+    this.maxLines = 1,
+    this.altura = 48,
     this.destacadoEnRojo = false,
     this.mostrarChevron = true,
   });
@@ -372,7 +385,7 @@ class PilulaMenu extends StatelessWidget {
           borderRadius: BorderRadius.circular(30),
           onTap: onTap,
           child: Container(
-            height: 48,
+            height: altura,
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
@@ -381,7 +394,7 @@ class PilulaMenu extends StatelessWidget {
                 Expanded(
                   child: Text(
                     texto,
-                    maxLines: 1,
+                    maxLines: maxLines,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: tinta,
