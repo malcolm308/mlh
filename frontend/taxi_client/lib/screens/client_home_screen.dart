@@ -1176,10 +1176,16 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     if (!mounted) return;
     final monto = widget.profile.saldoPromocional;
     final expira = widget.profile.fechaExpiracionPromocional;
+    // El titulo lo define el panel web al lanzar la campana. Solo se cae al
+    // texto de siempre si el backend todavia no manda `titulo_promo`.
+    final tituloBackend = widget.profile.tituloPromo?.trim();
+    final titulo = (tituloBackend == null || tituloBackend.isEmpty)
+        ? '¡Hoy es sábado y el cuerpo lo sabe! 🕺'
+        : tituloBackend;
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('¡Hoy es sábado y el cuerpo lo sabe! 🕺'),
+        title: Text(titulo),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

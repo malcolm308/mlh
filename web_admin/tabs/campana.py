@@ -11,6 +11,10 @@ import streamlit as st
 import ui
 from api_client import ApiError, explicar_error
 
+# Mismo valor por defecto que el backend (`campana_promocional.py`). Se usa
+# cuando la campana anterior no guardo titulo.
+TITULO_PROMO_POR_DEFECTO = "¡Hoy es sábado y el cuerpo lo sabe!"
+
 
 def render(api, admin_email: str = "") -> None:
     st.header("Gestion de Promociones")
@@ -46,6 +50,10 @@ def render(api, admin_email: str = "") -> None:
     else:
         st.warning("No hay promocion masiva lanzada.")
 
+    if estado.get("titulo_promo"):
+        st.caption("Título actual de la promoción: «%s»"
+                   % estado.get("titulo_promo"))
+
     if estado.get("monto_cliente"):
         st.caption(
             "Ultima campana: %.2f CUP por cliente, bono al chofer %.2f CUP, "
@@ -60,6 +68,11 @@ def render(api, admin_email: str = "") -> None:
     st.subheader("🚀 Lanzar Promocion Masiva")
 
     with st.form("form_lanzar_promo"):
+        titulo_promo = st.text_input(
+            "Título/Mensaje de la Promoción",
+            value=estado.get("titulo_promo") or TITULO_PROMO_POR_DEFECTO,
+            max_chars=200,
+            help="Texto que verá el cliente en el diálogo de la app.")
         monto_cliente = st.number_input(
             "Saldo promocional por cliente (CUP)",
             min_value=0.01, value=100.0, step=10.0, format="%.2f")
@@ -75,14 +88,13 @@ def render(api, admin_email: str = "") -> None:
     if lanzar:
         try:
             res = api.lanzar_promo(monto_cliente, monto_bono_chofer,
-                                   horas_expiracion)
-            st.write("RESPUESTA BACKEND:", res)
+                                   horas_expiracion, titulo_promo)
         except ApiError as exc:
             st.error(explicar_error(exc))
-            st.write("ERROR:", str(exc))
         else:
             st.success(
                 "Promocion lanzada: %s clientes afectados, vence el %s."
                 % (res.get("clientes_afectados"),
                    ui.fecha_hora(res.get("fecha_expiracion"))))
+            st.caption("Título enviado: %s" % (res.get("titulo_promo") or ""))
             st.rerun()

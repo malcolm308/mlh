@@ -512,11 +512,13 @@ class ApiClient:
         return self._json("GET", "/admin/promos/estado")
 
     def lanzar_promo(self, monto_cliente: float, monto_bono_chofer: float,
-                     horas_expiracion: float) -> dict:
+                     horas_expiracion: float,
+                     titulo_promo: str = "") -> dict:
         return self._json("POST", "/admin/promos/lanzar", json={
             "monto_cliente": monto_cliente,
             "monto_bono_chofer": monto_bono_chofer,
             "horas_expiracion": horas_expiracion,
+            "titulo_promo": titulo_promo,
         })
 
     # ---------------- billetera ----------------

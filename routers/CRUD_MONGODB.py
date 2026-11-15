@@ -175,6 +175,8 @@ class ClienteResponse(BaseModel):
     fecha_expiracion_promocional: Optional[str] = None
     campana_promocional_activa: Optional[bool] = None
     monto_bono_chofer_campana: Optional[float] = None
+    # Titulo/mensaje editable de la campana (viene vacio sin campana vigente).
+    titulo_promo: Optional[str] = None
 
     class Config:
         populate_by_name = True

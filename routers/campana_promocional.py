@@ -42,6 +42,11 @@ CENT = Decimal("0.01")
 # se actualiza (upsert) y todos los clientes reciben el saldo nuevo.
 CAMPANA_ID = "sabado_rapitaxi"
 
+# Titulo/mensaje que la app del cliente muestra en el dialogo de la campana.
+# Es editable desde el panel y se guarda junto al saldo de cada cliente, para
+# que la app no tenga que recompilarse para cambiar el texto de la campana.
+TITULO_PROMO_POR_DEFECTO = "¡Hoy es sábado y el cuerpo lo sabe!"
+
 router = APIRouter(prefix="/admin/promos", tags=["Campana promocional"])
 
 _clientes = cliente_db["users"]
@@ -176,18 +181,24 @@ def info_promocional(doc: Optional[dict]) -> dict:
             "fecha_expiracion_promocional": None,
             "campana_promocional_activa": False,
             "monto_bono_chofer_campana": 0.0,
+            "titulo_promo": None,
         }
     expirar_saldo_si_vencido(doc)
     expira = a_utc_naive(doc.get("fecha_expiracion_promocional"))
     vigente = campana_vigente(doc)
     saldo = saldo_promocional_vigente(doc) if vigente else Decimal("0.00")
     bono = bono_promocional(doc) if vigente else Decimal("0.00")
+    titulo = ((doc.get("titulo_promo") or "").strip()
+              or TITULO_PROMO_POR_DEFECTO)
     return {
         "saldo_promocional": float(saldo),
         "fecha_expiracion_promocional": (
             expira.isoformat() + "Z" if expira else None),
         "campana_promocional_activa": vigente,
         "monto_bono_chofer_campana": float(bono),
+        # Solo se expone con la campana vigente: sin saldo activo no hay
+        # mensaje que mostrar en la app.
+        "titulo_promo": titulo if vigente else None,
     }
 
 
@@ -204,6 +215,9 @@ class LanzarPromoIn(BaseModel):
         ge=0, description="Bono extra que recibe el chofer por viaje, en CUP")
     horas_expiracion: float = Field(
         gt=0, description="Horas que dura la campana desde que se lanza")
+    titulo_promo: str = Field(
+        default=TITULO_PROMO_POR_DEFECTO, max_length=200,
+        description="Titulo/mensaje que muestra la app del cliente")
 
 
 @router.post("/lanzar")
@@ -216,6 +230,7 @@ async def lanzar_promocion(datos: LanzarPromoIn,
     """
     monto = _dinero(datos.monto_cliente)
     bono = _dinero(datos.monto_bono_chofer)
+    titulo = (datos.titulo_promo or "").strip() or TITULO_PROMO_POR_DEFECTO
     ahora = _ahora_utc()
     expira = ahora + timedelta(hours=float(datos.horas_expiracion))
 
@@ -226,6 +241,7 @@ async def lanzar_promocion(datos: LanzarPromoIn,
                 "saldo_promocional": float(monto),
                 "fecha_expiracion_promocional": expira,
                 "monto_bono_chofer_campana": float(bono),
+                "titulo_promo": titulo,
             }},
         )
     except Exception as exc:
@@ -240,6 +256,7 @@ async def lanzar_promocion(datos: LanzarPromoIn,
         "monto_cliente": float(monto),
         "monto_bono_chofer": float(bono),
         "horas_expiracion": float(datos.horas_expiracion),
+        "titulo_promo": titulo,
         "lanzada_at": ahora,
         "fecha_expiracion": expira,
         "lanzada_por": admin.get("email"),
@@ -265,6 +282,7 @@ async def lanzar_promocion(datos: LanzarPromoIn,
         "clientes_afectados": int(resultado.matched_count or 0),
         "monto_cliente": float(monto),
         "monto_bono_chofer": float(bono),
+        "titulo_promo": titulo,
         "fecha_expiracion": expira.isoformat() + "Z",
         "campana_promocional_activa": True,
     }
@@ -326,6 +344,9 @@ async def estado_promocion(admin: dict = Depends(require_admin)):
             (documento or {}).get("monto_bono_chofer") or 0),
         "horas_expiracion": float(
             (documento or {}).get("horas_expiracion") or 0),
+        "titulo_promo": (
+            ((documento or {}).get("titulo_promo") or "").strip()
+            or TITULO_PROMO_POR_DEFECTO),
         "lanzada_at": (
             a_utc_naive((documento or {}).get("lanzada_at")).isoformat()
             if (documento or {}).get("lanzada_at") else None),

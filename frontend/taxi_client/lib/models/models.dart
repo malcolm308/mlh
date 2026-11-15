@@ -24,6 +24,10 @@ class ClientProfile {
   /// Bono que la campana paga al chofer por viaje, si sigue vigente.
   final double montoBonoChoferCampana;
 
+  /// Titulo/mensaje de la campana, editable desde el panel web. `null` si no
+  /// hay campana vigente o si el backend es anterior a este campo.
+  final String? tituloPromo;
+
   /// Codigo con el que este pasajero invita a otros. El backend lo devuelve en
   /// el perfil y crea uno si la cuenta es anterior al sistema de referidos.
   final String? codigoReferido;
@@ -38,6 +42,7 @@ class ClientProfile {
     this.fechaExpiracionPromocional,
     this.campanaPromocionalActiva = false,
     this.montoBonoChoferCampana = 0,
+    this.tituloPromo,
     this.codigoReferido,
   });
 
@@ -55,6 +60,10 @@ class ClientProfile {
             j['campana_promocional_activa'] == true,
         montoBonoChoferCampana:
             (j['monto_bono_chofer_campana'] as num?)?.toDouble() ?? 0,
+        tituloPromo: (j['titulo_promo'] ?? '') is String &&
+                (j['titulo_promo'] as String).trim().isNotEmpty
+            ? (j['titulo_promo'] as String).trim()
+            : null,
         codigoReferido: (j['codigo_referido'] ?? '') is String &&
                 (j['codigo_referido'] as String).trim().isNotEmpty
             ? (j['codigo_referido'] as String).trim()
