@@ -321,11 +321,25 @@ final String status;
   /// True si la cotizacion trae aplicada la campana promocional del cliente.
   final bool campanaPromocional;
 
-  /// Saldo de la bolsa promocional del cliente que se le abonara al chofer.
+  /// Saldo de la bolsa promocional del cliente que se uso.
   final double saldoPromocionalUsado;
 
-  /// Excedente que paga el cliente fuera de la bolsa (mano, transferencia o
-  /// debito de su billetera real).
+  /// Saldo real (Fondo) del cliente que se uso.
+  final double saldoRealUsado;
+
+  /// Pago virtual total (promo + real) cubierto por billeteras del cliente.
+  final double pagoBilleteraTotal;
+
+  /// Excedente que paga el cliente fuera de la billetera (mano/transferencia).
+  final double montoExcedente;
+
+  /// Metodo por el que se paga el excedente: Efectivo o Transferencia (o null).
+  final String? metodoPagoExcedente;
+
+  /// Abono total a la billetera del chofer (pago virtual + bono).
+  final double montoBilleteraChofer;
+
+  /// Excedente que paga el cliente fuera de la bolsa (compatibilidad).
   final double montoRestante;
 
   /// Bono extra que recibe el chofer al cerrar el viaje con campana.
@@ -360,26 +374,34 @@ this.currency = 'CUP',
     this.tripDriverId,
     this.campanaPromocional = false,
     this.saldoPromocionalUsado = 0,
+    this.saldoRealUsado = 0,
+    this.pagoBilleteraTotal = 0,
+    this.montoExcedente = 0,
+    this.metodoPagoExcedente,
+    this.montoBilleteraChofer = 0,
     this.montoRestante = 0,
     this.bonoChoferCampana = 0,
   });
 
-  /// True si hay una bolsa promocional aplicada que mostrar en la oferta.
+  /// Hay desglose de pago a mostrar (abono virtual y/o excedente externo).
+  bool get tieneDesglosePago => montoBilleteraChofer > 0 || montoExcedente > 0;
+
+  /// Compatibilidad.
   bool get tieneCampana => campanaPromocional && saldoPromocionalUsado > 0;
 
   /// Dinero que el chofer cobra en mano al cerrar el viaje.
-  ///
-  /// Solo aplica en Efectivo. En Transferencia el excedente lo recibe por
-  /// fuera y en Billetera se le acredita en su Fondo.
   double get efectivoACobrar {
-    if (!tieneCampana) return 0;
-    return _normalizarMetodoPago(paymentMethod) == 'Efectivo'
-        ? montoRestante
-        : 0;
+    final metodo = metodoPagoExcedente ?? paymentMethod;
+    if (montoExcedente > 0 && _normalizarMetodoPago(metodo) == 'Efectivo') {
+      return montoExcedente;
+    }
+    return 0;
   }
 
-  /// Saldo promocional que se le abona en su billetera virtual al cerrar.
-  double get abonoBilletera => tieneCampana ? saldoPromocionalUsado : 0;
+  /// Abono total a la billetera del chofer (virtual + bono).
+  double get abonoBilletera => montoBilleteraChofer > 0
+      ? montoBilleteraChofer
+      : (tieneCampana ? saldoPromocionalUsado : 0);
 
   /// Segundos de espera que se cobran al pasajero.
   ///
@@ -496,7 +518,20 @@ currency: (j['currency'] ?? 'CUP').toString(),
         campanaPromocional: j['campana_promocional'] == true,
         saldoPromocionalUsado:
             (j['saldo_promocional_usado'] as num?)?.toDouble() ?? 0,
-        montoRestante: (j['monto_restante'] as num?)?.toDouble() ?? 0,
+        saldoRealUsado: (j['saldo_real_usado'] as num?)?.toDouble() ?? 0,
+        pagoBilleteraTotal:
+            (j['pago_billetera_total'] as num?)?.toDouble() ?? 0,
+        montoExcedente: (j['monto_excedente'] as num?)?.toDouble() ??
+            (j['monto_restante'] as num?)?.toDouble() ??
+            0,
+        metodoPagoExcedente: j['metodo_pago_excedente']?.toString(),
+        montoBilleteraChofer:
+            (j['monto_billetera_chofer'] as num?)?.toDouble() ??
+                (j['abono_billetera'] as num?)?.toDouble() ??
+                0,
+        montoRestante: (j['monto_restante'] as num?)?.toDouble() ??
+            (j['monto_excedente'] as num?)?.toDouble() ??
+            0,
         bonoChoferCampana:
             (j['bono_chofer_campana'] as num?)?.toDouble() ?? 0,
       );
@@ -560,8 +595,13 @@ class CompletedTrip {
   final double montoCobrado;
   final bool campanaPromocional;
   final double saldoPromocionalUsado;
+  final double saldoRealUsado;
+  final double pagoBilleteraTotal;
+  final double montoExcedente;
+  final String? metodoPagoExcedente;
   final double efectivoCliente;
   final double bonoChoferCampana;
+  final double montoBilleteraChofer;
   final double abonoBilletera;
 
   CompletedTrip({
@@ -592,8 +632,13 @@ class CompletedTrip {
     this.montoCobrado = 0,
     this.campanaPromocional = false,
     this.saldoPromocionalUsado = 0,
+    this.saldoRealUsado = 0,
+    this.pagoBilleteraTotal = 0,
+    this.montoExcedente = 0,
+    this.metodoPagoExcedente,
     this.efectivoCliente = 0,
     this.bonoChoferCampana = 0,
+    this.montoBilleteraChofer = 0,
     this.abonoBilletera = 0,
   });
 
@@ -629,9 +674,14 @@ class CompletedTrip {
         campanaPromocional: (j['campana_promocional'] ?? false) == true,
         saldoPromocionalUsado:
             (j['saldo_promocional_usado'] ?? 0).toDouble(),
+        saldoRealUsado: (j['saldo_real_usado'] ?? 0).toDouble(),
+        pagoBilleteraTotal: (j['pago_billetera_total'] ?? 0).toDouble(),
+        montoExcedente: (j['monto_excedente'] ?? j['monto_restante'] ?? 0).toDouble(),
+        metodoPagoExcedente: j['metodo_pago_excedente']?.toString(),
         efectivoCliente: (j['efectivo_cliente'] ?? 0).toDouble(),
         bonoChoferCampana: (j['bono_chofer_campana'] ?? 0).toDouble(),
-        abonoBilletera: (j['abono_billetera'] ?? 0).toDouble(),
+        montoBilleteraChofer: (j['monto_billetera_chofer'] ?? j['abono_billetera'] ?? 0).toDouble(),
+        abonoBilletera: (j['abono_billetera'] ?? j['monto_billetera_chofer'] ?? 0).toDouble(),
       );
 }
 

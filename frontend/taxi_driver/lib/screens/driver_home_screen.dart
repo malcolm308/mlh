@@ -2734,15 +2734,13 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   }
 
   Future<void> _showCompleted(CompletedTrip t) {
-    // Lo que de verdad entra al bolsillo/Fondo del chofer: el excedente
-    // cobrado (mano, transferencia o debito de la billetera del cliente) mas
-    // el abono virtual (bolsa promocional) y el bono, menos la comision.
-    final neto = t.campanaPromocional
-        ? t.montoCobrado +
-            t.abonoBilletera +
-            t.bonoChoferCampana -
-            t.commission
-        : (t.montoCobrado > 0 ? t.montoCobrado : t.totalFare) - t.commission;
+    final metodoExc = t.metodoPagoExcedente ??
+        (t.paymentMethod == 'Transferencia' ? 'Transferencia' : 'Efectivo');
+    final abono = t.montoBilleteraChofer > 0 ? t.montoBilleteraChofer : t.abonoBilletera;
+    final excedente = t.montoExcedente > 0 ? t.montoExcedente : t.montoCobrado;
+    final bono = t.bonoChoferCampana;
+    final usoPromo = t.saldoPromocionalUsado > 0 || t.campanaPromocional;
+
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2754,51 +2752,8 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             _row('Distancia', '${t.distanceKm} km'),
             _row('Duración', _fmtDuration(t.durationSecs)),
             _row('Pago', t.paymentMethod),
-            if (t.campanaPromocional) ...[
-              // El recibo solo muestra las filas que aplican: si la bolsa
-              // promocional cubre todo el viaje no hay nada que cobrar; si el
-              // cliente no uso promo no hay abono ni bono.
-              if (t.montoCobrado > 0)
-                _row(
-                    t.paymentMethod == 'Transferencia'
-                        ? 'Cobrar por transferencia'
-                        : t.paymentMethod == 'Billetera'
-                            ? 'Cobrar de su billetera'
-                            : 'Cobrar en efectivo',
-                    '${t.montoCobrado.toStringAsFixed(2)} ${t.currency}'),
-              if (t.abonoBilletera > 0)
-                _row('Abonado a tu billetera',
-                    '${t.abonoBilletera.toStringAsFixed(2)} ${t.currency}'),
-              if (t.bonoChoferCampana > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6, bottom: 2),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF3CD),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFFF59E0B)),
-                    ),
-                    child: Text(
-                      '¡Bono de Campaña: '
-                      '+${t.bonoChoferCampana.toStringAsFixed(2)} '
-                      '${t.currency}!',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF92400E),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
-            // El kilometraje se cobra con un coeficiente segun lo larga que sea
-            // la carrera. Ponerlo aqui evita que el chofer mire un numero menor
-            // y piense que se han equivocado de tarifa.
             if (t.coeficienteAplicado != null &&
                 t.coeficienteAplicado != 1.0 &&
                 t.distanceFareSinCoeficiente != null)
@@ -2827,9 +2782,6 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             if (t.recargoTransferencia > 0)
               _row('Recargo transferencia',
                   '+${t.recargoTransferencia.toStringAsFixed(2)} ${t.currency}'),
-            // La espera se muestra solo si la hubo. El chofer la cuenta como
-            // tiempo facturable, asi que es parte de lo que entra en "Tiempo" y
-            // conviene que se vea de donde sale ese numero.
             if ((t.esperaSegs ?? 0) > 0)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
@@ -2849,16 +2801,48 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                 ),
               ),
             const Divider(),
-            // El total es el precio final del viaje. La comisión ya se
-            // desconto del Fondo del chofer, no se resta de aqui.
             _row('Total del viaje',
                 '${t.totalFare.toStringAsFixed(2)} ${t.currency}',
                 bold: true),
-            if (t.paymentMethod == 'Billetera' && !t.campanaPromocional)
-              _row('Debitado de billetera',
-                  '${(t.montoCobrado > 0 ? t.montoCobrado : t.totalFare).toStringAsFixed(2)} ${t.currency}'),
-            _row('Neto para ti', '${neto.toStringAsFixed(2)} ${t.currency}',
-                bold: true),
+            if (usoPromo && bono > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 2),
+                child: Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF3CD),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFF59E0B)),
+                  ),
+                  child: Text(
+                    '¡Bono de Campaña: +${bono.toStringAsFixed(2)} ${t.currency}!',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF92400E),
+                    ),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 4),
+            if (abono > 0)
+              _row('👛 Abonado a tu billetera',
+                  '${abono.toStringAsFixed(2)} ${t.currency}',
+                  bold: true),
+            if (excedente > 0 &&
+                (metodoExc == 'Efectivo' ||
+                    metodoExc.toString().toLowerCase() == 'efectivo'))
+              _row('💵 Cobras en efectivo',
+                  '${excedente.toStringAsFixed(2)} ${t.currency}',
+                  bold: true),
+            if (excedente > 0 &&
+                (metodoExc == 'Transferencia' ||
+                    metodoExc.toString().toLowerCase() == 'transferencia'))
+              _row('💳 Recibes por Transferencia',
+                  '${excedente.toStringAsFixed(2)} ${t.currency}',
+                  bold: true),
             if (t.appliedRule != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -3386,6 +3370,64 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             ),
           ),
       ],
+    );
+  }
+
+  /// Desglose de pago en la tarjeta del viaje activo.
+  Widget _buildDesglosePagoActivo(TripOffer trip) {
+    const muted = Color(0xFF6B7280);
+    const text = Color(0xFF1F2937);
+    final filas = <Widget>[];
+
+    if (trip.montoBilleteraChofer > 0) {
+      filas.add(Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text('Abonado a tu billetera',
+              style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text('${trip.montoBilleteraChofer.toStringAsFixed(2)} CUP',
+              style: const TextStyle(
+                  color: Color(0xFF047857), fontSize: 14, fontWeight: FontWeight.w800)),
+        ],
+      ));
+    }
+    if (trip.montoExcedente > 0) {
+      final metodoExc = trip.metodoPagoExcedente ??
+          (trip.paymentMethod == 'Transferencia' ? 'Transferencia' : 'Efectivo');
+      if (filas.isNotEmpty) filas.add(const SizedBox(height: 6));
+      filas.add(Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text('Cobrar por $metodoExc',
+              style: const TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text('${trip.montoExcedente.toStringAsFixed(2)} CUP',
+              style: const TextStyle(color: text, fontSize: 14, fontWeight: FontWeight.w800)),
+        ],
+      ));
+    }
+
+    if (filas.isEmpty) {
+      // Fallback: etiqueta simple del metodo de pago.
+      return Row(
+        children: [
+          const Icon(Icons.payments_outlined, size: 14, color: muted),
+          const SizedBox(width: 6),
+          const Text('Pago', style: TextStyle(fontSize: 11, color: muted)),
+          const Spacer(),
+          _chipPago(trip.paymentMethod),
+        ],
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+      ),
+      child: Column(children: filas),
     );
   }
 
@@ -4510,22 +4552,11 @@ if (o.pickup != null) ...[
         _lineaEspera(trip),
         const SizedBox(height: 10),
 
-        // ---- Metodo de pago ----
-        // El chofer tiene que saber con que le paga el pasajero ANTES de
-        // terminarlo: billetera y transferencia no se cobran en mano, y la
-        // transferencia externa lleva recargo.
-        Row(
-          children: [
-            const Icon(Icons.payments_outlined, size: 14, color: muted),
-            const SizedBox(width: 6),
-            const Text('Pago', style: TextStyle(fontSize: 11, color: muted)),
-            const Spacer(),
-            _chipPago(trip.paymentMethod),
-          ],
-        ),
+        // ---- Desglose de pago (dinamico) ----
+        _buildDesglosePagoActivo(trip),
         const SizedBox(height: 10),
 
-        // ---- Precio + accion principal ----
+        // ---- Precio ----
         Row(
           children: [
             const Text('Precio estimado',
