@@ -518,6 +518,11 @@ class CompletedTrip {
   final double recargoReintento;
   final double recargoTransferencia;
   final double montoCobrado;
+  final bool campanaPromocional;
+  final double saldoPromocionalUsado;
+  final double efectivoCliente;
+  final double bonoChoferCampana;
+  final double abonoBilletera;
 
   CompletedTrip({
     required this.tripId,
@@ -545,6 +550,11 @@ class CompletedTrip {
     this.recargoReintento = 0,
     this.recargoTransferencia = 0,
     this.montoCobrado = 0,
+    this.campanaPromocional = false,
+    this.saldoPromocionalUsado = 0,
+    this.efectivoCliente = 0,
+    this.bonoChoferCampana = 0,
+    this.abonoBilletera = 0,
   });
 
   factory CompletedTrip.fromJson(Map<String, dynamic> j) => CompletedTrip(
@@ -576,6 +586,12 @@ class CompletedTrip {
         recargoReintento: (j['recargo_reintento'] ?? 0).toDouble(),
         recargoTransferencia: (j['recargo_transferencia'] ?? 0).toDouble(),
         montoCobrado: (j['monto_cobrado'] ?? j['total_fare'] ?? 0).toDouble(),
+        campanaPromocional: (j['campana_promocional'] ?? false) == true,
+        saldoPromocionalUsado:
+            (j['saldo_promocional_usado'] ?? 0).toDouble(),
+        efectivoCliente: (j['efectivo_cliente'] ?? 0).toDouble(),
+        bonoChoferCampana: (j['bono_chofer_campana'] ?? 0).toDouble(),
+        abonoBilletera: (j['abono_billetera'] ?? 0).toDouble(),
       );
 }
 

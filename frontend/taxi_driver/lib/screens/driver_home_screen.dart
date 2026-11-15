@@ -2744,6 +2744,14 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             _row('Distancia', '${t.distanceKm} km'),
             _row('Duración', _fmtDuration(t.durationSecs)),
             _row('Pago', t.paymentMethod),
+            if (t.campanaPromocional) ...[
+              _row('Cobrar en efectivo',
+                  '${t.efectivoCliente.toStringAsFixed(2)} ${t.currency}'),
+              _row('Abonado a tu billetera',
+                  '${t.saldoPromocionalUsado.toStringAsFixed(2)} ${t.currency}'),
+              _row('Bono de regalo',
+                  '+${t.bonoChoferCampana.toStringAsFixed(2)} ${t.currency}'),
+            ],
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
             // El kilometraje se cobra con un coeficiente segun lo larga que sea
@@ -2808,7 +2816,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
               _row('Debitado de billetera',
                   '${(t.montoCobrado > 0 ? t.montoCobrado : t.totalFare).toStringAsFixed(2)} ${t.currency}'),
             _row('Neto para ti',
-                '${((t.montoCobrado > 0 ? t.montoCobrado : t.totalFare) - t.commission).toStringAsFixed(2)} ${t.currency}',
+                '${((t.campanaPromocional ? (t.efectivoCliente + t.abonoBilletera) : (t.montoCobrado > 0 ? t.montoCobrado : t.totalFare)) - t.commission).toStringAsFixed(2)} ${t.currency}',
                 bold: true),
             if (t.appliedRule != null)
               Padding(

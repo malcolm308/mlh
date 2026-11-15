@@ -506,6 +506,19 @@ class ApiClient:
         # Compatibilidad con un backend anterior al endpoint agregado.
         return self._json("POST", "/admin/promociones", json=payload)
 
+    # ---------------- campana promocional ----------------
+
+    def promos_estado(self) -> dict:
+        return self._json("GET", "/admin/promos/estado")
+
+    def lanzar_promo(self, monto_cliente: float, monto_bono_chofer: float,
+                     horas_expiracion: float) -> dict:
+        return self._json("POST", "/admin/promos/lanzar", json={
+            "monto_cliente": monto_cliente,
+            "monto_bono_chofer": monto_bono_chofer,
+            "horas_expiracion": horas_expiracion,
+        })
+
     # ---------------- billetera ----------------
 
     def billetera_choferes(self, q: Optional[str] = None) -> list:

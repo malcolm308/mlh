@@ -23,6 +23,7 @@ from db.Cliente.connection import cliente_db
 from db.Chofer.auth import verify_token as verify_token_chofer
 from db.Chofer.connection import chofer_db
 from routers.promociones import leer_promocion
+from routers.campana_promocional import info_promocional
 from routers.tariffs import listar_tarifas
 from routers.vehiculos import listar_tipos
 from routers.Solicitud_de_viajes_v4 import get_connection
@@ -37,6 +38,9 @@ def _perfil_cliente(doc: dict) -> dict:
     codigo = doc.get("codigo_referido")
     if not codigo:
         codigo = asegurar_codigo(_clientes, doc)
+    # La campana aplica expiracion perezosa tambien aqui: si el saldo vencio,
+    # el perfil ya sale con 0 y el documento queda limpio.
+    promo = info_promocional(doc)
     return {
         "id": str(doc["_id"]),
         "nombre": " ".join(
@@ -46,6 +50,7 @@ def _perfil_cliente(doc: dict) -> dict:
         "fondo": float(doc.get("Fondo") or 0),
         "codigo_referido": codigo,
         "descuentos_disponibles": int(doc.get("descuentos_disponibles") or 0),
+        **promo,
     }
 
 

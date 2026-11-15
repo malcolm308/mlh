@@ -33,6 +33,9 @@ class _ClientFondoScreenState extends State<ClientFondoScreen> {
   String? _error;
   double _fondo = 0;
   String? _telefono;
+  double _promo = 0;
+  String? _promoExpira;
+  bool _promoActiva = false;
 
   @override
   void initState() {
@@ -50,10 +53,14 @@ class _ClientFondoScreenState extends State<ClientFondoScreen> {
   Future<void> _load() async {
     try {
       final j = await widget.api.getClientFondo(widget.clientId);
+      final perfil = await widget.api.getCliente(widget.clientId);
       if (!mounted) return;
       setState(() {
         _fondo = (j['fondo'] as num?)?.toDouble() ?? 0;
         _telefono = j['telefono']?.toString();
+        _promo = perfil.saldoPromocional;
+        _promoExpira = perfil.fechaExpiracionPromocional;
+        _promoActiva = perfil.campanaPromocionalActiva;
         _error = null;
       });
     } catch (e) {
@@ -169,6 +176,38 @@ class _ClientFondoScreenState extends State<ClientFondoScreen> {
                 ),
               ),
               const SizedBox(height: 22),
+              if (_promoActiva) ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7E6),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFF59E0B)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Saldo promocional',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 14)),
+                      const SizedBox(height: 4),
+                      Text('${_promo.toStringAsFixed(2)} CUP',
+                          style: const TextStyle(
+                              fontSize: 24, fontWeight: FontWeight.bold)),
+                      if (_promoExpira != null)
+                        Text('Vence: $_promoExpira',
+                            style: const TextStyle(fontSize: 12)),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Se usa primero en tus viajes; el resto se paga en efectivo. '
+                        'Tu Fondo no se toca.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 22),
+              ],
               const Text('Transferir a otro pasajero',
                   style: TextStyle(
                       color: Color(0xFF1F2937),

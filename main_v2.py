@@ -38,6 +38,7 @@ from routers import app_init
 from routers import app_updates
 from routers import descargas
 from routers import tiempo_real
+from routers import campana_promocional
 from routers import app_init
 from services import indices
 from services.traccar_listener import listen_traccar
@@ -133,6 +134,9 @@ app.include_router(admin_web.router)
 # Promociones antes que CRUD_MONGODB: ese router tiene un `GET /admin/{id}` que
 # se tragaria `/admin/promociones`.
 app.include_router(promociones.router)
+# Campana con saldo promocional por cliente (/admin/promos/...). Va antes del
+# CRUD por el mismo motivo que promociones.
+app.include_router(campana_promocional.router)
 # El garaje va tambien antes que CRUD_MONGODB: ese CRUD tiene un GET
 # /admin/{id} que se tragaria los /admin/vehicles del garaje.
 app.include_router(garaje.router)

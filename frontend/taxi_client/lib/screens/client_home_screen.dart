@@ -164,6 +164,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
 
   /// Saldo vigente del Fondo del pasajero, consultado al cotizar el viaje.
   double _walletBalance = 0;
+  double _promoBalance = 0;
+  bool _promoActive = false;
 
   /// Recargo por pago con transferencia externa (0.10 = 10%, lo fija el
   /// panel). El backend es quien calcula el monto final.
@@ -260,6 +262,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     ApiClient.alExpirarSesion = _sesionExpirada;
     WidgetsBinding.instance.addObserver(this);
     _pickup = _myLoc;
+    _promoBalance = widget.profile.saldoPromocional;
+    _promoActive = widget.profile.campanaPromocionalActiva;
     _searchFocus.addListener(() {
       if (!_searchFocus.hasFocus) _cerrarOverlaySugerencias();
     });
@@ -1016,6 +1020,8 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
         etaText: _etaText ?? '--',
         paymentMethod: _paymentMethod,
         walletBalance: _walletBalance,
+        promoBalance: _promoBalance,
+        promoActive: _promoActive,
         transferSurchargeRate: _transferSurchargeRate,
         vehicles: _vehicles,
         initialSelectedIndex: initialIndex < 0 ? 0 : initialIndex,
@@ -1992,6 +1998,8 @@ class _VehicleSelectorStateful extends StatefulWidget {
   final String etaText;
   final String paymentMethod;
   final double walletBalance;
+  final double promoBalance;
+  final bool promoActive;
   final double transferSurchargeRate;
   final List<VehicleOption> vehicles;
   final int initialSelectedIndex;
@@ -2015,6 +2023,8 @@ class _VehicleSelectorStateful extends StatefulWidget {
     required this.etaText,
     required this.paymentMethod,
     required this.walletBalance,
+    this.promoBalance = 0,
+    this.promoActive = false,
     required this.transferSurchargeRate,
     required this.vehicles,
     required this.initialSelectedIndex,
@@ -2076,6 +2086,8 @@ class _VehicleSelectorStatefulState extends State<_VehicleSelectorStateful> {
       etaText: widget.etaText,
       paymentMethod: _paymentMethod,
       walletBalance: widget.walletBalance,
+      promoBalance: widget.promoBalance,
+      promoActive: widget.promoActive,
       transferSurchargeRate: widget.transferSurchargeRate,
       onPaymentMethodChanged: (metodo) {
         setState(() => _paymentMethod = metodo);

@@ -132,6 +132,12 @@ class VehicleSelectorSheet extends StatelessWidget {
   /// selector y bloquea el viaje si no alcanza.
   final double walletBalance;
 
+  /// Campana "Sabado de RapiTaxi": saldo promocional vigente del cliente.
+  final double promoBalance;
+
+  /// True si la campana promocional sigue vigente.
+  final bool promoActive;
+
   /// Recargo configurado para pago por transferencia (0.10 = 10%).
   final double transferSurchargeRate;
 
@@ -161,6 +167,8 @@ class VehicleSelectorSheet extends StatelessWidget {
     required this.paymentMethod,
     required this.onPaymentMethodChanged,
     this.walletBalance = 0,
+    this.promoBalance = 0,
+    this.promoActive = false,
     this.transferSurchargeRate = 0.10,
     required this.vehicles,
     required this.selectedIndex,
@@ -182,6 +190,7 @@ class VehicleSelectorSheet extends StatelessWidget {
   /// efectivo o transferencia externa no hay nada que validar aqui.
   bool get _puedeConfirmar =>
       paymentMethod != 'Billetera' ||
+      (promoActive && promoBalance > 0) ||
       walletBalance + 0.009 >= _selected.priceFor('Billetera');
 
   @override
@@ -422,6 +431,38 @@ class VehicleSelectorSheet extends StatelessWidget {
               ],
             ),
           ),
+          if (promoActive && promoBalance > 0) ...[
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.secundario.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.secundario.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Builder(builder: (_) {
+                  final precio = _selected.priceFor(paymentMethod);
+                  final usado = promoBalance < precio ? promoBalance : precio;
+                  final efectivo = precio - usado;
+                  return Text(
+                    'Pagas ${usado.toStringAsFixed(2)} CUP con billetera promocional '
+                    'y ${efectivo.toStringAsFixed(2)} CUP en efectivo.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ],
           if (_selected.descuentoAplicado) ...[
             const SizedBox(height: 10),
             Padding(

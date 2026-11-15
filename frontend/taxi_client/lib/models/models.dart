@@ -11,6 +11,19 @@ class ClientProfile {
   /// viajes con Billetera y para transferir a otro pasajero.
   final double fondo;
 
+  /// Campana "Sabado de RapiTaxi": saldo promocional vigente (bolsa virtual).
+  final double saldoPromocional;
+
+  /// Fecha de vencimiento del saldo promocional (ISO UTC), si la campana esta
+  /// vigente. `null` si no hay campana.
+  final String? fechaExpiracionPromocional;
+
+  /// True si la campana promocional sigue vigente para este cliente.
+  final bool campanaPromocionalActiva;
+
+  /// Bono que la campana paga al chofer por viaje, si sigue vigente.
+  final double montoBonoChoferCampana;
+
   /// Codigo con el que este pasajero invita a otros. El backend lo devuelve en
   /// el perfil y crea uno si la cuenta es anterior al sistema de referidos.
   final String? codigoReferido;
@@ -21,6 +34,10 @@ class ClientProfile {
     required this.email,
     this.telefono,
     this.fondo = 0,
+    this.saldoPromocional = 0,
+    this.fechaExpiracionPromocional,
+    this.campanaPromocionalActiva = false,
+    this.montoBonoChoferCampana = 0,
     this.codigoReferido,
   });
 
@@ -30,6 +47,14 @@ class ClientProfile {
         email: j['email']?.toString() ?? '',
         telefono: j['numero_de_telefono']?.toString(),
         fondo: ((j['fondo'] ?? j['Fondo']) as num?)?.toDouble() ?? 0,
+        saldoPromocional:
+            (j['saldo_promocional'] as num?)?.toDouble() ?? 0,
+        fechaExpiracionPromocional:
+            j['fecha_expiracion_promocional']?.toString(),
+        campanaPromocionalActiva:
+            j['campana_promocional_activa'] == true,
+        montoBonoChoferCampana:
+            (j['monto_bono_chofer_campana'] as num?)?.toDouble() ?? 0,
         codigoReferido: (j['codigo_referido'] ?? '') is String &&
                 (j['codigo_referido'] as String).trim().isNotEmpty
             ? (j['codigo_referido'] as String).trim()
@@ -66,6 +91,10 @@ class ClientTrip {
   final double? recargoReintento;
   final double? recargoTransferencia;
   final double? montoCobrado;
+  final bool campanaPromocional;
+  final double? saldoPromocionalUsado;
+  final double? efectivoCliente;
+  final double? bonoChoferCampana;
   final String? paymentMethod;
   final String? driverId;
 
@@ -134,6 +163,10 @@ class ClientTrip {
     this.recargoReintento,
     this.recargoTransferencia,
     this.montoCobrado,
+    this.campanaPromocional = false,
+    this.saldoPromocionalUsado,
+    this.efectivoCliente,
+    this.bonoChoferCampana,
     this.paymentMethod,
     this.driverId,
     this.driverName,
@@ -177,6 +210,12 @@ class ClientTrip {
         recargoReintento: (j['recargo_reintento'] as num?)?.toDouble(),
         recargoTransferencia: (j['recargo_transferencia'] as num?)?.toDouble(),
         montoCobrado: (j['monto_cobrado'] as num?)?.toDouble(),
+        campanaPromocional: j['campana_promocional'] == true,
+        saldoPromocionalUsado:
+            (j['saldo_promocional_usado'] as num?)?.toDouble(),
+        efectivoCliente: (j['efectivo_cliente'] as num?)?.toDouble(),
+        bonoChoferCampana:
+            (j['bono_chofer_campana'] as num?)?.toDouble(),
         paymentMethod: (j['payment_method'] ?? j['metodo_pago'])?.toString(),
         driverId: j['driver_id']?.toString(),
         driverName: j['driver_name']?.toString(),

@@ -128,7 +128,7 @@ class ApiConfig {
   /// traslado parada/lenta) MapLibre estira las de z16 ~15 %, un overzoom
   /// aceptable en urbano. Antes el tope era 16 y no dejaba llegar a la tabla
   /// de zooms de navegacion; con 18 las teselas salian muy pixeladas.
-  static const int maxZoom = 18;
+  static const int maxZoom = 22;
 
   /// Zooms del "modo navegacion": cada fase del viaje acerca el mapa lo justo
   /// para que el chofer vea la calle por la que va sin perder el contexto.

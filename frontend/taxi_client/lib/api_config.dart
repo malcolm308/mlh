@@ -121,7 +121,7 @@ class ApiConfig {
 
   static const double defaultZoom = 14;
   static const int minZoom = 10;
-  static const int maxZoom = 18;
+  static const int maxZoom = 22;
 
   /// Distancia por debajo de la cual se pasa al zoom de calle.
   ///

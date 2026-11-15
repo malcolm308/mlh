@@ -33,6 +33,7 @@ from config import get_api_base_url
 from tabs import billetera, choferes, configuracion, vehiculos, viajes
 from tabs import viajes_criticos
 from tabs import admins, clientes
+from tabs import campana
 
 # Pestañas permitidas por rol. `super_admin` ve TODO (incluida la de CRUD de
 # admins). Un rol de operador ve lo suyo; quien no tenga opcion, ve aviso.
@@ -40,6 +41,7 @@ TABS_BASE = [
     ("🚨 Viajes críticos", viajes_criticos.render),
     ("🚗 Vehículos", vehiculos.render),
     ("🎁 Promociones y tarifas", configuracion.render),
+    ("🚀 Gestión de Promociones", campana.render),
     ("🧑‍✈️ Chóferes", choferes.render),
     ("💰 Billetera", billetera.render),
     ("📊 Viajes", viajes.render),
@@ -60,6 +62,7 @@ TAB_SLUGS = {
     "🚨 Viajes críticos": "criticos",
     "🚗 Vehículos": "vehiculos",
     "🎁 Promociones y tarifas": "promociones",
+    "🚀 Gestión de Promociones": "campana",
     "🧑‍✈️ Chóferes": "choferes",
     "💰 Billetera": "billetera",
     "📊 Viajes": "viajes",

@@ -1338,8 +1338,12 @@ class _TripScreenState extends State<TripScreen> {
               _row('Recargo reintento', '+${(t.recargoReintento ?? 0).toStringAsFixed(2)} $moneda'),
             if ((t.recargoTransferencia ?? 0) > 0)
               _row('Recargo transferencia', '+${(t.recargoTransferencia ?? 0).toStringAsFixed(2)} $moneda'),
-            const Divider(height: 18),
-            _row('TOTAL', dinero(total), bold: true),
+            if (t.campanaPromocional) ...[
+              _row('Saldo promocional usado',
+                  '${(t.saldoPromocionalUsado ?? 0).toStringAsFixed(2)} $moneda'),
+              _row('Pagado en efectivo',
+                  '${(t.efectivoCliente ?? 0).toStringAsFixed(2)} $moneda'),
+            ],
             if ((t.paymentMethod ?? '').toLowerCase().contains('billetera'))
               _row('Debitado de tu billetera',
                   dinero(t.montoCobrado ?? total)),

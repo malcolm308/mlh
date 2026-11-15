@@ -21,6 +21,7 @@ from services.telefono import buscar_por_telefono, es_telefono_valido, normaliza
 from services.tipo_vehiculo import (normalizar_tipo_vehiculo,
                                     resolver_tipo_vehiculo)
 from services.codigos_referido import asegurar_codigo, generar_codigo
+from routers.campana_promocional import info_promocional
 
 from db.Administración.connection import admin_db
 from db.Administración.models import ADMINISTRADOR
@@ -168,6 +169,12 @@ class ClienteResponse(BaseModel):
     Fondo: Optional[float] = None
     # El codigo propio con el que este pasajero invita a otros.
     codigo_referido: Optional[str] = None
+    # Campana "Sabado de RapiTaxi": bolsa virtual por cliente y su vencimiento.
+    # Se calcula con expiracion perezosa: si ya vencio, sale 0.
+    saldo_promocional: Optional[float] = None
+    fecha_expiracion_promocional: Optional[str] = None
+    campana_promocional_activa: Optional[bool] = None
+    monto_bono_chofer_campana: Optional[float] = None
 
     class Config:
         populate_by_name = True
@@ -598,6 +605,9 @@ async def get_cliente(id: str, token: str = Depends(oauth2_scheme)):
     # Igual que en el perfil del chofer: una cuenta antigua recibe su codigo
     # en la primera consulta y queda guardado.
     asegurar_codigo(cliente_coleccion, doc)
+    # Expiracion perezosa de la campana: si ya vencio, el saldo queda en 0
+    # guardado y la app no vuelve a ver una bolsa muerta.
+    doc.update(info_promocional(doc))
     doc["_id"] = str(doc["_id"])
     doc.pop("password", None)
     return doc
