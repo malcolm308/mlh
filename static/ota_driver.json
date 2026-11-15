@@ -30,20 +30,52 @@
   "patches": [
     {
       "version": "1.0.38-p1",
+      "target_version_code": 3040,
+      "file": "patch_chofer_3040.zip",
+      "md5": "31f62112744229db60b84c4cd6141225",
+      "published_at": "2026-11-15T03:27:02+00:00",
+      "abi": "armeabi-v7a"
+    },
+    {
+      "version": "1.0.38-p1",
+      "target_version_code": 3041,
+      "file": "patch_chofer_3041.zip",
+      "md5": "87356637f4fa35700449c7bdf3295ff5",
+      "published_at": "2026-11-15T03:27:01+00:00",
+      "abi": "armeabi-v7a"
+    },
+    {
+      "version": "1.0.38-p1",
       "target_version_code": 3042,
       "file": "patch_chofer_3042.zip",
-      "md5": "264e4666eb639a3dd3c4b45f652e4958",
-      "published_at": "2026-11-15T02:05:11+00:00",
+      "md5": "09b38e57c7bc8a8aeb11674416481a48",
+      "published_at": "2026-11-15T03:27:01+00:00",
       "abi": "armeabi-v7a"
+    },
+    {
+      "version": "1.0.38-p1",
+      "target_version_code": 4040,
+      "file": "patch_chofer_4040.zip",
+      "md5": "fa1701b07788edd45f55d0ff55624d60",
+      "published_at": "2026-11-15T03:27:01+00:00",
+      "abi": "arm64-v8a"
+    },
+    {
+      "version": "1.0.38-p1",
+      "target_version_code": 4041,
+      "file": "patch_chofer_4041.zip",
+      "md5": "cf712e9f51649651b0240b5fa705dc54",
+      "published_at": "2026-11-15T03:27:01+00:00",
+      "abi": "arm64-v8a"
     },
     {
       "version": "1.0.38-p1",
       "target_version_code": 4042,
       "file": "patch_chofer_4042.zip",
-      "md5": "264e4666eb639a3dd3c4b45f652e4958",
-      "published_at": "2026-11-15T02:05:07+00:00",
+      "md5": "9560e4586fe43005e0dfbe7c57f935b6",
+      "published_at": "2026-11-15T03:27:00+00:00",
       "abi": "arm64-v8a"
     }
   ],
-  "updated_at": "2026-11-15T02:05:11+00:00"
+  "updated_at": "2026-11-15T03:27:02+00:00"
 }
