@@ -9,24 +9,16 @@
     {
       "version": "1.0.40",
       "version_code": 4041
-    },
-    {
-      "version": "1.0.39",
-      "version_code": 4040
-    },
-    {
-      "version": "1.0.38",
-      "version_code": 4039
-    },
-    {
-      "version": "1.0.37",
-      "version_code": 4038
-    },
-    {
-      "version": "1.0.36",
-      "version_code": 4037
     }
   ],
-  "patches": [],
-  "updated_at": "2026-11-15T21:32:00+00:00"
+  "patches": [
+    {
+      "version": "1.0.40-p1",
+      "target_version_code": 4040,
+      "file": "patch_cliente_4040.zip",
+      "md5": "5e4dc18c6de76f1cbcc55b703c67bf66",
+      "published_at": "2026-11-15T23:32:44+00:00"
+    }
+  ],
+  "updated_at": "2026-11-15T23:32:44+00:00"
 }
