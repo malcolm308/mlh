@@ -4,6 +4,16 @@ import '../theme/app_theme.dart';
 import 'ui/glass_sheet.dart';
 import 'ui/pill_button.dart';
 
+/// Muestra centimos solo cuando el precio los tiene (805.31) y enteros cuando
+/// no (805). Redondear siempre a 0 decimales escondia el 10 % de descuento:
+/// 805.31 y 724.78 se pintaban como 805 y 725.
+String _formatoPrecio(double valor) {
+  if ((valor - valor.roundToDouble()).abs() < 0.005) {
+    return valor.toStringAsFixed(0);
+  }
+  return valor.toStringAsFixed(2);
+}
+
 /// Modelo de vehículo con su precio y datos
 class VehicleOption {
   final String type;
@@ -19,6 +29,9 @@ class VehicleOption {
 
   /// True cuando el backend aplico el 10 % automatico de cliente nuevo.
   final bool descuentoAplicado;
+
+  /// True cuando el descuento aplicado es el 10 % del programa de referidos.
+  final bool descuentoReferidoAplicado;
 
   /// Monto descontado (precio original - precio final).
   final double descuentoPrimerViaje;
@@ -37,11 +50,13 @@ class VehicleOption {
     double? priceTransferencia,
     double? precioOriginal,
     bool? descuentoAplicado,
+    bool? descuentoReferidoAplicado,
     double? descuentoPrimerViaje,
     double? descuentoPorcentaje,
   })  : priceTransferencia = priceTransferencia ?? price * 1.10,
         precioOriginal = precioOriginal ?? price,
         descuentoAplicado = descuentoAplicado ?? false,
+        descuentoReferidoAplicado = descuentoReferidoAplicado ?? false,
         descuentoPrimerViaje = descuentoPrimerViaje ?? 0,
         descuentoPorcentaje = descuentoPorcentaje ?? 0;
 
@@ -60,9 +75,15 @@ class VehicleOption {
     return precioOriginal;
   }
 
-  /// Texto del badge del descuento, p. ej. "¡10% Dcto. 1er Viaje!".
+  /// Texto del badge del descuento, p. ej. "¡10% Dcto. 1er Viaje!" o
+  /// "¡10% Dcto. por Referido aplicado!".
   String get badgeDescuento {
     final pct = (descuentoPorcentaje * 100).round();
+    if (descuentoReferidoAplicado) {
+      return pct > 0
+          ? '¡$pct% Dcto. por Referido aplicado!'
+          : '¡Dcto. por Referido aplicado!';
+    }
     return pct > 0
         ? '¡$pct% Dcto. 1er Viaje!'
         : '¡Dcto. 1er Viaje!';
@@ -103,6 +124,8 @@ class VehicleOption {
           precio * 1.10,
       precioOriginal: (json['precio_original'] as num?)?.toDouble() ?? precio,
       descuentoAplicado: json['descuento_aplicado'] == true,
+      descuentoReferidoAplicado:
+          json['descuento_referido_aplicado'] == true,
       descuentoPrimerViaje:
           (json['descuento_primer_viaje'] as num?)?.toDouble() ?? 0,
       descuentoPorcentaje:
@@ -395,7 +418,7 @@ class VehicleSelectorSheet extends StatelessWidget {
                       const SizedBox(height: 2),
                       if (_selected.descuentoAplicado)
                         Text(
-                          '${_selected.priceOriginalFor(paymentMethod).toStringAsFixed(0)} CUP',
+                          '${_formatoPrecio(_selected.priceOriginalFor(paymentMethod))} CUP',
                           maxLines: 1,
                           style: const TextStyle(
                             fontSize: 11,
@@ -405,7 +428,7 @@ class VehicleSelectorSheet extends StatelessWidget {
                           ),
                         ),
                       Text(
-                        '${_selected.priceFor(paymentMethod).toStringAsFixed(0)} CUP',
+                        '${_formatoPrecio(_selected.priceFor(paymentMethod))} CUP',
                         maxLines: 1,
                         style: TextStyle(
                           fontSize: _selected.descuentoAplicado ? 18 : 14,
