@@ -1040,11 +1040,16 @@ def desglose_campana_cotizacion(
 ) -> dict:
     """Saldo promocional y excedente que mostrara la cotizacion.
 
-    El cierre aplica la bolsa promocional sobre el precio SIN el recargo por
-    transferencia (igual que aqui) y deja el resto para el metodo elegido:
+    Regla de negocio: el recargo por transferencia se aplica al precio base
+    ANTES de usar la bolsa promocional. La bolsa cubre el precio final del
+    metodo elegido y el resto lo paga el pasajero:
 
-        monto_restante = precio_final - saldo_promocional_usado
-        monto_restante_transferencia = precio_con_recargo - saldo_usado
+        precio_final            = base - descuentos (+ recargo por reintento)
+        precio_transferencia    = precio_final * (1 + recargo)
+        usado                   = min(saldo, precio_final)
+        usado_transferencia     = min(saldo, precio_transferencia)
+        monto_restante          = precio_final - usado
+        monto_restante_transferencia = precio_transferencia - usado_transferencia
 
     Asi el desglose que ve el pasajero coincide al centimo con `complete_trip`
     y con lo que el chofer cobra en mano (o por transferencia / billetera).
@@ -1052,17 +1057,23 @@ def desglose_campana_cotizacion(
     saldo = saldo_promocional_vigente(cliente_doc)
     precio_cent = Decimal(str(precio_final)).quantize(
         CENT, rounding=ROUND_HALF_UP)
-    usado = min(saldo, precio_cent) if saldo > 0 else Decimal("0.00")
-    restante = (precio_cent - usado).quantize(CENT, rounding=ROUND_HALF_UP)
-    bono = bono_promocional(cliente_doc) if usado > 0 else Decimal("0.00")
     transfer_cent = Decimal(str(precio_transferencia)).quantize(
         CENT, rounding=ROUND_HALF_UP)
-    restante_transferencia = max(
-        Decimal("0.00"), transfer_cent - usado).quantize(
-            CENT, rounding=ROUND_HALF_UP)
+    usado = (min(saldo, precio_cent) if saldo > 0
+             else Decimal("0.00")).quantize(CENT, rounding=ROUND_HALF_UP)
+    usado_transferencia = (min(saldo, transfer_cent) if saldo > 0
+                           else Decimal("0.00")).quantize(
+                               CENT, rounding=ROUND_HALF_UP)
+    restante = (precio_cent - usado).quantize(CENT, rounding=ROUND_HALF_UP)
+    restante_transferencia = (transfer_cent - usado_transferencia).quantize(
+        CENT, rounding=ROUND_HALF_UP)
+    bono = (bono_promocional(cliente_doc)
+            if (usado > 0 or usado_transferencia > 0)
+            else Decimal("0.00"))
     return {
         "saldo_promocional_disponible": float(saldo),
         "saldo_promocional_usado": float(usado),
+        "saldo_promocional_usado_transferencia": float(usado_transferencia),
         "monto_restante": float(restante),
         "monto_restante_transferencia": float(restante_transferencia),
         "bono_chofer_campana": float(bono),
@@ -1942,31 +1953,27 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             #     usado mas el bono de la campana. La comision se sigue
             #     descontando de SU Fondo, igual que en el resto de metodos.
             #
-            #     La bolsa se aplica sobre el precio SIN el recargo por
-            #     transferencia, porque ese recargo ya esta dentro de
-            #     `total_fare` y se paga con el excedente. Asi el desglose
-            #     coincide con `desglose_campana_cotizacion`.
+            #     El recargo por transferencia se aplica al precio base ANTES
+            #     de usar la bolsa: el saldo cubre el precio FINAL del metodo
+            #     elegido (igual que en `desglose_campana_cotizacion`). Antes
+            #     se aplicaba solo sobre el precio sin recargo y el pasajero
+            #     terminaba pagando el recargo de su bolsillo.
             try:
                 cliente_campana = cliente_coleccion.find_one(
                     {"_id": to_mongo_id(updated_trip.get("client_id") or "")})
             except Exception:
                 cliente_campana = None
             promo_disponible = saldo_promocional_vigente(cliente_campana)
-            precio_sin_recargo = (
-                Decimal(str(total_fare))
-                - Decimal(str(recargo_transferencia))).quantize(
-                    CENT, rounding=ROUND_HALF_UP)
-            aplicar_campana = (promo_disponible > 0
-                               and precio_sin_recargo > 0)
+            total_cent = Decimal(str(total_fare)).quantize(
+                CENT, rounding=ROUND_HALF_UP)
+            aplicar_campana = promo_disponible > 0 and total_cent > 0
 
             if aplicar_campana:
                 try:
-                    promo_usado = min(
-                        promo_disponible, precio_sin_recargo).quantize(
-                            CENT, rounding=ROUND_HALF_UP)
-                    monto_restante = (
-                        Decimal(str(total_fare)) - promo_usado).quantize(
-                            CENT, rounding=ROUND_HALF_UP)
+                    promo_usado = min(promo_disponible, total_cent).quantize(
+                        CENT, rounding=ROUND_HALF_UP)
+                    monto_restante = (total_cent - promo_usado).quantize(
+                        CENT, rounding=ROUND_HALF_UP)
                     bono_campana = (
                         bono_promocional(cliente_campana)
                         if promo_usado > 0 else Decimal("0.00"))
@@ -3986,13 +3993,14 @@ async def api_get_requested_trips_nearby(
             entry["client_rating"] = profile.get("rating")
             entry["client_phone"] = _client_phone(client_doc)
             saldo = saldo_promocional_vigente(client_doc)
-            precio = Decimal(str(trip.get("precio_estimado") or 0))
-            recargo = Decimal(str(trip.get("recargo_transferencia") or 0))
-            precio_sin_recargo = max(
-                Decimal("0.00"), precio - recargo).quantize(
-                    CENT, rounding=ROUND_HALF_UP)
-            usado = (min(saldo, precio_sin_recargo)
-                     if saldo > 0 else Decimal("0.00"))
+            precio = Decimal(str(trip.get("precio_estimado") or 0)).quantize(
+                CENT, rounding=ROUND_HALF_UP)
+            # El precio guardado ya incluye el recargo por transferencia (si
+            # aplica) y la bolsa promocional cubre el precio FINAL: el recargo
+            # se aplica antes de usar el saldo.
+            usado = (min(saldo, precio) if saldo > 0
+                     else Decimal("0.00")).quantize(
+                         CENT, rounding=ROUND_HALF_UP)
             restante = max(
                 Decimal("0.00"), precio - usado).quantize(
                     CENT, rounding=ROUND_HALF_UP)

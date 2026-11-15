@@ -348,7 +348,7 @@ testWidgets('el aviso menciona las que quedan', (tester) async {
       );
       expect(btn.onPressed, isNull);
 
-      await tester.tap(find.text('Pasajero no aparece'));
+      await tester.tap(find.text(MotivoCancelacion.noAparece.etiqueta));
       await tester.pumpAndSettle();
 
       final btn2 = tester.widget<FilledButton>(
@@ -361,7 +361,7 @@ testWidgets('el aviso menciona las que quedan', (tester) async {
       await tester.pumpWidget(
         const MaterialApp(home: Scaffold(body: CancelReasonDialog())),
       );
-      await tester.tap(find.text('Otro'));
+      await tester.tap(find.text(MotivoCancelacion.otro.etiqueta));
       await tester.pumpAndSettle();
 
       var btn = tester.widget<FilledButton>(
@@ -402,9 +402,10 @@ testWidgets('el aviso menciona las que quedan', (tester) async {
     });
 
     test('los motivos del enum son los que se pintan', () {
-      expect(MotivoCancelacion.values.length, 5);
-      expect(MotivoCancelacion.values.first.etiqueta, 'Pasajero no aparece');
-      expect(MotivoCancelacion.values.last.etiqueta, 'Otro');
+      expect(MotivoCancelacion.values.length, 4);
+      expect(MotivoCancelacion.values.first.etiqueta,
+          'El cliente no responde / no contesta el teléfono');
+      expect(MotivoCancelacion.values.last.etiqueta, 'Otro motivo');
     });
   });
 }

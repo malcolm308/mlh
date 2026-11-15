@@ -2746,6 +2746,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Viaje completado'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2754,15 +2755,20 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             _row('Duración', _fmtDuration(t.durationSecs)),
             _row('Pago', t.paymentMethod),
             if (t.campanaPromocional) ...[
-              _row(
-                  t.paymentMethod == 'Transferencia'
-                      ? 'Cobrar por transferencia'
-                      : t.paymentMethod == 'Billetera'
-                          ? 'Cobrar de su billetera'
-                          : 'Cobrar en efectivo',
-                  '${t.montoCobrado.toStringAsFixed(2)} ${t.currency}'),
-              _row('Se abonará a tu billetera',
-                  '${t.abonoBilletera.toStringAsFixed(2)} ${t.currency}'),
+              // El recibo solo muestra las filas que aplican: si la bolsa
+              // promocional cubre todo el viaje no hay nada que cobrar; si el
+              // cliente no uso promo no hay abono ni bono.
+              if (t.montoCobrado > 0)
+                _row(
+                    t.paymentMethod == 'Transferencia'
+                        ? 'Cobrar por transferencia'
+                        : t.paymentMethod == 'Billetera'
+                            ? 'Cobrar de su billetera'
+                            : 'Cobrar en efectivo',
+                    '${t.montoCobrado.toStringAsFixed(2)} ${t.currency}'),
+              if (t.abonoBilletera > 0)
+                _row('Abonado a tu billetera',
+                    '${t.abonoBilletera.toStringAsFixed(2)} ${t.currency}'),
               if (t.bonoChoferCampana > 0)
                 Padding(
                   padding: const EdgeInsets.only(top: 6, bottom: 2),
@@ -3142,10 +3148,15 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             ),
           ),
           Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 400),
+            // La tarjeta nunca ocupa mas del 92 % de la pantalla: el cuerpo se
+            // desplaza y los botones quedan siempre al pie.
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 400,
+                maxHeight: MediaQuery.of(context).size.height * 0.92,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Material(
                   color: const Color(0xFFFFFFFF),
                   borderRadius: BorderRadius.circular(22),
@@ -3182,8 +3193,18 @@ final pts = await widget.api.getTripRoute(trip.tripId);
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Solicitud de viaje',
+        // El cuerpo es lo unico que se desplaza: titular, campana, metricas y
+        // ruta. Los botones de Aceptar/Rechazar quedan fijos al pie, de modo
+        // que el desglose de la campana no los puede empujar fuera de la
+        // pantalla en un telefono pequeno.
+        Flexible(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Solicitud de viaje',
           textAlign: TextAlign.center,
           style: TextStyle(
               color: text, fontSize: 18, fontWeight: FontWeight.bold),
@@ -3283,6 +3304,10 @@ final pts = await widget.api.getTripRoute(trip.tripId);
         ),
         const SizedBox(height: 10),
         _buildRouteCard(o),
+              ],
+            ),
+          ),
+        ),
         const SizedBox(height: 18),
         Row(
           children: [
@@ -3387,37 +3412,43 @@ final pts = await widget.api.getTripRoute(trip.tripId);
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(cobro,
-                  style: const TextStyle(
-                      color: text,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
-              Text('${o.montoRestante.toStringAsFixed(2)} CUP',
-                  style: const TextStyle(
-                      color: text,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800)),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('Se abonará a tu billetera',
-                  style: TextStyle(
-                      color: text,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
-              Text('${o.saldoPromocionalUsado.toStringAsFixed(2)} CUP',
-                  style: const TextStyle(
-                      color: Color(0xFF047857),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800)),
-            ],
-          ),
+          // Solo se pinta lo que de verdad cobra o se le abona: si la bolsa
+          // promocional cubre el viaje completo, no hay fila de cobro; si no
+          // hubo promo, no hay abono. Asi el chofer no ve ceros que confunden.
+          if (o.montoRestante > 0)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(cobro,
+                    style: const TextStyle(
+                        color: text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+                Text('${o.montoRestante.toStringAsFixed(2)} CUP',
+                    style: const TextStyle(
+                        color: text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800)),
+              ],
+            ),
+          if (o.abonoBilletera > 0) ...[
+            if (o.montoRestante > 0) const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Abonado a tu billetera',
+                    style: TextStyle(
+                        color: text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+                Text('${o.abonoBilletera.toStringAsFixed(2)} CUP',
+                    style: const TextStyle(
+                        color: Color(0xFF047857),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ],
           if (o.bonoChoferCampana > 0) ...[
             const SizedBox(height: 8),
             Container(

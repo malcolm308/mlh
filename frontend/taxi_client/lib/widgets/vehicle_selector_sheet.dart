@@ -45,12 +45,19 @@ class VehicleOption {
   /// Saldo de la bolsa promocional que se descontara del precio total.
   final double saldoPromocionalUsado;
 
+  /// Saldo de la bolsa promocional si se paga por Transferencia.
+  ///
+  /// El recargo del 10 % se aplica al precio base ANTES de usar el saldo, asi
+  /// que la bolsa tambien puede cubrir parte del recargo y este monto puede
+  /// ser mayor que [saldoPromocionalUsado].
+  final double saldoPromocionalUsadoTransferencia;
+
   /// Lo que queda por pagar despues de la bolsa promocional, en efectivo o
   /// con billetera (sin el recargo por transferencia).
   final double montoRestante;
 
-  /// Lo que queda por pagar si se elige Transferencia: incluye el recargo,
-  /// porque la bolsa promocional se aplica sobre el precio sin recargo.
+  /// Lo que queda por pagar si se elige Transferencia: el precio con recargo
+  /// menos la bolsa promocional aplicada a ese precio.
   final double montoRestanteTransferencia;
 
   /// Bono que recibira el chofer si se cierra el viaje con la campana.
@@ -72,6 +79,7 @@ class VehicleOption {
     double? descuentoPorcentaje,
     bool? campanaPromocional,
     double? saldoPromocionalUsado,
+    double? saldoPromocionalUsadoTransferencia,
     double? montoRestante,
     double? montoRestanteTransferencia,
     double? bonoChoferCampana,
@@ -83,6 +91,8 @@ class VehicleOption {
         descuentoPorcentaje = descuentoPorcentaje ?? 0,
         campanaPromocional = campanaPromocional ?? false,
         saldoPromocionalUsado = saldoPromocionalUsado ?? 0,
+        saldoPromocionalUsadoTransferencia =
+            saldoPromocionalUsadoTransferencia ?? saldoPromocionalUsado ?? 0,
         montoRestante = montoRestante ?? price,
         montoRestanteTransferencia =
             montoRestanteTransferencia ?? (priceTransferencia ?? price * 1.10),
@@ -100,8 +110,31 @@ class VehicleOption {
           ? montoRestanteTransferencia
           : montoRestante;
 
-  /// True si hay bolsa promocional aplicada en esta cotizacion.
-  bool get tieneCampana => campanaPromocional && saldoPromocionalUsado > 0;
+  /// Saldo promocional que cubre el precio final del metodo elegido.
+  double saldoPromocionalUsadoFor(String metodo) =>
+      metodo == 'Transferencia'
+          ? saldoPromocionalUsadoTransferencia
+          : saldoPromocionalUsado;
+
+  /// Monto del descuento comercial (referido, primer viaje o promocion) que
+  /// ya viene restado en [price], escalado al metodo elegido.
+  double descuentoFor(String metodo) {
+    final descuento = priceOriginalFor(metodo) - priceFor(metodo);
+    return descuento > 0 ? descuento : 0;
+  }
+
+  /// Etiqueta del descuento que se pinta en el desglose.
+  String get etiquetaDescuento {
+    if (descuentoReferidoAplicado) return 'Descuento Referido';
+    if (descuentoPrimerViaje > 0) return 'Descuento 1er Viaje';
+    return 'Descuento promoción';
+  }
+
+  /// True si hay bolsa promocional aplicada en esta cotizacion (para
+  /// cualquiera de los metodos).
+  bool get tieneCampana =>
+      campanaPromocional &&
+      (saldoPromocionalUsado > 0 || saldoPromocionalUsadoTransferencia > 0);
 
   /// Precio original (tachado) para el metodo de pago elegido. En
   /// transferencia se le aplica el mismo recargo que al precio final para que
@@ -172,6 +205,8 @@ class VehicleOption {
       campanaPromocional: json['campana_promocional'] == true,
       saldoPromocionalUsado:
           (json['saldo_promocional_usado'] as num?)?.toDouble() ?? 0,
+      saldoPromocionalUsadoTransferencia:
+          (json['saldo_promocional_usado_transferencia'] as num?)?.toDouble(),
       montoRestante: (json['monto_restante'] as num?)?.toDouble() ?? precio,
       montoRestanteTransferencia:
           (json['monto_restante_transferencia'] as num?)?.toDouble() ??
@@ -553,7 +588,8 @@ class VehicleSelectorSheet extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (_selected.tieneCampana) ...[
+                    if (_selected.tieneCampana ||
+                        _selected.descuentoAplicado) ...[
                       const SizedBox(height: 10),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -570,17 +606,33 @@ class VehicleSelectorSheet extends StatelessWidget {
                           ),
                           child: Column(
                             children: [
+                              // Subtotal: precio con el recargo de
+                              // Transferencia ya aplicado y SIN los descuentos
+                              // comerciales ni la bolsa promocional.
                               _filaDesglose(
-                                'Precio total',
-                                _selected.priceFor(paymentMethod),
+                                'Subtotal',
+                                _selected.priceOriginalFor(paymentMethod),
                                 color: AppColors.tinta,
                               ),
-                              const SizedBox(height: 4),
-                              _filaDesglose(
-                                'Saldo Promocional',
-                                -_selected.saldoPromocionalUsado,
-                                color: AppColors.exito,
-                              ),
+                              if (_selected.descuentoFor(paymentMethod) > 0) ...[
+                                const SizedBox(height: 4),
+                                _filaDesglose(
+                                  _selected.etiquetaDescuento,
+                                  -_selected.descuentoFor(paymentMethod),
+                                  color: AppColors.exito,
+                                ),
+                              ],
+                              if (_selected
+                                      .saldoPromocionalUsadoFor(paymentMethod) >
+                                  0) ...[
+                                const SizedBox(height: 4),
+                                _filaDesglose(
+                                  'Saldo Promocional',
+                                  -_selected
+                                      .saldoPromocionalUsadoFor(paymentMethod),
+                                  color: AppColors.exito,
+                                ),
+                              ],
                               const Divider(height: 12),
                               _filaDesglose(
                                 paymentMethod == 'Transferencia'

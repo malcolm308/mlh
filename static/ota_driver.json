@@ -1,11 +1,15 @@
 {
   "app": "driver",
   "latest": {
-    "version": "1.0.39",
-    "version_code": 4044,
+    "version": "1.0.40",
+    "version_code": 4045,
     "apk": "app_chofer_64bits.apk"
   },
   "releases": [
+    {
+      "version": "1.0.40",
+      "version_code": 4045
+    },
     {
       "version": "1.0.39",
       "version_code": 4044
@@ -21,61 +25,8 @@
     {
       "version": "1.0.36",
       "version_code": 4041
-    },
-    {
-      "version": "1.0.35",
-      "version_code": 4040
     }
   ],
-  "patches": [
-    {
-      "version": "1.0.39-p1",
-      "target_version_code": 3043,
-      "file": "patch_chofer_3043.zip",
-      "md5": "67841090150d309a00edd8bc1993d089",
-      "published_at": "2026-11-15T18:15:51+00:00",
-      "abi": "armeabi-v7a"
-    },
-    {
-      "version": "1.0.39-p1",
-      "target_version_code": 3042,
-      "file": "patch_chofer_3042.zip",
-      "md5": "1c4028ff2d67b3b3a839088b637ddc71",
-      "published_at": "2026-11-15T18:15:51+00:00",
-      "abi": "armeabi-v7a"
-    },
-    {
-      "version": "1.0.39-p1",
-      "target_version_code": 3041,
-      "file": "patch_chofer_3041.zip",
-      "md5": "e266387ba3b72d3bf5a606696e9c8559",
-      "published_at": "2026-11-15T18:15:51+00:00",
-      "abi": "armeabi-v7a"
-    },
-    {
-      "version": "1.0.39-p1",
-      "target_version_code": 4043,
-      "file": "patch_chofer_4043.zip",
-      "md5": "4661303f2d83154582fbf47fca6a1bf6",
-      "published_at": "2026-11-15T18:15:50+00:00",
-      "abi": "arm64-v8a"
-    },
-    {
-      "version": "1.0.39-p1",
-      "target_version_code": 4042,
-      "file": "patch_chofer_4042.zip",
-      "md5": "52eb485e0152430d1188e387296ea7af",
-      "published_at": "2026-11-15T18:15:50+00:00",
-      "abi": "arm64-v8a"
-    },
-    {
-      "version": "1.0.39-p1",
-      "target_version_code": 4041,
-      "file": "patch_chofer_4041.zip",
-      "md5": "7f475673b17a5d5564ee26781b9bacd0",
-      "published_at": "2026-11-15T18:15:50+00:00",
-      "abi": "arm64-v8a"
-    }
-  ],
-  "updated_at": "2026-11-15T18:15:51+00:00"
+  "patches": [],
+  "updated_at": "2026-11-15T19:57:22+00:00"
 }
