@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
@@ -105,6 +106,15 @@ class _ClientFondoScreenState extends State<ClientFondoScreen> {
     }
   }
 
+  String _formatearFecha(String iso) {
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return DateFormat('dd/MM/yyyy hh:mm a').format(dt);
+    } catch (_) {
+      return iso;
+    }
+  }
+
   void _snack(String msg, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -195,7 +205,7 @@ class _ClientFondoScreenState extends State<ClientFondoScreen> {
                           style: const TextStyle(
                               fontSize: 24, fontWeight: FontWeight.bold)),
                       if (_promoExpira != null)
-                        Text('Vence: $_promoExpira',
+                        Text('Vence: ${_formatearFecha(_promoExpira!)}',
                             style: const TextStyle(fontSize: 12)),
                       const SizedBox(height: 4),
                       const Text(

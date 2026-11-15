@@ -1,11 +1,15 @@
 {
   "app": "client",
   "latest": {
-    "version": "1.0.28",
-    "version_code": 4029,
+    "version": "1.0.29",
+    "version_code": 4030,
     "apk": "app_cliente_64bits.apk"
   },
   "releases": [
+    {
+      "version": "1.0.29",
+      "version_code": 4030
+    },
     {
       "version": "1.0.28",
       "version_code": 4029
@@ -21,29 +25,8 @@
     {
       "version": "1.0.25",
       "version_code": 4026
-    },
-    {
-      "version": "1.0.24",
-      "version_code": 4025
     }
   ],
-  "patches": [
-    {
-      "version": "1.0.28-p1",
-      "target_version_code": 3028,
-      "file": "patch_cliente_3028.zip",
-      "md5": "46cd82c8e8692edbf3de08e3299d6154",
-      "published_at": "2026-11-15T02:05:02+00:00",
-      "abi": "armeabi-v7a"
-    },
-    {
-      "version": "1.0.28-p1",
-      "target_version_code": 4028,
-      "file": "patch_cliente_4028.zip",
-      "md5": "46cd82c8e8692edbf3de08e3299d6154",
-      "published_at": "2026-11-15T02:04:57+00:00",
-      "abi": "arm64-v8a"
-    }
-  ],
-  "updated_at": "2026-11-15T02:05:02+00:00"
+  "patches": [],
+  "updated_at": "2026-11-15T03:03:45+00:00"
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,6 +58,7 @@ enum ClientState {
 
 class _ClientHomeScreenState extends State<ClientHomeScreen>
     with WidgetsBindingObserver {
+  static bool _promoDialogShown = false;
   final ClientMapController _mapController = ClientMapController();
 
   /// Permite disparar el pulso del rayo flotante cuando el mapa se detiene.
@@ -273,7 +275,14 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
     // OTA: al abrir (o al recuperar la sesion y llegar aqui) se consulta la
     // version. Un parche se descarga solo; un APK obligatorio abre el dialogo.
     unawaited(_revisarActualizacion());
-    // Dirección del centro nada más abrir, sin esperar a que el pasajero mueva.
+    // Mensaje de bienvenida de la campana promocional (una vez por sesion).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_promoDialogShown) return;
+      if (widget.profile.saldoPromocional <= 0) return;
+      _promoDialogShown = true;
+      unawaited(_mostrarMensajePromo());
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_geocodificarCentro());
     });
@@ -1155,6 +1164,51 @@ class _ClientHomeScreenState extends State<ClientHomeScreen>
   /// El access y el refresh ya no sirven: se vuelve al Login sin dialogo.
   ///
   /// Los tokens los borra `ApiClient` antes de llamar aqui.
+  String _formatearFechaPromo(String iso) {
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return DateFormat('dd/MM/yyyy hh:mm a').format(dt);
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  Future<void> _mostrarMensajePromo() async {
+    if (!mounted) return;
+    final monto = widget.profile.saldoPromocional;
+    final expira = widget.profile.fechaExpiracionPromocional;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¡Hoy es sábado y el cuerpo lo sabe! 🕺'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+                'RapiTaxi te regala saldo en tu billetera para tus viajes.'),
+            const SizedBox(height: 8),
+            Text('Saldo promocional: ${monto.toStringAsFixed(2)} CUP',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            if (expira != null) ...[
+              const SizedBox(height: 4),
+              Text('Válido hasta: ${_formatearFechaPromo(expira)}'),
+            ],
+            const SizedBox(height: 8),
+            const Text('Válido hasta las 6:00 AM.',
+                style: TextStyle(fontStyle: FontStyle.italic)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _sesionExpirada() {
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/', (r) => false);
