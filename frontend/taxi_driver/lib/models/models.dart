@@ -318,6 +318,19 @@ final String status;
   /// si el `driver_id` es el nuestro, no es un viaje perdido.
   final String? tripDriverId;
 
+  /// True si la cotizacion trae aplicada la campana promocional del cliente.
+  final bool campanaPromocional;
+
+  /// Saldo de la bolsa promocional del cliente que se le abonara al chofer.
+  final double saldoPromocionalUsado;
+
+  /// Excedente que paga el cliente fuera de la bolsa (mano, transferencia o
+  /// debito de su billetera real).
+  final double montoRestante;
+
+  /// Bono extra que recibe el chofer al cerrar el viaje con campana.
+  final double bonoChoferCampana;
+
   TripOffer({
     required this.tripId,
     this.clientId,
@@ -345,7 +358,28 @@ this.currency = 'CUP',
     this.offerExpiresInSecs,
     this.paymentMethod = 'Efectivo',
     this.tripDriverId,
+    this.campanaPromocional = false,
+    this.saldoPromocionalUsado = 0,
+    this.montoRestante = 0,
+    this.bonoChoferCampana = 0,
   });
+
+  /// True si hay una bolsa promocional aplicada que mostrar en la oferta.
+  bool get tieneCampana => campanaPromocional && saldoPromocionalUsado > 0;
+
+  /// Dinero que el chofer cobra en mano al cerrar el viaje.
+  ///
+  /// Solo aplica en Efectivo. En Transferencia el excedente lo recibe por
+  /// fuera y en Billetera se le acredita en su Fondo.
+  double get efectivoACobrar {
+    if (!tieneCampana) return 0;
+    return _normalizarMetodoPago(paymentMethod) == 'Efectivo'
+        ? montoRestante
+        : 0;
+  }
+
+  /// Saldo promocional que se le abona en su billetera virtual al cerrar.
+  double get abonoBilletera => tieneCampana ? saldoPromocionalUsado : 0;
 
   /// Segundos de espera que se cobran al pasajero.
   ///
@@ -459,6 +493,12 @@ currency: (j['currency'] ?? 'CUP').toString(),
         offerExpiresInSecs: (j['offer_expires_in_secs'])?.toInt(),
         paymentMethod: _normalizarMetodoPago(j['payment_method']),
         tripDriverId: j['driver_id']?.toString(),
+        campanaPromocional: j['campana_promocional'] == true,
+        saldoPromocionalUsado:
+            (j['saldo_promocional_usado'] as num?)?.toDouble() ?? 0,
+        montoRestante: (j['monto_restante'] as num?)?.toDouble() ?? 0,
+        bonoChoferCampana:
+            (j['bono_chofer_campana'] as num?)?.toDouble() ?? 0,
       );
 }
 

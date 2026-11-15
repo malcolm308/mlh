@@ -2734,6 +2734,15 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   }
 
   Future<void> _showCompleted(CompletedTrip t) {
+    // Lo que de verdad entra al bolsillo/Fondo del chofer: el excedente
+    // cobrado (mano, transferencia o debito de la billetera del cliente) mas
+    // el abono virtual (bolsa promocional) y el bono, menos la comision.
+    final neto = t.campanaPromocional
+        ? t.montoCobrado +
+            t.abonoBilletera +
+            t.bonoChoferCampana -
+            t.commission
+        : (t.montoCobrado > 0 ? t.montoCobrado : t.totalFare) - t.commission;
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2745,12 +2754,39 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             _row('Duración', _fmtDuration(t.durationSecs)),
             _row('Pago', t.paymentMethod),
             if (t.campanaPromocional) ...[
-              _row('Cobrar en efectivo',
-                  '${t.efectivoCliente.toStringAsFixed(2)} ${t.currency}'),
-              _row('Abonado a tu billetera',
-                  '${t.saldoPromocionalUsado.toStringAsFixed(2)} ${t.currency}'),
-              _row('Bono de regalo',
-                  '+${t.bonoChoferCampana.toStringAsFixed(2)} ${t.currency}'),
+              _row(
+                  t.paymentMethod == 'Transferencia'
+                      ? 'Cobrar por transferencia'
+                      : t.paymentMethod == 'Billetera'
+                          ? 'Cobrar de su billetera'
+                          : 'Cobrar en efectivo',
+                  '${t.montoCobrado.toStringAsFixed(2)} ${t.currency}'),
+              _row('Se abonará a tu billetera',
+                  '${t.abonoBilletera.toStringAsFixed(2)} ${t.currency}'),
+              if (t.bonoChoferCampana > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 2),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF3CD),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFF59E0B)),
+                    ),
+                    child: Text(
+                      '¡Bono de Campaña: '
+                      '+${t.bonoChoferCampana.toStringAsFixed(2)} '
+                      '${t.currency}!',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF92400E),
+                      ),
+                    ),
+                  ),
+                ),
             ],
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
             _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
@@ -2812,11 +2848,10 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             _row('Total del viaje',
                 '${t.totalFare.toStringAsFixed(2)} ${t.currency}',
                 bold: true),
-            if (t.paymentMethod == 'Billetera')
+            if (t.paymentMethod == 'Billetera' && !t.campanaPromocional)
               _row('Debitado de billetera',
                   '${(t.montoCobrado > 0 ? t.montoCobrado : t.totalFare).toStringAsFixed(2)} ${t.currency}'),
-            _row('Neto para ti',
-                '${((t.campanaPromocional ? (t.efectivoCliente + t.abonoBilletera) : (t.montoCobrado > 0 ? t.montoCobrado : t.totalFare)) - t.commission).toStringAsFixed(2)} ${t.currency}',
+            _row('Neto para ti', '${neto.toStringAsFixed(2)} ${t.currency}',
                 bold: true),
             if (t.appliedRule != null)
               Padding(
@@ -3219,6 +3254,10 @@ final pts = await widget.api.getTripRoute(trip.tripId);
           ),
         ),
         const SizedBox(height: 12),
+        if (o.tieneCampana) ...[
+          _buildCampanaOferta(o),
+          const SizedBox(height: 12),
+        ],
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -3322,6 +3361,101 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             ),
           ),
       ],
+    );
+  }
+
+  /// Desglose de la campana promocional en la oferta del chófer.
+  ///
+  /// Le dice cuanto cobra en mano (o por transferencia / de la billetera del
+  /// cliente), cuanto se le abona en su Fondo por la bolsa promocional y el
+  /// bono extra que recibe al cerrar el viaje.
+  Widget _buildCampanaOferta(TripOffer o) {
+    const text = Color(0xFF1F2937);
+    const muted = Color(0xFF6B7280);
+    final cobro = o.paymentMethod == 'Transferencia'
+        ? 'Cobrar por transferencia'
+        : o.paymentMethod == 'Billetera'
+            ? 'Cobrar de su billetera'
+            : 'Cobrar en efectivo';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(cobro,
+                  style: const TextStyle(
+                      color: text,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+              Text('${o.montoRestante.toStringAsFixed(2)} CUP',
+                  style: const TextStyle(
+                      color: text,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Se abonará a tu billetera',
+                  style: TextStyle(
+                      color: text,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+              Text('${o.saldoPromocionalUsado.toStringAsFixed(2)} CUP',
+                  style: const TextStyle(
+                      color: Color(0xFF047857),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800)),
+            ],
+          ),
+          if (o.bonoChoferCampana > 0) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3CD),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFF59E0B)),
+              ),
+              child: Text(
+                '¡Bono de Campaña: '
+                '+${o.bonoChoferCampana.toStringAsFixed(2)} CUP!',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF92400E),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.info_outline, size: 13, color: muted),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'El saldo promocional y el bono se abonan a tu Fondo al '
+                  'completar el viaje.',
+                  style: const TextStyle(color: muted, fontSize: 11),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

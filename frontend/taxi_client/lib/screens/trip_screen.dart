@@ -1340,15 +1340,26 @@ class _TripScreenState extends State<TripScreen> {
               _row('Recargo transferencia', '+${(t.recargoTransferencia ?? 0).toStringAsFixed(2)} $moneda'),
             if (t.campanaPromocional) ...[
               _row('Saldo promocional usado',
-                  '${(t.saldoPromocionalUsado ?? 0).toStringAsFixed(2)} $moneda'),
-              _row('Pagado en efectivo',
-                  '${(t.efectivoCliente ?? 0).toStringAsFixed(2)} $moneda'),
+                  '-${(t.saldoPromocionalUsado ?? 0).toStringAsFixed(2)} $moneda'),
+              _row(
+                  (t.paymentMethod ?? '')
+                          .toLowerCase()
+                          .contains('transferencia')
+                      ? 'Pagado por transferencia'
+                      : (t.paymentMethod ?? '')
+                              .toLowerCase()
+                              .contains('billetera')
+                          ? 'Pagado con Billetera'
+                          : 'Pagado en efectivo',
+                  '${(t.montoCobrado ?? 0).toStringAsFixed(2)} $moneda'),
             ],
-            if ((t.paymentMethod ?? '').toLowerCase().contains('billetera'))
+            if (!t.campanaPromocional &&
+                (t.paymentMethod ?? '').toLowerCase().contains('billetera'))
               _row('Debitado de tu billetera',
                   dinero(t.montoCobrado ?? total)),
             if ((t.paymentMethod ?? '').toLowerCase().contains('billetera') &&
-                ((t.montoCobrado ?? total ?? 0) + 0.009 < (total ?? 0)))
+                (t.montoCobrado ?? total ?? 0) + 0.009 <
+                    ((total ?? 0) - (t.saldoPromocionalUsado ?? 0)))
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(

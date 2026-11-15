@@ -39,6 +39,23 @@ class VehicleOption {
   /// Porcentaje del descuento (0.10 = 10 %).
   final double descuentoPorcentaje;
 
+  /// True si el backend aplico la campana promocional a esta cotizacion.
+  final bool campanaPromocional;
+
+  /// Saldo de la bolsa promocional que se descontara del precio total.
+  final double saldoPromocionalUsado;
+
+  /// Lo que queda por pagar despues de la bolsa promocional, en efectivo o
+  /// con billetera (sin el recargo por transferencia).
+  final double montoRestante;
+
+  /// Lo que queda por pagar si se elige Transferencia: incluye el recargo,
+  /// porque la bolsa promocional se aplica sobre el precio sin recargo.
+  final double montoRestanteTransferencia;
+
+  /// Bono que recibira el chofer si se cierra el viaje con la campana.
+  final double bonoChoferCampana;
+
   final String iconPath;
   final String displayName;
 
@@ -53,16 +70,38 @@ class VehicleOption {
     bool? descuentoReferidoAplicado,
     double? descuentoPrimerViaje,
     double? descuentoPorcentaje,
+    bool? campanaPromocional,
+    double? saldoPromocionalUsado,
+    double? montoRestante,
+    double? montoRestanteTransferencia,
+    double? bonoChoferCampana,
   })  : priceTransferencia = priceTransferencia ?? price * 1.10,
         precioOriginal = precioOriginal ?? price,
         descuentoAplicado = descuentoAplicado ?? false,
         descuentoReferidoAplicado = descuentoReferidoAplicado ?? false,
         descuentoPrimerViaje = descuentoPrimerViaje ?? 0,
-        descuentoPorcentaje = descuentoPorcentaje ?? 0;
+        descuentoPorcentaje = descuentoPorcentaje ?? 0,
+        campanaPromocional = campanaPromocional ?? false,
+        saldoPromocionalUsado = saldoPromocionalUsado ?? 0,
+        montoRestante = montoRestante ?? price,
+        montoRestanteTransferencia =
+            montoRestanteTransferencia ?? (priceTransferencia ?? price * 1.10),
+        bonoChoferCampana = bonoChoferCampana ?? 0;
 
   /// Precio final segun el metodo de pago elegido.
   double priceFor(String metodo) =>
       metodo == 'Transferencia' ? priceTransferencia : price;
+
+  /// Excedente que paga el cliente despues de la bolsa promocional. Es lo
+  /// que se le cobra en mano (Efectivo), por fuera (Transferencia) o se le
+  /// debita del Fondo real (Billetera).
+  double montoRestanteFor(String metodo) =>
+      metodo == 'Transferencia'
+          ? montoRestanteTransferencia
+          : montoRestante;
+
+  /// True si hay bolsa promocional aplicada en esta cotizacion.
+  bool get tieneCampana => campanaPromocional && saldoPromocionalUsado > 0;
 
   /// Precio original (tachado) para el metodo de pago elegido. En
   /// transferencia se le aplica el mismo recargo que al precio final para que
@@ -130,6 +169,16 @@ class VehicleOption {
           (json['descuento_primer_viaje'] as num?)?.toDouble() ?? 0,
       descuentoPorcentaje:
           (json['descuento_porcentaje'] as num?)?.toDouble() ?? 0,
+      campanaPromocional: json['campana_promocional'] == true,
+      saldoPromocionalUsado:
+          (json['saldo_promocional_usado'] as num?)?.toDouble() ?? 0,
+      montoRestante: (json['monto_restante'] as num?)?.toDouble() ?? precio,
+      montoRestanteTransferencia:
+          (json['monto_restante_transferencia'] as num?)?.toDouble() ??
+              ((json['price_transferencia'] as num?)?.toDouble() ??
+                  precio * 1.10),
+      bonoChoferCampana:
+          (json['bono_chofer_campana'] as num?)?.toDouble() ?? 0,
       iconPath: iconPath,
       displayName: displayName,
     );
@@ -209,12 +258,49 @@ class VehicleSelectorSheet extends StatelessWidget {
 
   VehicleOption get _selected => vehicles[selectedIndex];
 
-  /// La billetera solo confirma si el saldo cubre el precio del viaje. Con
-  /// efectivo o transferencia externa no hay nada que validar aqui.
+  /// La billetera solo confirma si el saldo real (Fondo) cubre el EXCEDENTE
+  /// que queda despues de la bolsa promocional. Con efectivo o transferencia
+  /// externa no hay nada que validar aqui.
   bool get _puedeConfirmar =>
       paymentMethod != 'Billetera' ||
-      (promoActive && promoBalance > 0) ||
-      walletBalance + 0.009 >= _selected.priceFor('Billetera');
+      walletBalance + 0.009 >= _selected.montoRestanteFor('Billetera');
+
+  /// Fila del desglose de campana: etiqueta a la izquierda y monto a la
+  /// derecha. Los montos negativos se pintan con su signo (saldo promocional).
+  Widget _filaDesglose(
+    String etiqueta,
+    double monto, {
+    required Color color,
+    bool destacado = false,
+  }) {
+    final texto = monto < 0
+        ? '-${_formatoPrecio(monto.abs())} CUP'
+        : '${_formatoPrecio(monto)} CUP';
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Flexible(
+          child: Text(
+            etiqueta,
+            style: TextStyle(
+              fontSize: destacado ? 13 : 12,
+              fontWeight: destacado ? FontWeight.w700 : FontWeight.w600,
+              color: AppColors.tinta,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          texto,
+          style: TextStyle(
+            fontSize: destacado ? 15 : 12,
+            fontWeight: destacado ? FontWeight.w800 : FontWeight.w600,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -393,8 +479,10 @@ class VehicleSelectorSheet extends StatelessWidget {
               value: paymentMethod,
               walletBalance: walletBalance,
               transferSurchargeRate: transferSurchargeRate,
-              precio: _selected.priceFor('Efectivo'),
-              precioTransferencia: _selected.priceTransferencia,
+              montoRestanteBilletera:
+                  _selected.montoRestanteFor('Billetera'),
+              montoRestanteTransferencia:
+                  _selected.montoRestanteFor('Transferencia'),
               onChanged: onPaymentMethodChanged,
             ),
           ),
@@ -454,14 +542,14 @@ class VehicleSelectorSheet extends StatelessWidget {
               ],
             ),
           ),
-          if (promoActive && promoBalance > 0) ...[
+          if (_selected.tieneCampana) ...[
             const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Container(
                 width: double.infinity,
                 padding:
-                    const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                 decoration: BoxDecoration(
                   color: AppColors.secundario.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(12),
@@ -469,20 +557,32 @@ class VehicleSelectorSheet extends StatelessWidget {
                     color: AppColors.secundario.withValues(alpha: 0.35),
                   ),
                 ),
-                child: Builder(builder: (_) {
-                  final precio = _selected.priceFor(paymentMethod);
-                  final usado = promoBalance < precio ? promoBalance : precio;
-                  final efectivo = precio - usado;
-                  return Text(
-                    'Pagas ${usado.toStringAsFixed(2)} CUP con billetera promocional '
-                    'y ${efectivo.toStringAsFixed(2)} CUP en efectivo.',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
+                child: Column(
+                  children: [
+                    _filaDesglose(
+                      'Precio total',
+                      _selected.priceFor(paymentMethod),
+                      color: AppColors.tinta,
                     ),
-                  );
-                }),
+                    const SizedBox(height: 4),
+                    _filaDesglose(
+                      'Saldo Promocional',
+                      -_selected.saldoPromocionalUsado,
+                      color: AppColors.exito,
+                    ),
+                    const Divider(height: 12),
+                    _filaDesglose(
+                      paymentMethod == 'Transferencia'
+                          ? 'A pagar por Transferencia'
+                          : paymentMethod == 'Billetera'
+                              ? 'A pagar con Billetera'
+                              : 'A pagar en Efectivo',
+                      _selected.montoRestanteFor(paymentMethod),
+                      color: AppColors.ambar,
+                      destacado: true,
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -803,22 +903,28 @@ class _PaymentSelector extends StatelessWidget {
   final String value;
   final double walletBalance;
   final double transferSurchargeRate;
-  final double precio;
-  final double precioTransferencia;
+
+  /// Excedente que se debita del Fondo real al pagar con Billetera (ya
+  /// descontada la bolsa promocional).
+  final double montoRestanteBilletera;
+
+  /// Excedente por transferencia (incluye el recargo y ya descuenta la bolsa
+  /// promocional).
+  final double montoRestanteTransferencia;
   final ValueChanged<String> onChanged;
 
   const _PaymentSelector({
     required this.value,
     required this.walletBalance,
     required this.transferSurchargeRate,
-    required this.precio,
-    required this.precioTransferencia,
+    required this.montoRestanteBilletera,
+    required this.montoRestanteTransferencia,
     required this.onChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    final sinSaldo = walletBalance + 0.009 < precio;
+    final sinSaldo = walletBalance + 0.009 < montoRestanteBilletera;
     final porcentaje = (transferSurchargeRate * 100).toStringAsFixed(
         transferSurchargeRate * 100 == (transferSurchargeRate * 100).round()
             ? 0
@@ -879,8 +985,9 @@ class _PaymentSelector extends StatelessWidget {
             icon: Icons.error_outline,
             color: AppColors.error,
             texto: 'Saldo insuficiente: tienes '
-                '${walletBalance.toStringAsFixed(2)} CUP y el viaje cuesta '
-                '${precio.toStringAsFixed(2)} CUP. Elige otro método de pago.',
+                '${walletBalance.toStringAsFixed(2)} CUP y necesitas '
+                '${montoRestanteBilletera.toStringAsFixed(2)} CUP para el '
+                'excedente del viaje. Elige otro método de pago.',
           ),
         ],
         if (value == 'Transferencia') ...[
@@ -889,8 +996,8 @@ class _PaymentSelector extends StatelessWidget {
             icon: Icons.info_outline,
             color: AppColors.ambar,
             texto: 'Al pagar por transferencia, se añade un $porcentaje% al '
-                'costo del viaje '
-                '(${precioTransferencia.toStringAsFixed(2)} CUP).',
+                'costo del viaje. Te queda por transferir '
+                '${montoRestanteTransferencia.toStringAsFixed(2)} CUP.',
           ),
         ],
       ],

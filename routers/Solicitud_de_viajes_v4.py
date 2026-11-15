@@ -1033,6 +1033,43 @@ def calcular_descuentos_cotizacion(
     }
 
 
+def desglose_campana_cotizacion(
+    precio_final: float,
+    precio_transferencia: float,
+    cliente_doc: Optional[dict],
+) -> dict:
+    """Saldo promocional y excedente que mostrara la cotizacion.
+
+    El cierre aplica la bolsa promocional sobre el precio SIN el recargo por
+    transferencia (igual que aqui) y deja el resto para el metodo elegido:
+
+        monto_restante = precio_final - saldo_promocional_usado
+        monto_restante_transferencia = precio_con_recargo - saldo_usado
+
+    Asi el desglose que ve el pasajero coincide al centimo con `complete_trip`
+    y con lo que el chofer cobra en mano (o por transferencia / billetera).
+    """
+    saldo = saldo_promocional_vigente(cliente_doc)
+    precio_cent = Decimal(str(precio_final)).quantize(
+        CENT, rounding=ROUND_HALF_UP)
+    usado = min(saldo, precio_cent) if saldo > 0 else Decimal("0.00")
+    restante = (precio_cent - usado).quantize(CENT, rounding=ROUND_HALF_UP)
+    bono = bono_promocional(cliente_doc) if usado > 0 else Decimal("0.00")
+    transfer_cent = Decimal(str(precio_transferencia)).quantize(
+        CENT, rounding=ROUND_HALF_UP)
+    restante_transferencia = max(
+        Decimal("0.00"), transfer_cent - usado).quantize(
+            CENT, rounding=ROUND_HALF_UP)
+    return {
+        "saldo_promocional_disponible": float(saldo),
+        "saldo_promocional_usado": float(usado),
+        "monto_restante": float(restante),
+        "monto_restante_transferencia": float(restante_transferencia),
+        "bono_chofer_campana": float(bono),
+        "campana_promocional": usado > 0,
+    }
+
+
 def estimate_trip_price(
     request_lat: float,
     request_lng: float,
@@ -1066,8 +1103,10 @@ def estimate_trip_price(
         "descuento_referido_aplicado"]
     desglose["descuento_porcentaje"] = descuentos["descuento_porcentaje"]
     desglose["recargo_transferencia_porcentaje"] = recargo_rate
-    desglose["precio_transferencia"] = round(
-        final * (1 + recargo_rate), 2)
+    precio_transferencia = round(final * (1 + recargo_rate), 2)
+    desglose["precio_transferencia"] = precio_transferencia
+    desglose.update(desglose_campana_cotizacion(
+        final, precio_transferencia, cliente_doc))
     desglose["comision_billetera_porcentaje"] = float(
         promo["comision_billetera"])
     return desglose
@@ -1103,6 +1142,7 @@ def estimate_all_vehicles(
     primer_viaje_global = Decimal("0")
     referido_global = Decimal("0")
     porcentaje_global = 0.0
+    campana_global: dict = {}
     for vehicle_type in ["moto", "triciclo", "basico", "confort"]:
         breakdown = _price_breakdown(distance_km, vehicle_type, request_lat, request_lng, dropoff_lat, dropoff_lng)
         original = float(breakdown["precio_estimado"])
@@ -1118,6 +1158,11 @@ def estimate_all_vehicles(
             referido_global, Decimal(str(descuentos["descuento_referido"])))
         if descuentos["descuento_aplicado"] and not porcentaje_global:
             porcentaje_global = float(descuentos["descuento_porcentaje"])
+        precio_transferencia = round(final * (1 + recargo_rate), 2)
+        campana = desglose_campana_cotizacion(
+            final, precio_transferencia, cliente_doc)
+        if not campana_global:
+            campana_global = dict(campana)
         vehicles.append({
             "vehicle_type": vehicle_type,
             "price": round(final, 2),
@@ -1130,7 +1175,8 @@ def estimate_all_vehicles(
             "descuento_referido_aplicado": descuentos[
                 "descuento_referido_aplicado"],
             "descuento_porcentaje": descuentos["descuento_porcentaje"],
-            "price_transferencia": round(final * (1 + recargo_rate), 2),
+            "price_transferencia": precio_transferencia,
+            **campana,
             "base_fare": breakdown["base_fare"],
             "distance_fare": breakdown["distance_fare"],
             "time_fare": breakdown["time_fare"],
@@ -1150,6 +1196,12 @@ def estimate_all_vehicles(
         "descuento_primer_viaje": float(primer_viaje_global),
         "descuento_referido": float(referido_global),
         "descuento_porcentaje": porcentaje_global,
+        "saldo_promocional_disponible": campana_global.get(
+            "saldo_promocional_disponible", 0.0),
+        "campana_promocional": campana_global.get(
+            "campana_promocional", False),
+        "bono_chofer_campana": campana_global.get(
+            "bono_chofer_campana", 0.0),
         "vehicles": vehicles,
     }
 # ===================== TRIPS =====================
@@ -1254,21 +1306,29 @@ def create_trip(
                         CENT, rounding=ROUND_HALF_UP))
             precio_estimado = round(float(precio_base) + recargo, 2)
 
-            # La billetera se valida al pedir el viaje: si el saldo no cubre
-            # el total estimado, se rechaza antes de mover un chofer. Si el
-            # cliente tiene saldo promocional vigente, la campana cubre primero
-            # esa bolsa y el resto se paga en efectivo: no se rechaza.
+            # La billetera se valida al pedir el viaje contra el EXCEDENTE que
+            # tendra que pagar el cliente con su `Fondo`, no contra el total.
+            # La campana cubre primero su bolsa promocional (`monto_restante`
+            # ya viene descontado). Antes se omitia la validacion por tener
+            # promo y se aceptaba un viaje con saldo real insuficiente.
             if payment_method == "Billetera":
                 cliente_oid = to_mongo_id(client_id)
                 cliente_doc = (cliente_coleccion.find_one({"_id": cliente_oid})
                                if cliente_oid else None)
                 saldo = float((cliente_doc or {}).get("Fondo") or 0)
                 promo_disponible = saldo_promocional_vigente(cliente_doc)
-                if promo_disponible <= 0 and saldo + 0.009 < precio_estimado:
+                precio_cent = Decimal(str(precio_estimado)).quantize(
+                    CENT, rounding=ROUND_HALF_UP)
+                promo_usado = min(promo_disponible, precio_cent)
+                restante = (precio_cent - promo_usado).quantize(
+                    CENT, rounding=ROUND_HALF_UP)
+                if saldo + 0.009 < float(restante):
                     raise ValueError(
                         "Saldo insuficiente en la billetera: el viaje cuesta "
-                        "%.2f CUP y tu saldo es %.2f CUP."
-                        % (precio_estimado, saldo))
+                        "%.2f CUP, el saldo promocional cubre %.2f CUP y "
+                        "necesitas %.2f CUP en tu billetera (tienes %.2f CUP)."
+                        % (precio_estimado, float(promo_usado),
+                           float(restante), saldo))
 
             # Si hay driver_id, el estado es 'accepted'; si no, queda 'requested' sin chofer
             initial_status = "accepted" if driver_id else "requested"
@@ -1860,41 +1920,53 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             # Desglose de la campana (0 fuera de ella). Se define aqui para que
             # el retorno del cierre los pueda incluir siempre.
             promo_usado = Decimal("0.00")
-            efectivo_cliente = Decimal(str(total_fare))
+            monto_restante = Decimal(str(total_fare)).quantize(
+                CENT, rounding=ROUND_HALF_UP)
+            efectivo_cliente = Decimal("0.00")
             bono_campana = Decimal("0.00")
             abono_chofer = Decimal("0.00")
+            cobrado_billetera = Decimal("0.00")
 
-            # 10-a. Campana "Sabado de RapiTaxi": saldo promocional -> efectivo.
+            # 10-a. Campana promocional: saldo del cliente -> pago mixto.
             #
             #     El precio lo sigue calculando el backend. Se cobra primero la
-            #     bolsa promocional del cliente y el resto queda como efectivo,
-            #     que el chofer cobra en mano. El `Fondo` del cliente NO se toca:
-            #     la campana no es un pago con billetera.
+            #     bolsa promocional del cliente y el resto (`monto_restante`) se
+            #     paga con el metodo elegido:
             #
-            #     Al chofer se le abona en su Fondo el saldo promocional usado
-            #     mas el bono de la campana. La comision se sigue descontando de
-            #     SU Fondo, igual que en efectivo.
+            #       * Efectivo: el chofer lo cobra en mano.
+            #       * Transferencia: el cliente lo transfiere por fuera.
+            #       * Billetera: se debita del `Fondo` real del cliente y se
+            #         acredita al chofer.
             #
-            #     Transferencia externa no entra: el dinero no pasa por la
-            #     plataforma y el cliente paga el total por fuera.
+            #     Al chofer se le abona SIEMPRE en su Fondo el saldo promocional
+            #     usado mas el bono de la campana. La comision se sigue
+            #     descontando de SU Fondo, igual que en el resto de metodos.
+            #
+            #     La bolsa se aplica sobre el precio SIN el recargo por
+            #     transferencia, porque ese recargo ya esta dentro de
+            #     `total_fare` y se paga con el excedente. Asi el desglose
+            #     coincide con `desglose_campana_cotizacion`.
             try:
                 cliente_campana = cliente_coleccion.find_one(
                     {"_id": to_mongo_id(updated_trip.get("client_id") or "")})
             except Exception:
                 cliente_campana = None
             promo_disponible = saldo_promocional_vigente(cliente_campana)
-            aplicar_campana = (
-                payment_method in ("Efectivo", "Billetera")
-                and promo_disponible > 0
-            )
+            precio_sin_recargo = (
+                Decimal(str(total_fare))
+                - Decimal(str(recargo_transferencia))).quantize(
+                    CENT, rounding=ROUND_HALF_UP)
+            aplicar_campana = (promo_disponible > 0
+                               and precio_sin_recargo > 0)
 
             if aplicar_campana:
                 try:
-                    precio_cent = Decimal(str(total_fare)).quantize(
-                        CENT, rounding=ROUND_HALF_UP)
-                    promo_usado = min(promo_disponible, precio_cent)
-                    efectivo_cliente = (precio_cent - promo_usado).quantize(
-                        CENT, rounding=ROUND_HALF_UP)
+                    promo_usado = min(
+                        promo_disponible, precio_sin_recargo).quantize(
+                            CENT, rounding=ROUND_HALF_UP)
+                    monto_restante = (
+                        Decimal(str(total_fare)) - promo_usado).quantize(
+                            CENT, rounding=ROUND_HALF_UP)
                     bono_campana = (
                         bono_promocional(cliente_campana)
                         if promo_usado > 0 else Decimal("0.00"))
@@ -1902,7 +1974,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                         CENT, rounding=ROUND_HALF_UP)
 
                     # Cobro del saldo promocional: SOLO esa bolsa. El Fondo
-                    # del cliente se queda intacto.
+                    # del cliente no se toca aqui.
                     if promo_usado > 0 and cliente_campana:
                         cliente_coleccion.update_one(
                             {"_id": cliente_campana["_id"]},
@@ -1915,14 +1987,67 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                             {"_id": to_mongo_id(driver_id_str)},
                             {"$inc": {"Fondo": float(abono_chofer)}})
 
-                    # Comision: misma regla que efectivo, desde el Fondo del
-                    # chofer. Nunca desde el Fondo del cliente.
-                    comision = resolve_commission(
-                        driver_id_str, promo["comision_porcentaje"])
-                    tasa_comision = Decimal(str(comision["rate"]))
-                    comision_nominal, commission = liquidar_comision(
-                        precio_bruto, total_fare, descuento_total,
-                        tasa_comision)
+                    # Excedente: en Efectivo/Transferencia se queda en manos
+                    # del chofer. En Billetera se cobra del `Fondo` REAL del
+                    # cliente y se abona al chofer.
+                    if payment_method == "Billetera":
+                        client_oid = to_mongo_id(
+                            updated_trip.get("client_id") or "")
+                        saldo_cliente = 0.0
+                        if client_oid:
+                            doc_cliente = cliente_coleccion.find_one(
+                                {"_id": client_oid}) or {}
+                            saldo_cliente = max(
+                                0.0, float(doc_cliente.get("Fondo") or 0))
+                        cobrado_billetera = Decimal(str(min(
+                            saldo_cliente, float(monto_restante)))).quantize(
+                                CENT, rounding=ROUND_HALF_UP)
+                        if client_oid and cobrado_billetera > 0:
+                            cliente_coleccion.update_one(
+                                {"_id": client_oid},
+                                {"$inc": {"Fondo":
+                                          -float(cobrado_billetera)}})
+                            chofer_coleccion.update_one(
+                                {"_id": to_mongo_id(driver_id_str)},
+                                {"$inc": {"Fondo":
+                                          float(cobrado_billetera)}})
+                        if (cobrado_billetera + Decimal("0.009")
+                                < monto_restante):
+                            logger.warning(
+                                "Billetera+campana: el cliente %s tenia %.2f, "
+                                "el excedente era %.2f y se debito %.2f en el "
+                                "viaje %s.",
+                                updated_trip.get("client_id"), saldo_cliente,
+                                float(monto_restante),
+                                float(cobrado_billetera), trip_id)
+                    elif payment_method == "Efectivo":
+                        efectivo_cliente = monto_restante
+
+                    # Comision: misma regla de siempre, desde el Fondo del
+                    # chofer. En Billetera se usa la tasa de billetera.
+                    if payment_method == "Billetera":
+                        tasa_comision = Decimal(
+                            str(promo["comision_billetera"]))
+                        comision_nominal, comision_cobrada = liquidar_comision(
+                            precio_bruto, total_fare, descuento_total,
+                            tasa_comision)
+                        comision_billetera = float(comision_cobrada or 0)
+                        commission = comision_billetera
+                        comision = {
+                            "rate": float(tasa_comision),
+                            "label": _etiqueta_tasa(tasa_comision),
+                            "discount_applied": False,
+                            "discount_date": datetime.now(
+                                CUBA_TZ).strftime("%Y-%m-%d"),
+                        }
+                    else:
+                        comision = resolve_commission(
+                            driver_id_str, promo["comision_porcentaje"])
+                        tasa_comision = Decimal(str(comision["rate"]))
+                        comision_nominal, comision_cobrada = liquidar_comision(
+                            precio_bruto, total_fare, descuento_total,
+                            tasa_comision)
+                        commission = comision_cobrada
                     commit_commission(
                         driver_id_str,
                         commission,
@@ -1930,23 +2055,30 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                         comision["discount_date"],
                     )
 
+                    cobrado_real = (
+                        cobrado_billetera if payment_method == "Billetera"
+                        else monto_restante)
                     cur.execute(
                         "UPDATE trips SET comision_nominal = %s, "
-                        "comision_cobrada = %s, comision_billetera = 0, "
+                        "comision_cobrada = %s, comision_billetera = %s, "
                         "monto_cobrado = %s, saldo_promocional_usado = %s, "
                         "efectivo_cliente = %s, bono_chofer_campana = %s, "
                         "campana_promocional = TRUE "
                         "WHERE trip_id = %s",
                         (comision_nominal, commission,
-                         float(efectivo_cliente), float(promo_usado),
-                         float(efectivo_cliente), float(bono_campana), trip_id))
+                         comision_billetera if payment_method == "Billetera"
+                         else 0,
+                         float(cobrado_real), float(promo_usado),
+                         float(efectivo_cliente), float(bono_campana),
+                         trip_id))
                     conn.commit()
 
-                    monto_cobrado_result = float(efectivo_cliente)
-                    # Lo que el chofer termina ganando: efectivo en mano mas
-                    # abono en billetera, menos la comision descontada.
+                    monto_cobrado_result = float(cobrado_real)
+                    # Lo que el chofer termina ganando: el excedente cobrado
+                    # (mano, transferencia o billetera) mas el abono virtual,
+                    # menos la comision descontada.
                     neto_chofer_result = float(
-                        (Decimal(str(efectivo_cliente))
+                        (Decimal(str(cobrado_real))
                          + Decimal(str(abono_chofer))
                          - Decimal(str(commission or 0))).quantize(
                             CENT, rounding=ROUND_HALF_UP))
@@ -1969,15 +2101,25 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                             float(bono_campana), "wallet_income",
                             payment_gateway="campana_bono")
                         update_transaction_status(txn_bono, "completed")
+                    if payment_method == "Billetera" and cobrado_billetera > 0:
+                        txn_cliente = create_transaction(
+                            trip_id, updated_trip.get("client_id"), "client",
+                            -float(cobrado_billetera), "wallet_payment",
+                            payment_gateway="billetera")
+                        update_transaction_status(txn_cliente, "completed")
+                        txn_chofer = create_transaction(
+                            trip_id, driver_id_str, "driver",
+                            float(cobrado_billetera), "wallet_income",
+                            payment_gateway="billetera")
+                        update_transaction_status(txn_chofer, "completed")
                     registrar_comision_en_fondo(
-                        trip_id, driver_id_str, commission, "Efectivo")
+                        trip_id, driver_id_str, commission, payment_method)
 
                     logger.info(
                         "Campana: viaje %s cobrado con %.2f promocional y "
-                        "%.2f efectivo; bono %.2f al chofer %s",
-                        trip_id, float(promo_usado),
-                        float(efectivo_cliente), float(bono_campana),
-                        driver_id_str)
+                        "%.2f por %s; bono %.2f al chofer %s",
+                        trip_id, float(promo_usado), float(cobrado_real),
+                        payment_method, float(bono_campana), driver_id_str)
                 except Exception:
                     # El viaje ya esta 'completed' con su precio. No se
                     # devuelve 500 al chofer; se deja constancia del fallo.
@@ -2320,10 +2462,16 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 # desglose (promocional + efectivo) y el abono al chofer.
                 "campana_promocional": bool(aplicar_campana),
                 "saldo_promocional_usado": round(float(promo_usado), 2),
+                # Excedente que paga el cliente fuera de la bolsa promocional
+                # (mano, transferencia o Fondo real). Para Billetera es lo
+                # realmente debitado, no lo que se pretendia cobrar.
+                "monto_restante": round(float(monto_cobrado_result), 2),
                 "efectivo_cliente": round(float(efectivo_cliente), 2),
                 "bono_chofer_campana": round(float(bono_campana), 2),
+                # Abono VIRTUAL al chofer, sin el bono: la app lo pinta aparte
+                # y asi no se duplica la cifra.
                 "abono_billetera": (
-                    round(float(abono_chofer), 2) if aplicar_campana else 0.0),
+                    round(float(promo_usado), 2) if aplicar_campana else 0.0),
                 "currency": updated_trip.get("currency") or "CUP",
                 "vehicle_type": vehicle_type,
                 "applied_rule": applied_rule_desc,
@@ -2543,6 +2691,7 @@ def get_nearby_requested_trips(
                 base_fare, distance_fare, tip, total_fare,
                 currency, payment_method,
                 equipaje, mascota, num_pasajes, vehicle_type, precio_estimado,
+                recargo_transferencia,
                 request_address, dropoff_address,
                 ST_Distance(
                     request_location,
@@ -3823,12 +3972,38 @@ async def api_get_requested_trips_nearby(
             "client_name": None,
             "client_rating": None,
             "client_phone": None,
+            # Desglose de la campana para la oferta del chofer. El precio que
+            # ve el pasajero ya descuenta su bolsa promocional; el chofer
+            # necesita saber cuanto cobra en mano y cuanto se le abona.
+            "campana_promocional": False,
+            "saldo_promocional_usado": 0.0,
+            "monto_restante": 0.0,
+            "bono_chofer_campana": 0.0,
         }
         if client_doc:
             profile = client_doc.get("profile", {})
             entry["client_name"] = _client_display_name(client_doc)
             entry["client_rating"] = profile.get("rating")
             entry["client_phone"] = _client_phone(client_doc)
+            saldo = saldo_promocional_vigente(client_doc)
+            precio = Decimal(str(trip.get("precio_estimado") or 0))
+            recargo = Decimal(str(trip.get("recargo_transferencia") or 0))
+            precio_sin_recargo = max(
+                Decimal("0.00"), precio - recargo).quantize(
+                    CENT, rounding=ROUND_HALF_UP)
+            usado = (min(saldo, precio_sin_recargo)
+                     if saldo > 0 else Decimal("0.00"))
+            restante = max(
+                Decimal("0.00"), precio - usado).quantize(
+                    CENT, rounding=ROUND_HALF_UP)
+            bono = (bono_promocional(client_doc)
+                    if usado > 0 else Decimal("0.00"))
+            entry.update({
+                "campana_promocional": usado > 0,
+                "saldo_promocional_usado": round(float(usado), 2),
+                "monto_restante": round(float(restante), 2),
+                "bono_chofer_campana": round(float(bono), 2),
+            })
         # Segundos que le quedan al viaje para que un conductor lo acepte.
         # La app NO debe calcularlo con su propio reloj: si el dispositivo
         # va adelantado se descartaria la oferta antes de mostrarse.
@@ -4045,6 +4220,8 @@ async def api_get_trip_receipt(trip_id: str):
         "recargo_reintento": round(recargo_reintento, 2),
         "recargo_transferencia": round(recargo_transferencia, 2),
         "monto_cobrado": round(monto_cobrado, 2),
+        # Excedente pagado fuera de la bolsa promocional (mano o Fondo real).
+        "monto_restante": round(monto_cobrado, 2),
         "neto_chofer": round(
             (monto_cobrado
              + float(trip.get("saldo_promocional_usado") or 0)
@@ -4061,8 +4238,7 @@ async def api_get_trip_receipt(trip_id: str):
         "bono_chofer_campana": round(
             float(trip.get("bono_chofer_campana") or 0), 2),
         "abono_billetera": round(
-            float(trip.get("saldo_promocional_usado") or 0)
-            + float(trip.get("bono_chofer_campana") or 0), 2)
+            float(trip.get("saldo_promocional_usado") or 0), 2)
         if trip.get("campana_promocional") else 0.0,
         # El chofer necesita ver con que le pago el pasajero tambien cuando el
         # recibo se reconstruye por HTTP (WS caido o fin forzado desde el panel).
