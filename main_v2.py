@@ -412,24 +412,67 @@ async def _outbox_loop() -> None:
 
     Requisitos: uvicorn --workers 1 (instancia única). Lote 50-100, sleep 3-5s
     cuando la cola está vacía, heartbeat cada minuto con pendientes, alerta si
-    pendientes > umbral sostenidos.
+    pendientes > umbral sostenidos. Si Mongo/Postgres no están listos al
+    arrancar (o se caen a mitad de turno), reintenta cada 10 s en vez de morir
+    en silencio: antes un fallo de conexión cerraba el loop para siempre y no
+    aparecía ningún heartbeat.
     """
     global _outbox_alert_since
+    stop = _outbox_stop_event
     mongo_uri = os.getenv("MONGODB_URI", "").strip()
-    if not mongo_uri:
-        logger.error("Outbox loop: MONGODB_URI no configurado; no se inicia")
-        return
+    cliente = chofer_col = processed_col = conn = None
 
     def _abrir():
-        cliente, chofer_col, processed_col = outbox_worker.conectar_mongo(mongo_uri)
-        outbox_worker.asegurar_indice(processed_col)
-        conn = outbox_worker.conectar_pg()
-        return cliente, chofer_col, processed_col, conn
+        c, cc, pc = outbox_worker.conectar_mongo(mongo_uri)
+        outbox_worker.asegurar_indice(pc)
+        pg = outbox_worker.conectar_pg()
+        return c, cc, pc, pg
 
-    try:
-        cliente, chofer_col, processed_col, conn = await asyncio.to_thread(_abrir)
-    except Exception:
-        logger.exception("Outbox loop: no se pudo iniciar (conexiones)")
+    def _cerrar() -> None:
+        nonlocal cliente, conn
+        for cierre in (lambda: conn.close() if conn is not None else None,
+                       lambda: cliente.close() if cliente is not None else None):
+            try:
+                cierre()
+            except Exception:
+                pass
+        cliente = conn = None
+
+    async def _esperar(segundos: float) -> bool:
+        """True si pidieron parar; False si solo venció el timeout."""
+        if stop is None:
+            await asyncio.sleep(segundos)
+            return False
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=segundos)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    async def _conectar_con_reintento() -> bool:
+        """Abre Mongo+PG, reintentando cada 10 s hasta conectar o parar."""
+        nonlocal cliente, chofer_col, processed_col, conn
+        intento = 0
+        while True:
+            if stop is not None and stop.is_set():
+                return False
+            intento += 1
+            if not mongo_uri:
+                logger.error(
+                    "Outbox: No se pudo conectar a Mongo (MONGODB_URI no configurado)")
+            else:
+                try:
+                    cliente, chofer_col, processed_col, conn = await asyncio.to_thread(_abrir)
+                    logger.info("Outbox: conexiones listas (intento %s)", intento)
+                    return True
+                except Exception:
+                    logger.exception(
+                        "Outbox: No se pudo conectar a Mongo (intento %s)", intento)
+            if await _esperar(10.0):
+                return False
+
+    if not await _conectar_con_reintento():
+        logger.info("Outbox loop detenido (sin conexiones)")
         return
 
     logger.info(
@@ -441,8 +484,9 @@ async def _outbox_loop() -> None:
     )
 
     ultimo_heartbeat = time.monotonic()
+    fallos = 0
     try:
-        while _outbox_stop_event and not _outbox_stop_event.is_set():
+        while stop is None or not stop.is_set():
             try:
                 stats = await asyncio.to_thread(
                     outbox_worker.procesar_lote,
@@ -451,22 +495,26 @@ async def _outbox_loop() -> None:
                     processed_col,
                     limite=max(1, int(app_config.OUTBOX_LOOP_BATCH_SIZE)),
                 )
+                fallos = 0
             except Exception:
-                logger.exception("Outbox loop: error en pasada")
+                fallos += 1
+                logger.exception("Outbox loop: error en pasada (fallo %s)", fallos)
                 stats = {"tomados": 0}
                 try:
                     conn.rollback()
                 except Exception:
                     pass
-                # Reintentar conexiones en la siguiente iteración tras breve espera.
-                try:
-                    await asyncio.wait_for(
-                        _outbox_stop_event.wait(),
-                        timeout=min(5.0, app_config.OUTBOX_LOOP_SLEEP_EMPTY_S),
-                    )
+                if fallos >= 3:
+                    # La conexión puede estar muerta; reabrir en vez de girar
+                    # sobre un socket roto durante horas.
+                    logger.error("Outbox: No se pudo conectar a Mongo; reabriendo conexiones")
+                    _cerrar()
+                    if not await _conectar_con_reintento():
+                        break
+                    fallos = 0
+                elif await _esperar(min(5.0, app_config.OUTBOX_LOOP_SLEEP_EMPTY_S)):
                     break
-                except asyncio.TimeoutError:
-                    pass
+                continue
 
             ahora = time.monotonic()
             if (ahora - ultimo_heartbeat) >= app_config.OUTBOX_LOOP_HEARTBEAT_S:
@@ -501,25 +549,13 @@ async def _outbox_loop() -> None:
                 ultimo_heartbeat = ahora
 
             if int(stats.get("tomados", 0) or 0) == 0:
-                try:
-                    await asyncio.wait_for(
-                        _outbox_stop_event.wait(),
-                        timeout=max(1.0, float(app_config.OUTBOX_LOOP_SLEEP_EMPTY_S)),
-                    )
-                except asyncio.TimeoutError:
-                    pass
+                if await _esperar(max(1.0, float(app_config.OUTBOX_LOOP_SLEEP_EMPTY_S))):
+                    break
     except asyncio.CancelledError:
         logger.info("Outbox loop cancelado")
         raise
     finally:
-        for cierre in (
-            lambda: conn.close(),
-            lambda: cliente.close(),
-        ):
-            try:
-                cierre()
-            except Exception:
-                pass
+        _cerrar()
         logger.info("Outbox loop detenido")
 
 
@@ -605,6 +641,7 @@ def admin_init(x_admin_token: str = Header(..., alias="X-Admin-Token")):
 
 @app.on_event("startup")
 async def startup_event():
+    logger.info("=== INICIANDO APLICACIÓN ===")
     # Inicializacion resiliente de la BD: si una base falla, la app arranca
     # igualmente y el job de reintento la termina de levantar.
     for _nombre, _fn in (
@@ -682,7 +719,7 @@ async def startup_event():
             # Log explicito para diagnosticar en Render si el flag no llego.
             logger.info("Outbox loop desactivado (OUTBOX_WORKER_ENABLED=0)")
     except Exception:
-        logger.exception("No se pudo encolar el outbox loop")
+        logger.exception("Error inicializando Outbox")
 
     # Scheduler: expiracion de viajes + autorreparacion de tablas + cuadre diario
     scheduler.add_job(sweep_expired_trips, "interval", seconds=15, id="sweep_expired_trips")

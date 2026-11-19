@@ -9,12 +9,17 @@ refrescado por el cliente Flutter.
 """
 from __future__ import annotations
 
+import asyncio
 import unittest
+from datetime import datetime, timedelta
 from unittest import mock
 
 from fastapi import WebSocketDisconnect
 from bson import ObjectId
+from jose import jwt
+from redis.exceptions import ConnectionError as RedisConnectionError
 
+from db import tokens as db_tokens
 from routers import tiempo_real
 
 UID = "507f1f77bcf86cd799439011"
@@ -45,11 +50,22 @@ class FakeWS:
 
 
 class FakePubSub:
+    def __init__(self, falla=False):
+        self.falla = falla
+        self.canales = None
+        self.cerrado = False
+
     async def subscribe(self, *canales):
         self.canales = canales
 
     async def listen(self):
-        if False:  # pragma: no cover - generador vacio a proposito
+        if self.falla:
+            raise RedisConnectionError("microcorte simulado")
+            yield None  # pragma: no cover - para que sea generador
+        while True:
+            # Evento que nunca se senala: bloquea hasta que cancelen la tarea,
+            # sin depender de asyncio.sleep (que los tests parchean).
+            await asyncio.Event().wait()
             yield None
 
     async def close(self):
@@ -134,6 +150,58 @@ class TestHandshakeChofer(unittest.IsolatedAsyncioTestCase):
         await tiempo_real.ws_tiempo_real(ws, "otro", UID, "jwt")
         self.assertEqual(ws.closed, 1008)
         self.assertFalse(ws.accepted)
+
+    async def test_redis_se_reconecta_sin_cerrar_el_ws(self):
+        caido = FakePubSub(falla=True)
+        sano = FakePubSub()
+        cola = iter([caido, sano])
+        ws = FakeWS()
+        with mock.patch.object(tiempo_real, "verify_token_chofer",
+                               return_value=_payload()), \
+             mock.patch.object(tiempo_real, "chofer_db",
+                               {"users": FakeUsers({"_id": ObjectId(UID),
+                                                    "email": EMAIL})}), \
+             mock.patch.object(tiempo_real.aioredis.client, "PubSub",
+                               side_effect=lambda **kwargs: next(cola)), \
+             mock.patch.object(tiempo_real.asyncio, "sleep",
+                               new=mock.AsyncMock()):
+            await tiempo_real.ws_tiempo_real(ws, "chofer", UID, "jwt")
+        self.assertTrue(ws.accepted)
+        self.assertIsNone(ws.closed)
+        self.assertIsNotNone(sano.canales)
+        self.assertIn(f"ws:chofer:{UID}", sano.canales)
+
+
+class TestDiagnosticoJwt(unittest.TestCase):
+    def test_token_valido(self):
+        token = db_tokens.create_access_token({"sub": EMAIL}, app="driver")
+        self.assertEqual(db_tokens.diagnosticar_token(token), "valido")
+
+    def test_token_expirado(self):
+        token = jwt.encode(
+            {"sub": EMAIL, "type": "access",
+             "exp": datetime.utcnow() - timedelta(minutes=1)},
+            db_tokens.SECRET_KEY, algorithm=db_tokens.ALGORITHM,
+        )
+        self.assertEqual(db_tokens.diagnosticar_token(token), "expirado")
+        self.assertIsNone(db_tokens.verify_token(token))
+
+    def test_firma_distinta(self):
+        token = jwt.encode(
+            {"sub": EMAIL, "type": "access",
+             "exp": datetime.utcnow() + timedelta(minutes=5)},
+            "otra-clave-distinta", algorithm="HS256",
+        )
+        self.assertEqual(db_tokens.diagnosticar_token(token), "firma_invalida")
+
+    def test_refresh_no_vale_como_access(self):
+        token = db_tokens.create_refresh_token({"sub": EMAIL}, app="driver")
+        self.assertEqual(db_tokens.diagnosticar_token(token), "tipo_refresh")
+
+    def test_vacio_y_con_prefijo_bearer(self):
+        self.assertEqual(db_tokens.diagnosticar_token(""), "vacio")
+        token = db_tokens.create_access_token({"sub": EMAIL}, app="driver")
+        self.assertEqual(db_tokens.diagnosticar_token(f"Bearer {token}"), "valido")
 
 
 if __name__ == "__main__":

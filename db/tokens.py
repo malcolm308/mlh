@@ -21,10 +21,11 @@ solo en una ventana acordada (cierra TODAS las sesiones al aplicarse).
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jose import JWTError, jwt
+from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 
 SECRET_KEY = os.getenv(
     "JWT_SECRET_KEY",
@@ -92,3 +93,46 @@ def verify_access_token(token: str) -> Optional[dict]:
 
 def verify_refresh_token(token: str) -> Optional[dict]:
     return verify_token(token, REFRESH)
+
+
+def diagnosticar_token(token: str, tipo: str = ACCESS) -> str:
+    """Por qué `verify_token` rechazaría este token, SIN exponer secretos.
+
+    Se usa solo para logs operativos (por ejemplo el WebSocket del chofer):
+    distingue "expirado" de "firma_invalida" para no culpar siempre al reloj
+    cuando en realidad cambió `JWT_SECRET_KEY` entre despliegues.
+    """
+    token = (token or "").strip()
+    if token.lower().startswith("bearer "):
+        token = token.split(" ", 1)[1].strip()
+    if not token:
+        return "vacio"
+    try:
+        sin_verificar = jwt.get_unverified_claims(token)
+    except Exception:
+        return "formato_invalido"
+
+    exp = sin_verificar.get("exp")
+    if exp is not None:
+        try:
+            # datetime.utcnow() es naive: .timestamp() lo interpreta como hora
+            # LOCAL y en Windows puede anticipar 5 h la caducidad. Forzar UTC.
+            if float(exp) <= datetime.now(timezone.utc).timestamp():
+                return "expirado"
+        except (TypeError, ValueError):
+            return "exp_invalido"
+
+    try:
+        verificado = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except ExpiredSignatureError:
+        return "expirado"
+    except JWTClaimsError:
+        return "claims_invalidos"
+    except JWTError:
+        return "firma_invalida"
+
+    if tipo == ACCESS and verificado.get("type") not in (None, ACCESS):
+        return "tipo_refresh"
+    if tipo != ACCESS and verificado.get("type") != tipo:
+        return "tipo_incorrecto"
+    return "valido"

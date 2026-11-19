@@ -30,11 +30,16 @@ from typing import Optional
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from bson import ObjectId
 import redis.asyncio as aioredis
+from redis.exceptions import (
+    ConnectionError as RedisConnectionError,
+    TimeoutError as RedisTimeoutError,
+)
 
 from db.Cliente.auth import verify_token as verify_token_cliente
 from db.Cliente.connection import cliente_db
 from db.Chofer.auth import verify_token as verify_token_chofer
 from db.Chofer.connection import chofer_db
+from db.tokens import diagnosticar_token
 from routers.Solicitud_de_viajes_v4 import (
     garnet,
     get_connection,
@@ -180,6 +185,9 @@ async def ws_tiempo_real(
     # Contrato actual: ?token=JWT. Tambien se acepta Authorization: Bearer,
     # por si un proxy o un cliente distinto no puede meter el JWT en la URL.
     token = (token or "").strip()
+    if token.lower().startswith("bearer "):
+        # Algunos clientes reenvian el header completo dentro del query param.
+        token = token.split(" ", 1)[1].strip()
     if not token:
         autorizacion = (ws.headers.get("authorization") or "").strip()
         if autorizacion.lower().startswith("bearer "):
@@ -188,9 +196,11 @@ async def ws_tiempo_real(
     payload = (verify_token_cliente(token) if rol == "cliente"
                else verify_token_chofer(token))
     if not payload:
-        # Un access token caduca a las 2 h: el cliente debe renovarlo antes de
-        # reconectarse. Antes esto cerraba en silencio y parecia un fallo del WS.
-        _rechazar("token_invalido_o_expirado")
+        # Un access token caduca a las 2 h. El diagnostico distingue "expirado"
+        # de "firma_invalida" (cambio de JWT_SECRET_KEY entre despliegues) sin
+        # escribir el JWT en los logs.
+        diagnostico = diagnosticar_token(token)
+        _rechazar(f"token_{diagnostico}")
         await ws.close(code=1008)
         return
 
@@ -235,27 +245,71 @@ async def ws_tiempo_real(
     if rol == "chofer":
         canales.add(f"driver:{user_id}:offers")
 
-    pubsub = aioredis.client.PubSub(
-        connection_pool=garnet.connection_pool,
-        # decode_responses viene heredado del cliente base.
-    )
+    def _nuevo_pubsub():
+        return aioredis.client.PubSub(
+            connection_pool=garnet.connection_pool,
+            # decode_responses viene heredado del cliente base.
+        )
+
+    pubsub = _nuevo_pubsub()
+    bombeo_task = receptor_task = None
     try:
         await pubsub.subscribe(*canales)
 
         async def bombeo() -> None:
-            async for msg in pubsub.listen():
-                if msg.get("type") != "message":
-                    continue
-                canal = msg.get("channel") or ""
-                resto = msg.get("data")
+            # Un microcorte de Garnet/Redis cerraba `listen()` y la excepcion
+            # tumbaba el WebSocket. Ahora se reconecta y vuelve a suscribir
+            # TODOS los canales (incluidos los viajes suscritos en caliente).
+            nonlocal pubsub
+            espera = 2.0
+            while True:
                 try:
-                    datos = json.loads(resto) if isinstance(resto, str) else None
-                except (TypeError, ValueError):
-                    datos = None
-                await ws.send_text(json.dumps({
-                    "canal": canal,
-                    "datos": datos or {"raw": resto},
-                }, ensure_ascii=False, default=str))
+                    async for msg in pubsub.listen():
+                        espera = 2.0
+                        if msg.get("type") != "message":
+                            continue
+                        canal = msg.get("channel") or ""
+                        resto = msg.get("data")
+                        try:
+                            datos = json.loads(resto) if isinstance(resto, str) else None
+                        except (TypeError, ValueError):
+                            datos = None
+                        await ws.send_text(json.dumps({
+                            "canal": canal,
+                            "datos": datos or {"raw": resto},
+                        }, ensure_ascii=False, default=str))
+                    # listen() termino sin excepcion: la conexion murio.
+                    raise RedisConnectionError("pubsub.listen() termino")
+                except asyncio.CancelledError:
+                    raise
+                except RuntimeError:
+                    logger.info("ws %s/%s socket cerrado; bombeo termina", rol, user_id)
+                    return
+                except (RedisConnectionError, RedisTimeoutError, OSError) as exc:
+                    logger.warning(
+                        "ws %s/%s Redis desconectado (%s); reconectando en %.1fs",
+                        rol, user_id, type(exc).__name__, espera)
+                    try:
+                        await asyncio.sleep(espera)
+                    except asyncio.CancelledError:
+                        raise
+                    try:
+                        await pubsub.close()
+                    except Exception:
+                        pass
+                    try:
+                        nuevo = _nuevo_pubsub()
+                        await nuevo.subscribe(*canales)
+                        pubsub = nuevo
+                        espera = 2.0
+                        logger.info("ws %s/%s Redis reconectado (%s canales)",
+                                    rol, user_id, len(canales))
+                    except Exception:
+                        espera = min(espera * 2, 30.0)
+                except Exception:
+                    # Un payload raro no debe tumbar el socket.
+                    logger.exception("ws %s/%s error en bombeo", rol, user_id)
+                    await asyncio.sleep(1.0)
 
         async def receptor() -> None:
             """Mensajes del cliente: suscripcion al viaje / posiciones."""
@@ -273,9 +327,16 @@ async def ws_tiempo_real(
                 if rol == "cliente":
                     viaje = datos.get("suscribir_viaje")
                     if viaje:
-                        await pubsub.subscribe(f"trip:{viaje}:events")
-                        await ws.send_text(json.dumps(
-                            {"suscripcion": viaje}))
+                        canales.add(f"trip:{viaje}:events")
+                        try:
+                            await pubsub.subscribe(f"trip:{viaje}:events")
+                            await ws.send_text(json.dumps(
+                                {"suscripcion": viaje}))
+                        except (RedisConnectionError, RedisTimeoutError, OSError):
+                            # El bombeo ya esta reconectando y re-suscribira
+                            # `canales`; aqui solo evitamos cerrar el socket.
+                            logger.warning(
+                                "ws %s/%s Redis caido al suscribir viaje", rol, user_id)
                 elif rol == "chofer" and isinstance(datos.get("posicion"), dict):
                     await _posicion_chofer(user_id, datos["posicion"])
                 elif rol == "chofer" and isinstance(datos.get("ruta_viaje"), dict):
@@ -296,7 +357,13 @@ async def ws_tiempo_real(
                               RuntimeError)):
             logger.exception("ws %s/%s fallo: %s", rol, user_id, e)
     finally:
-        await pubsub.close()
+        for tarea in (bombeo_task, receptor_task):
+            if tarea is not None and not tarea.done():
+                tarea.cancel()
+        try:
+            await pubsub.close()
+        except Exception:
+            pass
         try:
             await ws.close()
         except Exception:
