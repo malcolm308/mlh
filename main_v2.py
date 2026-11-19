@@ -45,6 +45,7 @@ from services.traccar_listener import listen_traccar
 
 from app import config as app_config
 from app.http_compat import compat_query_middleware
+from app.logging_setup import configurar_logging
 from app.outbox import worker as outbox_worker
 
 # Funciones que necesitamos del modulo de viajes
@@ -78,6 +79,10 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
+
+# Uvicorn no da handler a los loggers de la app: sin esto los INFO del
+# arranque y del heartbeat del outbox no aparecen en Render (si los WARNING).
+configurar_logging()
 
 logger = logging.getLogger(__name__)
 
