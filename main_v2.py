@@ -44,6 +44,7 @@ from services import indices
 from services.traccar_listener import listen_traccar
 
 from app import config as app_config
+from app.http_compat import compat_query_middleware
 from app.outbox import worker as outbox_worker
 
 # Funciones que necesitamos del modulo de viajes
@@ -183,6 +184,11 @@ app.add_middleware(
 # nada en las apps para beneficiarse. Brotli NO se anuncia: dart:io no
 # descomprime br de forma transparente y se romperia.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# ---- Compatibilidad con APK de chofer desactualizada (422 intermitente) ----
+# La query rota (`lat=...lng=...radius_km=5`) se repara aqui, antes de que
+# FastAPI intente convertir `lat` a float. No toca peticiones bien formadas.
+app.middleware("http")(compat_query_middleware)
 
 # ---- Rate limiting simple por IP (~100 req/min por defecto) ----
 _RATE_LIMIT_PER_MINUTE = max(0, int(os.getenv("RATE_LIMIT_PER_MINUTE", "100") or "100"))
