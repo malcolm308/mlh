@@ -667,6 +667,23 @@ async def startup_event():
             logger.warning("No se pudieron publicar los comandos del bot",
                            exc_info=True)
 
+    # Outbox loop in-process (requiere uvicorn --workers 1). Se encola ANTES
+    # del scheduler: un fallo de APScheduler no debe impedir que arranque.
+    global _outbox_stop_event, _outbox_task, _outbox_alert_since
+    _outbox_stop_event = None
+    _outbox_task = None
+    _outbox_alert_since = None
+    try:
+        if app_config.OUTBOX_WORKER_ENABLED:
+            _outbox_stop_event = asyncio.Event()
+            _outbox_task = asyncio.create_task(_outbox_loop(), name="outbox-loop")
+            logger.info("Outbox loop encolado (OUTBOX_WORKER_ENABLED=1)")
+        else:
+            # Log explicito para diagnosticar en Render si el flag no llego.
+            logger.info("Outbox loop desactivado (OUTBOX_WORKER_ENABLED=0)")
+    except Exception:
+        logger.exception("No se pudo encolar el outbox loop")
+
     # Scheduler: expiracion de viajes + autorreparacion de tablas + cuadre diario
     scheduler.add_job(sweep_expired_trips, "interval", seconds=15, id="sweep_expired_trips")
     try:
@@ -686,18 +703,11 @@ async def startup_event():
         )
     except Exception:
         logger.exception("No se pudo programar el cuadre diario")
-    scheduler.start()
-    logger.info("Scheduler de expiracion de viajes iniciado")
-
-    # Outbox loop in-process (requiere uvicorn --workers 1)
-    global _outbox_stop_event, _outbox_task, _outbox_alert_since
-    _outbox_stop_event = None
-    _outbox_task = None
-    _outbox_alert_since = None
-    if app_config.OUTBOX_WORKER_ENABLED:
-        _outbox_stop_event = asyncio.Event()
-        _outbox_task = asyncio.create_task(_outbox_loop(), name="outbox-loop")
-        logger.info("Outbox loop encolado (OUTBOX_WORKER_ENABLED=1)")
+    try:
+        scheduler.start()
+        logger.info("Scheduler de expiracion de viajes iniciado")
+    except Exception:
+        logger.exception("No se pudo iniciar el scheduler (el outbox sigue activo)")
 
 
 @app.on_event("shutdown")

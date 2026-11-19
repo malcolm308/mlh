@@ -398,21 +398,27 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
       final tipo = p.getString(OfertasBackgroundService._prefTipo) ?? '';
       if (lat == null || lng == null) return;
 
-      final query = StringBuffer()
-        ..write('lat=$lat')
-        ..write('lng=$lng')
-        ..write('radius_km=5&limit=20');
+      // Uri(queryParameters:) codifica los valores y pone los '&' por nosotros.
+      // Antes se concatenaba 'lat=$lat' + 'lng=$lng' + 'radius_km=5...' y
+      // FastAPI devolvia 422 porque recibia un unico parametro invalido.
+      final params = <String, String>{
+        'lat': '$lat',
+        'lng': '$lng',
+        'radius_km': '5',
+        'limit': '20',
+      };
       if (driverId.isNotEmpty) {
-        query.write('&driver_id=$driverId');
+        params['driver_id'] = driverId;
       }
       if (tipo.isNotEmpty) {
-        query.write('&vehicle_type=${Uri.encodeQueryComponent(tipo)}');
+        params['vehicle_type'] = tipo;
       }
+      final uri = Uri.parse('${ApiConfig.baseUrl}/trips/requested-nearby')
+          .replace(queryParameters: params);
 
       final resp = await http
           .get(
-            Uri.parse('${ApiConfig.baseUrl}/trips/requested-nearby'
-                '?$query'),
+            uri,
             headers: {'Authorization': 'Bearer $token'},
           )
           .timeout(const Duration(seconds: 20));

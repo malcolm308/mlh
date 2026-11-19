@@ -6,6 +6,7 @@ import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../api_config.dart';
+import 'token_store.dart';
 
 /// WebSocket del CHOFER contra `/ws/chofer/{id}`.
 ///
@@ -41,7 +42,7 @@ class WsChofer {
     _driverId = driverId;
     _token = token;
     _deseado = true;
-    _conectar();
+    unawaited(_conectar());
   }
 
   void detener() {
@@ -80,7 +81,7 @@ class WsChofer {
       // Canal caido: sin esto la recalculacion llega solo a los suscritos en
       // ese instante, y el pasajero puede quedarse con la ruta vieja horas.
       // Si ya hay una reconexion pendiente, no se duplica.
-      if (_reconexion == null) _conectar();
+      if (_reconexion == null) unawaited(_conectar());
     }
     _enviar({
       'ruta_viaje': {
@@ -95,7 +96,16 @@ class WsChofer {
     });
   }
 
-  void _conectar() {
+  Future<void> _conectar() async {
+    if (!_deseado || _driverId == null) return;
+    // El access caduca a las 2 h y ApiClient lo refresca en cada peticion.
+    // Si guardamos el token recibido en iniciar() para siempre, el socket se
+    // reconecta con un JWT muerto y el backend responde 403 (close 1008) en
+    // bucle. Releer el almacenamiento seguro en CADA conexion lo evita.
+    try {
+      final fresco = await TokenStore.instance.leerAccess();
+      if (fresco != null && fresco.isNotEmpty) _token = fresco;
+    } catch (_) {}
     if (!_deseado || _driverId == null) return;
     try {
       final canal = WebSocketChannel.connect(_uri());
@@ -115,8 +125,15 @@ class WsChofer {
             debugPrint('[WS chofer] payload ilegible: $e');
           }
         },
-        onDone: _reconectar,
-        onError: (Object _) => _reconectar(),
+        onDone: () {
+          debugPrint('[WS chofer] cerrado code=${canal.closeCode} '
+              'reason=${canal.closeReason}');
+          _reconectar();
+        },
+        onError: (Object e) {
+          debugPrint('[WS chofer] error: $e');
+          _reconectar();
+        },
       );
     } catch (e) {
       debugPrint('[WS chofer] no conectó: $e');
@@ -137,7 +154,7 @@ class WsChofer {
     if (!_deseado) return;
     _reconexion?.cancel();
     _reconexion = Timer(const Duration(seconds: 5), () {
-      if (_deseado) _conectar();
+      if (_deseado) unawaited(_conectar());
     });
   }
 }

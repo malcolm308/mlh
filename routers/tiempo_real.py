@@ -28,6 +28,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from bson import ObjectId
 import redis.asyncio as aioredis
 
 from db.Cliente.auth import verify_token as verify_token_cliente
@@ -167,23 +168,63 @@ async def ws_tiempo_real(
     user_id: str,
     token: str = Query(""),
 ):
+    def _rechazar(motivo: str) -> None:
+        """Cerrar antes de accept() = HTTP 403. Log sin el token (secreto)."""
+        logger.warning("WS rechazado rol=%s uid=%s motivo=%s", rol, user_id, motivo)
+
     if rol not in ("cliente", "chofer"):
+        _rechazar("rol_invalido")
         await ws.close(code=1008)
         return
 
-    payload = None
-    if rol == "cliente":
-        payload = verify_token_cliente(token)
-    else:
-        payload = verify_token_chofer(token)
+    # Contrato actual: ?token=JWT. Tambien se acepta Authorization: Bearer,
+    # por si un proxy o un cliente distinto no puede meter el JWT en la URL.
+    token = (token or "").strip()
+    if not token:
+        autorizacion = (ws.headers.get("authorization") or "").strip()
+        if autorizacion.lower().startswith("bearer "):
+            token = autorizacion.split(" ", 1)[1].strip()
+
+    payload = (verify_token_cliente(token) if rol == "cliente"
+               else verify_token_chofer(token))
     if not payload:
+        # Un access token caduca a las 2 h: el cliente debe renovarlo antes de
+        # reconectarse. Antes esto cerraba en silencio y parecia un fallo del WS.
+        _rechazar("token_invalido_o_expirado")
         await ws.close(code=1008)
         return
 
-    # El id conectado debe coincidir con el token (sub = email).
+    # Un JWT de la otra app no debe valer aqui (cliente y chofer pueden tener
+    # el mismo email). Los tokens antiguos sin claim `app` se siguen aceptando.
+    app_claim = str(payload.get("app") or "").strip().lower()
+    app_esperada = "client" if rol == "cliente" else "driver"
+    if app_claim and app_claim != app_esperada:
+        _rechazar("token_de_otra_app")
+        await ws.close(code=1008)
+        return
+
+    try:
+        oid = ObjectId(user_id)
+    except Exception:
+        _rechazar("id_invalido")
+        await ws.close(code=1008)
+        return
+
     coleccion = cliente_db["users"] if rol == "cliente" else chofer_db["users"]
-    user = coleccion.find_one({"_id": __import__("bson").ObjectId(user_id)})
-    if not user or (user.get("email") or "").lower() != (payload.get("sub") or "").lower():
+    user = coleccion.find_one({"_id": oid})
+    if not user:
+        _rechazar("usuario_no_encontrado")
+        await ws.close(code=1008)
+        return
+
+    # `sub` es el email al emitir, pero el refresh conserva `id` (ObjectId).
+    # Aceptar cualquiera de los dos evita rechazar al chofer si cambio el email
+    # o si el token viene de una emision anterior con otro formato de `sub`.
+    email_token = str(payload.get("sub") or "").strip().lower()
+    email_user = str(user.get("email") or "").strip().lower()
+    id_token = str(payload.get("id") or "")
+    if (not email_token or email_token != email_user) and id_token != str(user["_id"]):
+        _rechazar("token_no_corresponde_a_cuenta")
         await ws.close(code=1008)
         return
 
