@@ -212,12 +212,17 @@ def fila_para(doc: dict) -> tuple[str, str | None, str, int, str] | None:
     if not mongo_id:
         return None
     nombre = doc.get("nombre")
+    props: dict[str, Any] = {"origen": "Geo.calles"}
+    if doc.get("tipo") is not None:
+        props["tipo"] = doc.get("tipo")
+    if doc.get("osm_id") is not None:
+        props["osm_id"] = doc.get("osm_id")
     return (
         mongo_id,
         str(nombre) if nombre is not None else None,
         json.dumps({"type": "LineString", "coordinates": puntos}),
         len(puntos),
-        json.dumps({"origen": "Geo.calles"}, ensure_ascii=False),
+        json.dumps(props, ensure_ascii=False),
     )
 
 

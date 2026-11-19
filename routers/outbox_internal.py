@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 
 from fastapi import APIRouter, Header, HTTPException
 
@@ -19,7 +20,8 @@ async def run_outbox_once(
 ):
     esperado = (config.OUTBOX_CRON_SECRET or "").strip()
     recibido = (x_cron_secret or "").strip()
-    if not esperado or recibido != esperado:
+    # Comparación de tiempo constante, igual que /admin/init.
+    if not esperado or not secrets.compare_digest(recibido, esperado):
         raise HTTPException(status_code=403, detail="forbidden")
 
     mongo_uri = os.getenv("MONGODB_URI", "").strip()

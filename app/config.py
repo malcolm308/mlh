@@ -11,6 +11,7 @@ cambiar el comportamiento actual al desplegar.
 | `WALLET_LEGACY_MONGO_WRITES` | si es `0`, deja de escribir `Fondo` en Mongo |
 | `OUTBOX_WORKER_ENABLED` | arranca el loop in-process del outbox en la app |
 | `ZONAS_LEGACY_FALLBACK` | si es `0`, el pricing no vuelve al JSON de `promociones` cuando falla `zones` |
+| `GEO_READ_SOURCE` | `mongo` (actual) o `postgres` para leer la malla de calles desde `streets` |
 """
 from __future__ import annotations
 
@@ -48,6 +49,10 @@ OUTBOX_WORKER_ENABLED = _flag("OUTBOX_WORKER_ENABLED")
 #: vuelve al polígono JSON de `promociones`. Poner 0 tras validar la migración
 #: para que TODA decisión de zona venga de Postgres.
 ZONAS_LEGACY_FALLBACK = _flag("ZONAS_LEGACY_FALLBACK", "1")
+
+#: Transición T5 para el buscador "entre calles": `mongo` mantiene el
+#: comportamiento actual; `postgres` lee la tabla `streets` (read-model).
+GEO_READ_SOURCE = os.getenv("GEO_READ_SOURCE", "mongo").strip().lower()
 
 #: `mongo` mientras la migración no esté cerrada.
 WALLET_READ_SOURCE = os.getenv("WALLET_READ_SOURCE", "mongo").strip().lower()

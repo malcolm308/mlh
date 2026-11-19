@@ -53,13 +53,18 @@ Migrar la zona especial (p.ej. aeropuerto) desde el polígono JSON almacenado en
   - Opciones: `--dry-run`, `--limit N` (smoke test), `--batch-size N` (default 500), `--db`, `--collection`, `--uri`, `--verificar`.
   - No imprime la URI de Mongo (solo host:puerto).
 - Verificación: `python scripts/migrar_calles_postgis.py --verificar` devuelve filas, inválidas, bbox, índices y registro de migración.
-- `routers/geo.py` (buscador “entre calles”) **sigue leyendo Mongo** para no cambiar comportamiento; moverlo a `streets` es un paso posterior separado.
+- `routers/geo.py` (buscador “entre calles”) lee Mongo por defecto (`GEO_READ_SOURCE=mongo`). Con **`GEO_READ_SOURCE=postgres`** usa la tabla `streets` sin cambiar el formato de respuesta ni el scoring:
+  - `app/geo/streets_repo.py` (read-only) reproduce las 4 consultas del buscador: `hay_calles`, `buscar_por_nombre`, `calles_cerca` y `cruza_con`, devolviendo documentos con forma Mongo (`nombre`, `tipo`, `geom` [[lat,lon]], `punto` GeoJSON, `geom_geojson`).
+  - `asegurar_geometrias()` queda como **no-op** con el flag en `postgres` (deja de escribir en Mongo en el arranque).
+  - El import guarda `tipo`/`osm_id` en `streets.properties`; si ya corriste el import antes de este cambio, **vuelve a ejecutarlo** (upsert idempotente) para completar esos campos.
+  - Si Postgres falla con el flag activo, el buscador devuelve sin resultados (no hay fallback silencioso a Mongo); el default sigue siendo `mongo` hasta el cutover.
 
 ## Secuencia operativa (T5 completa)
 1. Aplicar `0002_zones_postgis.sql` → `python scripts/migrar_zonas_postgis.py` (zona `airport_special`).
 2. Aplicar `0005_streets_postgis.sql` → `python scripts/migrar_calles_postgis.py --dry-run --limit 100` y luego la migración completa.
 3. Verificar zonas con `ST_Contains` (dentro/fuera) y calles con `--verificar`.
-4. Solo tras validación en producción: retirar campos `zona_especial_*` de `promociones`, el fallback legacy y el lector de Mongo en `routers/geo.py`.
+4. Validar el buscador con `GEO_READ_SOURCE=mongo` y luego con `GEO_READ_SOURCE=postgres` (mismas direcciones “Calle X entre Y y Z”); el import debe haberse re-ejecutado para poblar `properties`.
+5. Solo tras validación en producción: retirar campos `zona_especial_*` de `promociones` y el fallback `ZONAS_LEGACY_FALLBACK`.
 
 ## Pruebas locales realizadas
 - Compilación Python de módulos tocados.

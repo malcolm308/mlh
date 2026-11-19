@@ -6,6 +6,10 @@ base `Geo`, las importa scripts/importar_calles.py). Asi el "entre que calles
 estoy" se responde en local, sin depender de Overpass, que desde aqui esta
 permanentemente lento o devuelve 504.
 
+Con `GEO_READ_SOURCE=postgres` la malla se lee de PostGIS (`streets`, Tarea 5).
+Mongo es el default durante la transicion; el cambio es solo de lectura y no
+altera el formato de respuesta ni el scoring del buscador.
+
 Nominatim se sigue usando, pero solo para lo que las calles no traen: el
 numero y el barrio. Si Nominatim tampoco responde, se devuelve la calle con
 sus cruces, que es lo importante para orientarse.
@@ -26,6 +30,9 @@ from pymongo import MongoClient
 
 sys.path.insert(0, "E:\\Taxi_Rapid")
 
+from app import config as app_config  # noqa: E402
+from app.geo import streets_repo  # noqa: E402
+
 try:
     from shapely.geometry import Point
 except Exception:  # la busqueda normal sigue funcionando sin shapely
@@ -40,6 +47,12 @@ MAP_WEST, MAP_EAST = -82.60071, -82.19971
 _geo = MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017"))["Geo"]
 _calles = _geo["calles"]
 _progreso = _geo["progreso_calles"]
+
+
+def _usar_streets_postgres() -> bool:
+    """True cuando el buscador debe leer la malla desde PostGIS."""
+    return app_config.GEO_READ_SOURCE == "postgres"
+
 
 NOMINATIM = "https://nominatim.openstreetmap.org/reverse"
 OVERPASS = [
@@ -210,6 +223,8 @@ def _orden_natural(nombre: str):
 #Mongo: calles cercanas
 # --------------------------------------------------------------------------
 def _hay_calles() -> bool:
+    if _usar_streets_postgres():
+        return streets_repo.hay_calles()
     return bool(_calles.estimated_document_count())
 
 
@@ -227,6 +242,12 @@ def _import_completo() -> bool:
     if ahora - _estado_import["ts"] < 30.0:
         return _estado_import["completo"]
     _estado_import["ts"] = ahora
+    if _usar_streets_postgres():
+        # El progreso del import existe solo en Mongo. Con Postgres como fuente,
+        # basta con que la tabla `streets` tenga filas para no ir a Overpass.
+        completo = _hay_calles()
+        _estado_import["completo"] = completo
+        return completo
     try:
         completos = _progreso.count_documents({"completa": True})
     except Exception:
@@ -247,11 +268,14 @@ def _calles_cerca(lat: float, lon: float) -> List[Dict]:
     el centro lejos y aun asi cruzar por aqui) y luego se descarta en Python
     lo que de verdad queda lejos del punto.
     """
-    docs = list(_calles.find(
-        {"punto": {"$geoWithin": {"$centerSphere": [
-            [lon, lat], _radianes(RADIO_CENTROIDO)]}}},
-        {"nombre": 1, "tipo": 1, "geom": 1, "_id": 0},
-    ))
+    if _usar_streets_postgres():
+        docs = streets_repo.calles_cerca(lat, lon, RADIO_CENTROIDO)
+    else:
+        docs = list(_calles.find(
+            {"punto": {"$geoWithin": {"$centerSphere": [
+                [lon, lat], _radianes(RADIO_CENTROIDO)]}}},
+            {"nombre": 1, "tipo": 1, "geom": 1, "_id": 0},
+        ))
     salida = []
     for d in docs:
         geom = d.get("geom") or []
@@ -1026,6 +1050,16 @@ def _patron_tokens(texto: str, alias: Optional[str] = None) -> str:
     return "|".join(_patron_token(t, alias) for t in tokens)
 
 
+def _find_calles_por_nombre(texto: str, alias: Optional[str],
+                            tope: int) -> List[Dict]:
+    """Precandidatas por nombre, en Mongo o en PostGIS según el flag."""
+    if _usar_streets_postgres():
+        return streets_repo.buscar_por_nombre(
+            _tokens_calle(texto), alias, tope)
+    filtro = _filtro_nombre(texto, alias)
+    return list(_calles.find(filtro).limit(tope)) if filtro else []
+
+
 def _buscar_calles_mongo(texto: str, limit: int,
                          centro_lat: float = None,
                          centro_lng: float = None) -> List[Dict]:
@@ -1034,10 +1068,7 @@ def _buscar_calles_mongo(texto: str, limit: int,
     if not tokens:
         return []
     alias = _alias_avenida(texto)
-    filtro = _filtro_nombre(texto, alias)
-    if filtro is None:
-        return []
-    docs = list(_calles.find(filtro).limit(400))
+    docs = _find_calles_por_nombre(texto, alias, 400)
     puntuados = _puntuar_docs(docs, tokens, centro_lat, centro_lng, alias)
     if not puntuados and len(tokens) > 1:
         # El usuario anadio el barrio al final ("calle 23 vedado"). Se reintenta
@@ -1046,10 +1077,7 @@ def _buscar_calles_mongo(texto: str, limit: int,
             sub = tokens[:k]
             if not sub:
                 continue
-            filtro2 = _filtro_nombre(" ".join(sub), alias)
-            if filtro2 is None:
-                continue
-            docs2 = list(_calles.find(filtro2).limit(400))
+            docs2 = _find_calles_por_nombre(" ".join(sub), alias, 400)
             puntuados = _puntuar_docs(docs2, sub, centro_lat, centro_lng, alias)
             if puntuados:
                 break
@@ -1076,10 +1104,7 @@ def _calles_coincidentes(texto: str, tope: int = 400,
         return []
     if alias is None:
         alias = _alias_avenida(texto)
-    filtro = _filtro_nombre(texto, alias)
-    if filtro is None:
-        return []
-    docs = list(_calles.find(filtro).limit(tope))
+    docs = _find_calles_por_nombre(texto, alias, tope)
     puntuados = _puntuar_docs(docs, tokens, centro_lat, centro_lng, alias)
     if not puntuados and len(tokens) > 1:
         # El usuario anadio el barrio al final ("calle 23 vedado"). Se reintenta
@@ -1088,10 +1113,7 @@ def _calles_coincidentes(texto: str, tope: int = 400,
             sub = tokens[:k]
             if not sub:
                 continue
-            filtro2 = _filtro_nombre(" ".join(sub), alias)
-            if filtro2 is None:
-                continue
-            docs2 = list(_calles.find(filtro2).limit(tope))
+            docs2 = _find_calles_por_nombre(" ".join(sub), alias, tope)
             sub_p = _puntuar_docs(docs2, sub, centro_lat, centro_lng, alias)
             if sub_p:
                 puntuados = sub_p
@@ -1279,6 +1301,8 @@ def _cruza_en_mongo(geom_principal: Dict, nombres: List[str]) -> List[Dict]:
     """
     if geom_principal is None or not nombres:
         return []
+    if _usar_streets_postgres():
+        return streets_repo.cruza_con(geom_principal, nombres, 600)
     try:
         docs = list(_calles.find({
             "geom_geojson": {"$geoIntersects": {"$geometry": geom_principal}},
@@ -1641,7 +1665,13 @@ def asegurar_geometrias(lote: int = 2000) -> Dict:
     produccion la base puede tener `geom` (lat, lon) pero no `geom_geojson`
     (lon, lat), y sin ese campo/indice `$geoIntersects` no devuelve nada y el
     buscador diria que no existe ninguna direccion.
+
+    Con `GEO_READ_SOURCE=postgres` no se escribe en Mongo: la malla ya esta en
+    PostGIS y este paso queda como no-op.
     """
+    if _usar_streets_postgres():
+        return {"omitido": True, "motivo": "GEO_READ_SOURCE=postgres",
+                "pendientes": 0, "migrados": 0, "indice": True}
     from pymongo import UpdateOne
     resumen = {"migrados": 0, "pendientes": 0, "indice": False}
     try:

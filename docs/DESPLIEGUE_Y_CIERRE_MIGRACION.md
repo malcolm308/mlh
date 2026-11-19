@@ -29,6 +29,7 @@ Rollbacks: `migrations/*_rollback.sql` (no revierten datos ya procesados/expirad
   - `WALLET_ENFORCE_HOLD=0`
   - `WALLET_LEGACY_MONGO_WRITES=1`
   - `WALLET_READ_SOURCE=mongo`
+  - `ZONAS_LEGACY_FALLBACK=1`, `GEO_READ_SOURCE=mongo` (T5: mover a `postgres` tras validar)
 - **Outbox:** `OUTBOX_WORKER_ENABLED=1`, `OUTBOX_LOOP_BATCH_SIZE=100`, `OUTBOX_LOOP_SLEEP_EMPTY_S=5`, `OUTBOX_LOOP_HEARTBEAT_S=60`, `OUTBOX_LOOP_ALERT_PENDING=500`, `OUTBOX_LOOP_ALERT_SUSTAINED_S=60`, `OUTBOX_CRON_SECRET=<secreto>`
 - **Hardening:** `CORS_ALLOWED_ORIGINS=<orígenes>`, `RATE_LIMIT_PER_MINUTE=100`, `EXPOSE_ERROR_DETAILS=0` (ajustar `CORS_ALLOW_*` si aplica)
 - **Alertas (opcional):** configuración Telegram existente para envío a admins.
