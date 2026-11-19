@@ -110,3 +110,6 @@ capturas/
 frontend/*/android/build/
 
 tok.txt
+
+# Checkpoint del backfill de saldos (estado local de una ejecucion).
+scripts/.backfill_saldo.json

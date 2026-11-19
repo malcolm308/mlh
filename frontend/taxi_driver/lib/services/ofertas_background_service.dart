@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../api_config.dart';
+import 'token_store.dart';
 
 /// Crea el canal del SERVICIO (no confundir con el de ofertas).
 ///
@@ -234,10 +235,9 @@ Future<void> onStartOfertas(ServiceInstance servicio) async {
     await crearCanalServicio();
   } catch (_) {}
 
-  // Contexto desde SharedPreferences: token, driver_id, tipo activo y la
-  // ultima posicion que la pantalla guardo con cada fix del GPS.
+  // Contexto: token desde almacenamiento seguro, resto desde preferencias.
   final prefs = await SharedPreferences.getInstance();
-  final token = prefs.getString('driver_token') ?? '';
+  final token = (await TokenStore.instance.leerAccess()) ?? '';
   final driverId = prefs.getString('driver_id') ?? '';
 
   // Viaje que la app ya tenia cuando arranco el servicio. Cualquier otro
@@ -500,8 +500,7 @@ class _WsAsignaciones {
     // renovado mientras esta conexion estaba caida.
     String token = tokenInicial;
     try {
-      final p = await SharedPreferences.getInstance();
-      token = p.getString('driver_token') ?? tokenInicial;
+      token = (await TokenStore.instance.leerAccess()) ?? tokenInicial;
     } catch (_) {}
     if (!_deseado) return;
 

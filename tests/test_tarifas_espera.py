@@ -457,6 +457,16 @@ class TestEndpointTarifasEspera(unittest.TestCase):
     coeficiente reenviaría también el resto del formulario y resucitaría una
     promoción caducada."""
 
+    @classmethod
+    def setUpClass(cls):
+        import asyncio
+        promo = __import__("routers.promociones", fromlist=["x"])
+        # El esquema de promociones evolucionó (comision_billetera, zona,
+        # etc.). La BD de pruebas puede estar desalineada: se asegura aquí
+        # para que los tests de endpoint no fallen por columnas faltantes.
+        if hasattr(promo, "asegurar_tabla_promociones"):
+            promo.asegurar_tabla_promociones()
+
     def setUp(self):
         import asyncio
         self.promo = __import__("routers.promociones", fromlist=["x"])

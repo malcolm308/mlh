@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 2,
+  "version": "1.0.40-p1",
+  "md5": "5e4dc18c6de76f1cbcc55b703c67bf66",
+  "targetVersionCode": 4040,
+  "abi": "arm64-v8a",
+  "payload": "patch.zip"
+}

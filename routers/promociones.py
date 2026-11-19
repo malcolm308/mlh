@@ -30,6 +30,7 @@ Todos los porcentajes se guardan como FRACCION (0.15, no 15), que es lo que ya
 usa `COMMISSION_RATE`. Guardarlos como 15 obligaria a convertir en cada punto y a
 cambiar lo que la app del chofer ya recibe en `commission_rate`.
 """
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -682,6 +683,92 @@ async def promocion_vigente():
     }
 
 
+def _coords_zona_a_multipolygon_geojson(coords: Any) -> Optional[dict]:
+    """Convierte [[lat,lng], ...] a GeoJSON MultiPolygon (lng,lat)."""
+    raw = coords
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return None
+    if not isinstance(raw, list):
+        return None
+    ring = []
+    for punto in raw:
+        if not isinstance(punto, (list, tuple)) or len(punto) < 2:
+            continue
+        try:
+            lat = float(punto[0])
+            lng = float(punto[1])
+        except Exception:
+            continue
+        ring.append([lng, lat])
+    if len(ring) < 3:
+        return None
+    if ring[0] != ring[-1]:
+        ring.append(list(ring[0]))
+    return {"type": "MultiPolygon", "coordinates": [[ring]]}
+
+
+def _sincronizar_zona_postgis(promo: Optional[Dict[str, Any]] = None) -> None:
+    """Best-effort: refleja la zona especial de promociones en `zones`.
+
+    Mantiene compatibilidad durante la transición (campos antiguos siguen en
+    `promociones`). Si la tabla `zones` no existe o falla, no interrumpe el flujo.
+    """
+    try:
+        promo = promo or leer_promocion()
+        geojson = _coords_zona_a_multipolygon_geojson(promo.get("zona_especial_coords"))
+        if not geojson:
+            return
+        activa = bool(promo.get("zona_especial_activa", True))
+        props = {"origen": "promociones_sync"}
+        with _conexion() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO zones (
+                    code, name, active, geom,
+                    precio_km_zona_basico, precio_km_zona_confort,
+                    precio_km_zona_triciclo, precio_km_zona_moto,
+                    properties, source, updated_at
+                ) VALUES (
+                    %s, %s, %s,
+                    ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))::geography,
+                    %s, %s, %s, %s,
+                    %s::jsonb, %s, NOW()
+                )
+                ON CONFLICT (code) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    active = EXCLUDED.active,
+                    geom = EXCLUDED.geom,
+                    precio_km_zona_basico = EXCLUDED.precio_km_zona_basico,
+                    precio_km_zona_confort = EXCLUDED.precio_km_zona_confort,
+                    precio_km_zona_triciclo = EXCLUDED.precio_km_zona_triciclo,
+                    precio_km_zona_moto = EXCLUDED.precio_km_zona_moto,
+                    properties = EXCLUDED.properties,
+                    source = EXCLUDED.source,
+                    updated_at = NOW()
+                """,
+                (
+                    "airport_special",
+                    "Zona especial aeropuerto",
+                    activa,
+                    json.dumps(geojson),
+                    promo.get("precio_km_zona_basico"),
+                    promo.get("precio_km_zona_confort"),
+                    promo.get("precio_km_zona_triciclo"),
+                    promo.get("precio_km_zona_moto"),
+                    json.dumps(props, ensure_ascii=False),
+                    "promociones",
+                ),
+            )
+            conn.commit()
+            cur.close()
+    except Exception:
+        logger.warning("promociones: no se pudo sincronizar zona en PostGIS", exc_info=True)
+
+
 @router.post("")
 async def guardar_promocion(datos: PromoIn, admin: dict = Depends(require_admin)):
     limpio = _validar(datos)
@@ -714,6 +801,7 @@ async def guardar_promocion(datos: PromoIn, admin: dict = Depends(require_admin)
                 limpio["coef_largo_valor"], limpio["tiempo_espera_cortesia_minutos"])
 
     promo = leer_promocion()
+    _sincronizar_zona_postgis(promo)
     respuesta = _a_json(promo)
     respuesta["message"] = "Configuración guardada"
     return respuesta
@@ -933,6 +1021,7 @@ async def guardar_tarifas_espera(datos: TarifasEsperaIn,
                 limpio["tiempo_espera_cortesia_minutos"])
 
     respuesta = await obtener_tarifas_espera()
+    _sincronizar_zona_postgis()
     respuesta["message"] = "Tarifas y espera guardadas"
     return respuesta
 

@@ -31,7 +31,7 @@ from typing import Optional
 import psycopg2
 import psycopg2.extras
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from tiempo_cuba import fecha_cuba, offset_cuba
 
@@ -45,6 +45,12 @@ from routers.Solicitud_de_viajes_v4 import (
     get_connection,
 )
 from routers.admin_roles import REQUIERE_OPERADOR_CARTERA
+
+# Dual-write hacia el libro Postgres (Tarea 3). Apagado por defecto: mientras
+# `WALLET_DUAL_WRITE` sea falso, todo sigue como antes (solo Mongo).
+from app import config as wallet_flags
+from app.money import a_cents
+from app.wallet import service as wallet_service
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +67,8 @@ METODOS_RECARGA = ("efectivo", "transferencia", "pasarela", "promocion", "ajuste
 # ===================== MODELOS =====================
 
 class RecargaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     driver_id: Optional[str] = None
     email: Optional[str] = None
     monto: float = Field(..., gt=0)
@@ -70,6 +78,8 @@ class RecargaIn(BaseModel):
 
 
 class DescargoIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     driver_id: str
     monto: float = Field(..., gt=0)
     metodo: str = "ajuste"
@@ -84,6 +94,8 @@ class RecargaClienteIn(BaseModel):
     permite usar la API a mano sin depender del ObjectId de Mongo.
     """
 
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     client_id: Optional[str] = None
     email: Optional[str] = None
     telefono: Optional[str] = None
@@ -94,6 +106,8 @@ class RecargaClienteIn(BaseModel):
 
 
 class DescargoClienteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     client_id: Optional[str] = None
     email: Optional[str] = None
     telefono: Optional[str] = None
@@ -251,6 +265,36 @@ def _registrar_movimiento(conn, driver_id, admin, tipo, monto, saldo_anterior,
     return movement_id
 
 
+def _espejo_wallet(conn, *, movement_id: int, user_id: str, user_type: str,
+                   tipo: str, monto: float, metodo: Optional[str],
+                   nota: Optional[str]) -> None:
+    """Copia el movimiento a `wallet_ledger` en la MISMA transacción.
+
+    Se apoya en `wallet_movements.movement_id` como clave de idempotencia: el
+    mismo movimiento no puede entrar dos veces al libro nuevo. Solo corre con
+    `WALLET_DUAL_WRITE` encendido.
+    """
+    if not wallet_flags.WALLET_DUAL_WRITE:
+        return
+    if user_type not in ("client", "driver"):
+        raise ValueError(f"user_type inválido: {user_type!r}")
+    signo = 1 if tipo == "recarga" else -1
+    wallet_service.ajustar_saldo(
+        conn,
+        user_id=user_id,
+        user_type=user_type,
+        monto_cents=signo * a_cents(abs(float(monto))),
+        tipo="recarga" if tipo == "recarga" else "ajuste",
+        idempotency_key=f"mov:{user_type}:{movement_id}",
+        descripcion=nota,
+        metadata={
+            "origen": "wallet_movements",
+            "movement_id": int(movement_id),
+            "metodo": metodo,
+        },
+    )
+
+
 def acreditar_bono_referido(driver_identifier: str, monto: float, nota: str) -> bool:
     """Acredita un bono al fondo de un chofer sin pasar por el panel de admin.
 
@@ -274,10 +318,14 @@ def acreditar_bono_referido(driver_identifier: str, monto: float, nota: str) -> 
     try:
         chofer_coleccion.update_one({"_id": doc["_id"]}, {"$inc": {"Fondo": monto}})
         with get_connection() as conn:
-            _registrar_movimiento(
+            movement_id = _registrar_movimiento(
                 conn, driver_id, sistema, "recarga", monto, anterior, nuevo,
                 "promocion", "BONO-REFERIDO", nota,
             )
+            _espejo_wallet(
+                conn, movement_id=movement_id, user_id=driver_id,
+                user_type="driver", tipo="recarga", monto=monto,
+                metodo="promocion", nota=nota)
             conn.commit()
         logger.info("Bono de referido de %.2f CUP acreditado a %s", monto, driver_id)
         return True
@@ -363,6 +411,10 @@ async def recargar(body: RecargaIn, admin: dict = Depends(REQUIERE_OPERADOR_CART
                 conn, driver_id, admin, "recarga", monto, anterior, nuevo,
                 metodo, body.referencia, body.nota,
             )
+            _espejo_wallet(
+                conn, movement_id=movement_id, user_id=driver_id,
+                user_type="driver", tipo="recarga", monto=monto,
+                metodo=metodo, nota=body.nota)
             conn.commit()
     except Exception as e:
         # Si fallo el registro del movimiento se revierte el saldo
@@ -407,6 +459,10 @@ async def descontar(body: DescargoIn, admin: dict = Depends(REQUIERE_OPERADOR_CA
                 conn, driver_id, admin, "debito", -monto, anterior, nuevo,
                 (body.metodo or "ajuste").lower(), None, body.nota,
             )
+            _espejo_wallet(
+                conn, movement_id=movement_id, user_id=driver_id,
+                user_type="driver", tipo="debito", monto=monto,
+                metodo=(body.metodo or "ajuste").lower(), nota=body.nota)
             conn.commit()
     except Exception as e:
         try:
@@ -577,6 +633,10 @@ async def recargar_cliente(body: RecargaClienteIn,
                 conn, client_id, admin, "recarga", monto, anterior, nuevo,
                 metodo, body.referencia, body.nota, user_type="client",
             )
+            _espejo_wallet(
+                conn, movement_id=movement_id, user_id=client_id,
+                user_type="client", tipo="recarga", monto=monto,
+                metodo=metodo, nota=body.nota)
             conn.commit()
     except HTTPException:
         raise
@@ -643,6 +703,10 @@ async def descontar_cliente(body: DescargoClienteIn,
                 (body.metodo or "ajuste").lower(), None, body.nota,
                 user_type="client",
             )
+            _espejo_wallet(
+                conn, movement_id=movement_id, user_id=client_id,
+                user_type="client", tipo="debito", monto=monto,
+                metodo=(body.metodo or "ajuste").lower(), nota=body.nota)
             conn.commit()
     except HTTPException:
         raise

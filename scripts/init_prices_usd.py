@@ -12,6 +12,7 @@ Variable de entorno requerida:
 Uso:
     python scripts/init_prices_usd.py
 """
+import json
 import os
 import sys
 import logging
@@ -120,6 +121,100 @@ ALTER_PROMOCIONES = """
 # ---------------------------------------------------------------------------
 
 
+_ZONA_ESPECIAL_POR_DEFECTO = [
+    [23.001228, -82.416735],
+    [23.007982, -82.394788],
+    [22.989298, -82.413242],
+    [23.001007, -82.389251],
+]
+
+
+def _coords_zona_a_multipolygon_geojson(coords):
+    raw = coords
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if not isinstance(raw, list) or len(raw) < 3:
+        raw = [list(p) for p in _ZONA_ESPECIAL_POR_DEFECTO]
+    ring = []
+    for punto in raw:
+        if not isinstance(punto, (list, tuple)) or len(punto) < 2:
+            continue
+        try:
+            lat = float(punto[0])
+            lng = float(punto[1])
+        except Exception:
+            continue
+        ring.append([lng, lat])
+    if len(ring) < 3:
+        ring = [[float(p[1]), float(p[0])] for p in _ZONA_ESPECIAL_POR_DEFECTO]
+    if ring[0] != ring[-1]:
+        ring.append(list(ring[0]))
+    return {"type": "MultiPolygon", "coordinates": [[ring]]}
+
+
+def sincronizar_zonas_desde_promociones(conn):
+    """Upsert de `zones.airport_special` desde `promociones` (T5, best-effort)."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT zona_especial_activa, zona_especial_coords,
+                   precio_km_zona_basico, precio_km_zona_confort,
+                   precio_km_zona_triciclo, precio_km_zona_moto
+              FROM promociones WHERE id = 1
+            """
+        )
+        promo = cur.fetchone()
+    if not promo:
+        return
+    geojson = _coords_zona_a_multipolygon_geojson(promo.get("zona_especial_coords"))
+    activa = bool(promo.get("zona_especial_activa", True))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO zones (
+                code, name, active, geom,
+                precio_km_zona_basico, precio_km_zona_confort,
+                precio_km_zona_triciclo, precio_km_zona_moto,
+                properties, source, updated_at
+            ) VALUES (
+                %s, %s, %s,
+                ST_Multi(
+                    ST_CollectionExtract(
+                        ST_MakeValid(ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))), 3
+                    )
+                )::geography,
+                %s, %s, %s, %s,
+                %s::jsonb, %s, NOW()
+            )
+            ON CONFLICT (code) DO UPDATE SET
+                active = EXCLUDED.active,
+                geom = EXCLUDED.geom,
+                precio_km_zona_basico = EXCLUDED.precio_km_zona_basico,
+                precio_km_zona_confort = EXCLUDED.precio_km_zona_confort,
+                precio_km_zona_triciclo = EXCLUDED.precio_km_zona_triciclo,
+                precio_km_zona_moto = EXCLUDED.precio_km_zona_moto,
+                properties = EXCLUDED.properties,
+                source = EXCLUDED.source,
+                updated_at = NOW()
+            """,
+            (
+                "airport_special",
+                "Zona especial aeropuerto",
+                activa,
+                json.dumps(geojson),
+                promo.get("precio_km_zona_basico"),
+                promo.get("precio_km_zona_confort"),
+                promo.get("precio_km_zona_triciclo"),
+                promo.get("precio_km_zona_moto"),
+                json.dumps({"origen": "init_prices_usd"}, ensure_ascii=False),
+                "promociones",
+            ),
+        )
+
+
 def main():
     tasa = obtener_tasa_usd_hoy()
     log.info("Tasa USD de hoy: %.4f CUP/USD", tasa)
@@ -201,6 +296,13 @@ def main():
                     f"UPDATE promociones SET {', '.join(sets)} WHERE id = %s",
                     tuple(params),
                 )
+
+        # Sincroniza zona a PostGIS (T5). Best-effort para no fallar si no existe.
+        try:
+            sincronizar_zonas_desde_promociones(conn)
+            log.info("Zona especial sincronizada en tabla zones")
+        except Exception as e:
+            log.warning("No se pudo sincronizar zones (tabla ausente o error): %s", e)
 
         # ---- verificacion ----
         log.info("--- verificacion final ---")

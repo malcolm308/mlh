@@ -36,6 +36,15 @@ from routers.garaje import tipo_vehiculo_activo_de, vehiculo_activo_de
 from decimal import Decimal, ROUND_HALF_UP
 from bson import ObjectId
 from pymongo import MongoClient
+
+# Billetera Postgres (Tarea 3). Los flags se leen del modulo, no de una copia,
+# para poder encenderlos por entorno sin reimportar el router.
+from app import config as wallet_flags
+from app.money import a_cents
+from app.outbox.events import TripCompletedV2, encolar, evento_trip
+from app.wallet import service as wallet_service
+from app.wallet.errors import (EstadoViajeInvalido, MontoInvalido,
+                               SaldoInsuficiente, ViajeNoEncontrado)
 import redis.asyncio as redis
 import json
 import asyncio
@@ -65,17 +74,35 @@ _ZONA_ESPECIAL_POR_DEFECTO = [
 ]
 
 
-def _punto_en_zona_especial(lat: float, lng: float, promo: dict) -> bool:
+def _precio_km_zona_desde_fila(zona: dict, vehicle_type: str) -> Optional[float]:
+    tipo = str(vehicle_type or "").lower()
+    campo = "precio_km_zona_basico"
+    defecto = 1000.0
+    if tipo == "confort":
+        campo, defecto = "precio_km_zona_confort", 1200.0
+    elif tipo == "triciclo":
+        campo, defecto = "precio_km_zona_triciclo", 700.0
+    elif tipo == "moto":
+        campo, defecto = "precio_km_zona_moto", 600.0
+    try:
+        valor = zona.get(campo)
+        if valor is None:
+            return float(defecto)
+        return float(valor)
+    except Exception:
+        return float(defecto)
+
+
+def _punto_en_zona_especial_legacy(lat: float, lng: float, promo: dict) -> bool:
+    """Fallback de transición: polígono JSON en `promociones` (sin ST_Contains)."""
     if Point is None or Polygon is None:
         return False
-    coords = promo.get("zona_especial_coords") or _ZONA_ESPECIAL_POR_DEFECTO
+    coords = (promo or {}).get("zona_especial_coords") or _ZONA_ESPECIAL_POR_DEFECTO
     try:
         if isinstance(coords, str):
-            import json
             coords = json.loads(coords)
         if not coords or len(coords) < 3:
             return False
-        # coords vienen como [[lat,lng], ...] desde JSON
         pts = []
         for c in coords:
             if not c or len(c) < 2:
@@ -85,16 +112,13 @@ def _punto_en_zona_especial(lat: float, lng: float, promo: dict) -> bool:
             return False
         try:
             from shapely.geometry import Polygon as ShapelyPolygon, MultiPoint
-            # Intentar con orden original
             poly = ShapelyPolygon(pts)
             if not poly.is_valid:
-                # Reordenar por convex hull para evitar auto-intersección
                 poly = MultiPoint(pts).convex_hull
         except Exception:
             poly = Polygon(pts)
         if not poly.is_valid:
             poly = poly.buffer(0)
-        # Si quedó como LineString o Point, intentar con polígono original corregido
         try:
             from shapely.geometry import Polygon as ShapelyPolygon
             if poly.geom_type in ('LineString', 'Point', 'MultiPoint'):
@@ -108,32 +132,91 @@ def _punto_en_zona_especial(lat: float, lng: float, promo: dict) -> bool:
         return False
 
 
-def _zona_especial_precio(promo: dict, vehicle_type: str,
+def _buscar_zona_postgis(lat: float, lng: float) -> Optional[dict]:
+    """Resuelve la zona activa que contiene el punto usando ST_Contains (PostGIS).
+
+    Si la tabla `zones` no existe o falla la consulta, devuelve None para
+    permitir fallback de transición. Si la tabla existe pero no hay coincidencia,
+    devuelve {"_miss": True} para no recalcular con la lógica legacy.
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            try:
+                cur.execute(
+                    """
+                    SELECT code,
+                           precio_km_zona_basico,
+                           precio_km_zona_confort,
+                           precio_km_zona_triciclo,
+                           precio_km_zona_moto
+                      FROM zones
+                     WHERE active = TRUE
+                       AND ST_Contains(geom::geometry,
+                                       ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+                     ORDER BY id
+                     LIMIT 1
+                    """,
+                    (float(lng), float(lat)),
+                )
+                fila = cur.fetchone()
+            finally:
+                cur.close()
+        if fila:
+            return dict(fila)
+        return {"_miss": True}
+    except Exception:
+        # Tabla ausente/no migrada u otro fallo transitorio: fallback legacy.
+        return None
+
+
+def _punto_en_zona_especial(lat: float, lng: float, promo: Optional[dict] = None) -> bool:
+    zona = _buscar_zona_postgis(lat, lng)
+    if zona is not None:
+        return not zona.get("_miss")
+    if not wallet_flags.ZONAS_LEGACY_FALLBACK:
+        return False
+    promo = promo or {}
+    if promo.get("zona_especial_activa") is False:
+        return False
+    return _punto_en_zona_especial_legacy(lat, lng, promo)
+
+
+def _zona_especial_precio(promo: Optional[dict], vehicle_type: str,
                           dropoff_lat=None, dropoff_lng=None,
                           pickup_lat=None, pickup_lng=None):
     """Precio por km de la zona especial si el DESTINO o la RECOGIDA caen
     dentro del polígono.
 
-    Los viajes al aeropuerto Y desde el aeropuerto se cobran con la tarifa de
-    zona. El destino manda si los dos extremos caen dentro (es el mismo precio
-    de todas formas; solo cambia la etiqueta del lado). Devuelve
-    (precio_km, lado) con lado en None si no toca.
+    Cálculo vía PostGIS (ST_Contains sobre `zones`). Durante la transición,
+    si `zones` no está disponible se usa el polígono JSON de `promociones`.
+    El destino manda si ambos extremos caen dentro. Devuelve (precio_km, lado).
     """
+    promo = promo or {}
+    legacy_activa = promo.get("zona_especial_activa") is not False
     for lado, lat, lng in (("destino", dropoff_lat, dropoff_lng),
                            ("recogida", pickup_lat, pickup_lng)):
         if lat is None or lng is None:
             continue
-        precio = _precio_km_por_zona(promo, vehicle_type, lat, lng)
+        zona = _buscar_zona_postgis(lat, lng)
+        if zona is not None:
+            if zona.get("_miss"):
+                continue
+            return _precio_km_zona_desde_fila(zona, vehicle_type), lado
+        # Fallback legacy (tabla zones no disponible/migración pendiente).
+        # Se puede apagar con ZONAS_LEGACY_FALLBACK=0 para que solo Postgres
+        # decida la zona tras validar la migración en producción.
+        if not wallet_flags.ZONAS_LEGACY_FALLBACK or not legacy_activa:
+            continue
+        if not _punto_en_zona_especial_legacy(lat, lng, promo):
+            continue
+        precio = _precio_km_por_zona_legacy(promo, vehicle_type)
         if precio is not None:
             return precio, lado
     return None, None
 
 
-def _precio_km_por_zona(promo: dict, vehicle_type: str, lat: float, lng: float):
-    if promo.get("zona_especial_activa") is False:
-        return None
-    if not _punto_en_zona_especial(lat, lng, promo):
-        return None
+def _precio_km_por_zona_legacy(promo: dict, vehicle_type: str) -> Optional[float]:
     tipo = str(vehicle_type).lower()
     if tipo == "confort":
         try:
@@ -154,7 +237,13 @@ def _precio_km_por_zona(promo: dict, vehicle_type: str, lat: float, lng: float):
         return float(promo.get("precio_km_zona_basico") or 1000.0)
     except Exception:
         return 1000.0
-    return None
+
+
+def _precio_km_por_zona(promo: dict, vehicle_type: str, lat: float, lng: float):
+    """Compatibilidad: precio por km de zona para un punto, o None."""
+    precio, _lado = _zona_especial_precio(promo, vehicle_type,
+                                          dropoff_lat=lat, dropoff_lng=lng)
+    return precio
 
 
 # Distancia real POR CALLE entre dos puntos, para cobrar lo mismo que ve el
@@ -468,12 +557,23 @@ def init_pool():
 
 @contextmanager
 def get_connection():
-    """Context manager que obtiene y devuelve conexiones al pool."""
+    """Context manager que obtiene y devuelve conexiones al pool.
+
+    Si el bloque falla, revierte antes de devolver la conexión: una conexión
+    con una transacción abortada volvería al pool y rompería la siguiente
+    petición que la reutilice.
+    """
     if pool is None:
         init_pool()
     conn = pool.getconn()
     try:
         yield conn
+    except BaseException:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception("No se pudo revertir la conexión del pool")
+        raise
     finally:
         pool.putconn(conn)
 
@@ -1093,6 +1193,117 @@ def calcular_pago_mixto(precio_final: float, cliente_doc: Optional[dict],
     }
 
 
+def _calcular_reparto_viaje(*, trip: dict, total_fare: float,
+                            precio_bruto, descuento_total,
+                            payment_method: str, promo: dict,
+                            capturado_cents: int = 0) -> dict:
+    """Reparto exacto del viaje, en `Decimal` y sin mover dinero.
+
+    Se ejecuta **antes del COMMIT** para congelar los importes en el evento
+    `trip.completed`. El worker no vuelve a calcular nada.
+
+    Si Mongo no responde, no se aborta el cierre: se usa lo que PostgreSQL ya
+    capturó y se deja la parte de Mongo para el reintento del worker. La
+    diferencia queda visible en el cuadre.
+    """
+    total = Decimal(str(total_fare)).quantize(CENT, rounding=ROUND_HALF_UP)
+    capturado = (Decimal(int(capturado_cents)) / 100).quantize(
+        CENT, rounding=ROUND_HALF_UP)
+
+    try:
+        client_oid = to_mongo_id(trip.get("client_id") or "")
+        cliente = (cliente_coleccion.find_one({"_id": client_oid})
+                   if client_oid else None)
+        mixto = calcular_pago_mixto(total_fare, cliente, payment_method)
+        promo_usado = Decimal(str(mixto["saldo_promocional_usado"])).quantize(
+            CENT, rounding=ROUND_HALF_UP)
+        saldo_real_usado = Decimal(str(mixto["saldo_real_usado"])).quantize(
+            CENT, rounding=ROUND_HALF_UP)
+        billetera_total = Decimal(str(mixto["pago_billetera_total"])).quantize(
+            CENT, rounding=ROUND_HALF_UP)
+        excedente = Decimal(str(mixto["monto_excedente"])).quantize(
+            CENT, rounding=ROUND_HALF_UP)
+        metodo_excedente = mixto.get("metodo_pago_excedente")
+        bono = Decimal(str(mixto["bono_chofer_campana"])).quantize(
+            CENT, rounding=ROUND_HALF_UP)
+        chofer_credito = Decimal(
+            str(mixto["monto_billetera_chofer"])).quantize(
+                CENT, rounding=ROUND_HALF_UP)
+    except Exception:
+        logger.exception(
+            "reparto: no se pudo leer el cliente %s en Mongo; se usa el "
+            "importe capturado en PostgreSQL", trip.get("client_id"))
+        # Sin Mongo no se puede separar promo de saldo real. Se asume que todo
+        # lo capturado es saldo (nunca se regala promo) y el resto es
+        # excedente que se cobra por fuera.
+        billetera_total = min(total, capturado)
+        promo_usado = Decimal("0.00")
+        saldo_real_usado = billetera_total
+        excedente = (total - billetera_total).quantize(
+            CENT, rounding=ROUND_HALF_UP)
+        metodo_excedente = (payment_method
+                            if payment_method in ("Efectivo", "Transferencia")
+                            else None)
+        bono = Decimal("0.00")
+        chofer_credito = billetera_total
+
+    # Comisión: misma regla que el camino histórico, pero calculada antes del
+    # COMMIT. `incluir_actual=True` porque el viaje aún no está contado como
+    # completado en PostgreSQL.
+    driver_id = str(trip.get("driver_id") or "")
+    if payment_method == "Billetera":
+        tasa = Decimal(str(promo["comision_billetera"]))
+        comision_info = {
+            "rate": float(tasa),
+            "label": _etiqueta_tasa(tasa),
+            "discount_applied": False,
+            "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d"),
+        }
+    else:
+        try:
+            comision_info = resolve_commission(
+                driver_id, promo["comision_porcentaje"], incluir_actual=True)
+            tasa = Decimal(str(comision_info["rate"]))
+        except Exception:
+            logger.exception(
+                "reparto: no se pudo resolver la comision del chofer %s; "
+                "se usa la tasa base", driver_id)
+            tasa = Decimal(str(promo["comision_porcentaje"]))
+            comision_info = {
+                "rate": float(tasa),
+                "label": _etiqueta_tasa(tasa),
+                "discount_applied": False,
+                "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d"),
+            }
+
+    comision_nominal, comision_cobrada = liquidar_comision(
+        precio_bruto, total_fare, descuento_total, tasa)
+    comision_valor = Decimal(str(comision_cobrada or 0)).quantize(
+        CENT, rounding=ROUND_HALF_UP)
+    chofer_neto = (chofer_credito - comision_valor).quantize(
+        CENT, rounding=ROUND_HALF_UP)
+
+    return {
+        "total": total,
+        "promo": promo_usado,
+        "saldo": saldo_real_usado,
+        "billetera": billetera_total,
+        "excedente": excedente,
+        "efectivo": (excedente if payment_method == "Efectivo"
+                     else Decimal("0.00")),
+        "metodo_excedente": metodo_excedente,
+        "bono": bono,
+        "chofer_credito": chofer_credito,
+        "comision": comision_valor,
+        "comision_nominal": comision_nominal,
+        "comision_info": comision_info,
+        "comision_billetera": (comision_valor
+                               if payment_method == "Billetera"
+                               else Decimal("0.00")),
+        "chofer_neto": chofer_neto,
+    }
+
+
 def desglose_campana_cotizacion(
     precio_final: float,
     precio_transferencia: float,
@@ -1375,7 +1586,11 @@ def create_trip(
             # primero la promo y, si no alcanza, el saldo real; si el metodo es
             # Billetera no hay excedente externo, asi que el virtual debe cubrir
             # el precio completo.
-            if payment_method == "Billetera":
+            #
+            # Con WALLET_ENFORCE_HOLD la decision de cobro la toma PostgreSQL
+            # (reservar_hold, mas abajo) y NO se lee Mongo para decidir saldo.
+            # Mientras el flag este apagado se mantiene la validacion legacy.
+            if payment_method == "Billetera" and not wallet_flags.WALLET_ENFORCE_HOLD:
                 cliente_oid = to_mongo_id(client_id)
                 cliente_doc = (cliente_coleccion.find_one({"_id": cliente_oid})
                                if cliente_oid else None)
@@ -1420,6 +1635,46 @@ def create_trip(
                 ),
             )
             trip_id = cur.fetchone()["trip_id"]
+
+            # --- Billetera: reserva de saldo en la MISMA transaccion ---
+            # Si no hay saldo, SaldoInsuficiente revierte tambien el INSERT del
+            # viaje: el cliente recibe 402 y no queda un viaje huerfano.
+            if payment_method == "Billetera" and (
+                    wallet_flags.WALLET_ENFORCE_HOLD
+                    or wallet_flags.WALLET_DUAL_WRITE):
+                try:
+                    wallet_service.reservar_hold(
+                        conn,
+                        user_id=client_id,
+                        trip_id=trip_id,
+                        monto_cents=a_cents(precio_estimado),
+                    )
+                except SaldoInsuficiente:
+                    if wallet_flags.WALLET_ENFORCE_HOLD:
+                        raise
+                    # Dual-write sin enforcement: la app sigue leyendo Mongo,
+                    # asi que un fallo aqui no debe tumbar el viaje.
+                    logger.warning(
+                        "Billetera: sin saldo Postgres para reservar el "
+                        "viaje %s; se continua en modo legacy", trip_id)
+
+            if wallet_flags.WALLET_DUAL_WRITE:
+                encolar(
+                    conn,
+                    event_type="trip.created",
+                    aggregate_type="trip",
+                    aggregate_id=trip_id,
+                    payload=evento_trip(
+                        "trip.created",
+                        trip_id=trip_id,
+                        client_id=client_id,
+                        driver_id=driver_id,
+                        status=initial_status,
+                        monto_cents=a_cents(precio_estimado),
+                        payment_method=payment_method,
+                    ),
+                )
+
             conn.commit()
 
             return {
@@ -1903,6 +2158,24 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                  + Decimal(str(recargo_transferencia))).quantize(
                     CENT, rounding=ROUND_HALF_UP))
 
+            # Snapshot inmutable de la tarifa: sin esto, un cambio de precios
+            # posterior hace imposible explicar por que este viaje costo esto.
+            fare_snapshot = {
+                "precio_base": str(base_fare),
+                "distance_fare": str(distance_fare),
+                "tip": str(tip),
+                "total_fare": str(total_fare),
+                "descuento_cliente": str(descuento_cliente),
+                "descuento_referido": str(descuento_referido),
+                "descuento_primer_viaje": str(descuento_primer_viaje),
+                "recargo_transferencia": str(recargo_transferencia),
+                "recargo_reintento": str(recargo_reintento),
+                "coeficiente": str(coeficiente),
+                "espera_secs": espera_secs,
+                "excedente_espera_secs": excedente_secs,
+                "currency": "CUP",
+            }
+
             # 9. Actualizar el viaje en PostgreSQL
             cur.execute("""
                 UPDATE trips SET
@@ -1926,6 +2199,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                     recargo_transferencia = %s,
                     recargo_reintento = %s,
                     monto_cobrado = %s,
+                    monto_cents = %s,
+                    fare_snapshot = %s::jsonb,
                     currency = 'CUP'
                 WHERE trip_id = %s
                 RETURNING *;
@@ -1939,6 +2214,8 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 payment_method, recargo_transferencia,
                 float(recargo_reintento),
                 float(total_fare),
+                a_cents(total_fare),
+                json.dumps(fare_snapshot, ensure_ascii=False),
                 trip_id
             ))
             updated_trip = cur.fetchone()
@@ -1948,6 +2225,87 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 # TypeError y el chofer se comia un 500 sin motivo claro.
                 raise ValueError("El viaje ya no existe o cambio de estado")
             updated_trip = dict(updated_trip)
+
+            # 9-b. Billetera: convertir la reserva en cobro real, en la MISMA
+            # transaccion del cierre. Se cobra el total del viaje pero nunca
+            # mas de lo que el cliente tiene libre (el resto es excedente, que
+            # la app liquida por fuera). Si ya se capturo, es un no-op.
+            resultado_captura = None
+            if payment_method == "Billetera" and (
+                    wallet_flags.WALLET_ENFORCE_HOLD
+                    or wallet_flags.WALLET_DUAL_WRITE):
+                resultado_captura = wallet_service.capturar_hold(
+                    conn,
+                    trip_id=trip_id,
+                    monto_cents=a_cents(total_fare),
+                    permitir_parcial=True,
+                    descripcion=f"Cobro del viaje {trip_id}",
+                    metadata=fare_snapshot,
+                )
+                logger.info(
+                    "Billetera: captura del viaje %s = %s cents (%s)",
+                    trip_id, resultado_captura.get("monto_cents"),
+                    resultado_captura.get("motivo", "ok"))
+
+            # 9-c. Reparto congelado ANTES del COMMIT (Tarea 4).
+            #
+            # El evento `trip.completed` lleva los importes ya calculados: el
+            # worker solo lee el JSON y hace un `$inc`. Aquí se decide cuánto va
+            # al chofer, cuánto se queda la plataforma y cuánto fue en efectivo
+            # frente a billetera. Si el reparto falla (por ejemplo, Mongo no
+            # responde), el cierre no se aborta: se degrada al camino legacy y
+            # el desfase queda visible en `verificar_cuadre.py`.
+            reparto = None
+            if wallet_flags.WALLET_DUAL_WRITE:
+                capturado_cents = 0
+                if payment_method == "Billetera" and resultado_captura:
+                    capturado_cents = int(
+                        resultado_captura.get("monto_cents") or 0)
+                reparto = _calcular_reparto_viaje(
+                    trip=trip,
+                    total_fare=total_fare,
+                    precio_bruto=precio_bruto,
+                    descuento_total=descuento_total,
+                    payment_method=payment_method,
+                    promo=promo,
+                    capturado_cents=capturado_cents,
+                )
+                wallet_service.acreditar_chofer_viaje(
+                    conn,
+                    trip_id=trip_id,
+                    driver_id=str(trip.get("driver_id") or ""),
+                    chofer_credito_cents=a_cents(reparto["chofer_credito"]),
+                    comision_cents=a_cents(reparto["comision"]),
+                )
+                encolar(
+                    conn,
+                    event_type="trip.completed",
+                    aggregate_type="trip",
+                    aggregate_id=trip_id,
+                    payload=TripCompletedV2(
+                        trip_id=trip_id,
+                        client_id=trip.get("client_id") or "",
+                        driver_id=trip.get("driver_id"),
+                        status="completed",
+                        payment_method=payment_method,
+                        total_cents=a_cents(reparto["total"]),
+                        cliente_promo_cents=a_cents(reparto["promo"]),
+                        cliente_saldo_cents=a_cents(reparto["saldo"]),
+                        cliente_billetera_cents=a_cents(reparto["billetera"]),
+                        excedente_cents=a_cents(reparto["excedente"]),
+                        efectivo_cents=a_cents(reparto["efectivo"]),
+                        metodo_excedente=reparto["metodo_excedente"],
+                        chofer_credito_cents=a_cents(reparto["chofer_credito"]),
+                        chofer_bono_cents=a_cents(reparto["bono"]),
+                        comision_cents=a_cents(reparto["comision"]),
+                        chofer_neto_cents=a_cents(reparto["chofer_neto"]),
+                        # Si el bloque legacy ya movió el Fondo en Mongo, el
+                        # worker no debe acreditarlo dos veces.
+                        mongo_aplicado=bool(
+                            wallet_flags.WALLET_LEGACY_MONGO_WRITES),
+                    ),
+                )
+
             conn.commit()
 
             # 10. Descontar la comision del FONDO del conductor.
@@ -2000,29 +2358,70 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             monto_billetera_chofer = Decimal("0.00")
             try:
                 client_oid = to_mongo_id(updated_trip.get("client_id") or "")
-                cliente_pago = (cliente_coleccion.find_one({"_id": client_oid})
-                               if client_oid else None)
-                mixto = calcular_pago_mixto(total_fare, cliente_pago, payment_method)
 
-                promo_usado = Decimal(str(mixto["saldo_promocional_usado"])).quantize(
-                    CENT, rounding=ROUND_HALF_UP)
-                saldo_real_usado = Decimal(str(mixto["saldo_real_usado"])).quantize(
-                    CENT, rounding=ROUND_HALF_UP)
-                pago_billetera_total = Decimal(str(mixto["pago_billetera_total"])).quantize(
-                    CENT, rounding=ROUND_HALF_UP)
-                monto_excedente = Decimal(str(mixto["monto_excedente"])).quantize(
-                    CENT, rounding=ROUND_HALF_UP)
-                metodo_pago_excedente_res = mixto.get("metodo_pago_excedente")
-                bono_campana = Decimal(str(mixto["bono_chofer_campana"])).quantize(
-                    CENT, rounding=ROUND_HALF_UP)
-                monto_billetera_chofer = Decimal(
-                    str(mixto["monto_billetera_chofer"])).quantize(
+                if reparto is not None:
+                    # Reparto congelado antes del COMMIT: son los mismos
+                    # importes que llevan el evento `trip.completed` y el
+                    # ledger del chofer. No se vuelve a calcular nada.
+                    promo_usado = reparto["promo"]
+                    saldo_real_usado = reparto["saldo"]
+                    pago_billetera_total = reparto["billetera"]
+                    monto_excedente = reparto["excedente"]
+                    metodo_pago_excedente_res = reparto["metodo_excedente"]
+                    bono_campana = reparto["bono"]
+                    monto_billetera_chofer = reparto["chofer_credito"]
+                    comision = reparto["comision_info"]
+                    comision_nominal = reparto["comision_nominal"]
+                    commission = float(reparto["comision"])
+                    comision_billetera = float(reparto["comision_billetera"])
+                else:
+                    cliente_pago = (cliente_coleccion.find_one({"_id": client_oid})
+                                   if client_oid else None)
+                    mixto = calcular_pago_mixto(total_fare, cliente_pago, payment_method)
+
+                    promo_usado = Decimal(str(mixto["saldo_promocional_usado"])).quantize(
                         CENT, rounding=ROUND_HALF_UP)
+                    saldo_real_usado = Decimal(str(mixto["saldo_real_usado"])).quantize(
+                        CENT, rounding=ROUND_HALF_UP)
+                    pago_billetera_total = Decimal(str(mixto["pago_billetera_total"])).quantize(
+                        CENT, rounding=ROUND_HALF_UP)
+                    monto_excedente = Decimal(str(mixto["monto_excedente"])).quantize(
+                        CENT, rounding=ROUND_HALF_UP)
+                    metodo_pago_excedente_res = mixto.get("metodo_pago_excedente")
+                    bono_campana = Decimal(str(mixto["bono_chofer_campana"])).quantize(
+                        CENT, rounding=ROUND_HALF_UP)
+                    monto_billetera_chofer = Decimal(
+                        str(mixto["monto_billetera_chofer"])).quantize(
+                            CENT, rounding=ROUND_HALF_UP)
+
+                    # Comision segun metodo de pago del viaje.
+                    if payment_method == "Billetera":
+                        tasa_comision = Decimal(str(promo["comision_billetera"]))
+                        comision_nominal, comision_cobrada = liquidar_comision(
+                            precio_bruto, total_fare, descuento_total, tasa_comision)
+                        comision_billetera = float(comision_cobrada or 0)
+                        commission = comision_billetera
+                        comision = {
+                            "rate": float(tasa_comision),
+                            "label": _etiqueta_tasa(tasa_comision),
+                            "discount_applied": False,
+                            "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d"),
+                        }
+                    else:
+                        comision = resolve_commission(
+                            driver_id_str, promo["comision_porcentaje"])
+                        tasa_comision = Decimal(str(comision["rate"]))
+                        comision_nominal, comision_cobrada = liquidar_comision(
+                            precio_bruto, total_fare, descuento_total, tasa_comision)
+                        commission = comision_cobrada
+                        comision_billetera = 0.0
 
                 # Compatibilidad: "monto_restante" pasa a ser el excedente externo.
                 monto_restante = monto_excedente
                 abono_chofer = monto_billetera_chofer
 
+                # El cliente sigue siendo síncrono en Mongo: su cuadre es
+                # estricto (Tarea 4).
                 if client_oid:
                     if promo_usado > 0:
                         cliente_coleccion.update_one(
@@ -2033,44 +2432,26 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                             {"_id": client_oid},
                             {"$inc": {"Fondo": -float(saldo_real_usado)}})
 
-                # Abono virtual al chofer (promo + real usados + bono).
-                if monto_billetera_chofer > 0:
-                    chofer_coleccion.update_one(
-                        {"_id": to_mongo_id(driver_id_str)},
-                        {"$inc": {"Fondo": float(monto_billetera_chofer)}})
+                # El Fondo del chofer en Mongo: con WALLET_LEGACY_MONGO_WRITES=0
+                # lo aplica el worker del outbox; con el flag activo se mantiene
+                # la escritura síncrona de siempre.
+                if wallet_flags.WALLET_LEGACY_MONGO_WRITES:
+                    # Abono virtual al chofer (promo + real usados + bono).
+                    if monto_billetera_chofer > 0:
+                        chofer_coleccion.update_one(
+                            {"_id": to_mongo_id(driver_id_str)},
+                            {"$inc": {"Fondo": float(monto_billetera_chofer)}})
+                    if commission:
+                        commit_commission(
+                            driver_id_str,
+                            commission,
+                            comision.get("discount_applied", False),
+                            comision.get("discount_date"),
+                        )
 
                 # Excedente cobrado fuera (efectivo o transferencia).
                 if monto_excedente > 0 and payment_method == "Efectivo":
                     efectivo_cliente = monto_excedente
-
-                # Comision segun metodo de pago del viaje.
-                if payment_method == "Billetera":
-                    tasa_comision = Decimal(str(promo["comision_billetera"]))
-                    comision_nominal, comision_cobrada = liquidar_comision(
-                        precio_bruto, total_fare, descuento_total, tasa_comision)
-                    comision_billetera = float(comision_cobrada or 0)
-                    commission = comision_billetera
-                    comision = {
-                        "rate": float(tasa_comision),
-                        "label": _etiqueta_tasa(tasa_comision),
-                        "discount_applied": False,
-                        "discount_date": datetime.now(CUBA_TZ).strftime("%Y-%m-%d"),
-                    }
-                else:
-                    comision = resolve_commission(
-                        driver_id_str, promo["comision_porcentaje"])
-                    tasa_comision = Decimal(str(comision["rate"]))
-                    comision_nominal, comision_cobrada = liquidar_comision(
-                        precio_bruto, total_fare, descuento_total, tasa_comision)
-                    commission = comision_cobrada
-                    comision_billetera = 0.0
-
-                commit_commission(
-                    driver_id_str,
-                    commission,
-                    comision.get("discount_applied", False),
-                    comision.get("discount_date"),
-                )
 
                 # monto_cobrado = excedente externo (lo que cobra/recibe fuera).
                 monto_cobrado_result = float(monto_excedente)
@@ -2344,10 +2725,34 @@ def cancel_trip(trip_id: str) -> bool:
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE trips SET status = 'cancelled', completed_at = %s WHERE trip_id = %s AND status NOT IN ('completed', 'cancelled')",
+            "UPDATE trips SET status = 'cancelled', completed_at = %s WHERE trip_id = %s AND status NOT IN ('completed', 'cancelled') RETURNING client_id, driver_id",
             (datetime.now(timezone.utc), trip_id),
         )
+        fila = cur.fetchone()
         affected = cur.rowcount
+
+        # La reserva se libera en la MISMA transaccion que la cancelacion: si
+        # algo falla, el viaje sigue abierto y el saldo sigue retenido, que es
+        # el estado coherente.
+        if fila and (wallet_flags.WALLET_ENFORCE_HOLD
+                     or wallet_flags.WALLET_DUAL_WRITE):
+            wallet_service.liberar_hold(conn, trip_id=trip_id)
+
+        if fila and wallet_flags.WALLET_DUAL_WRITE:
+            encolar(
+                conn,
+                event_type="trip.cancelled",
+                aggregate_type="trip",
+                aggregate_id=trip_id,
+                payload=evento_trip(
+                    "trip.cancelled",
+                    trip_id=trip_id,
+                    client_id=fila[0] or "",
+                    driver_id=fila[1],
+                    status="cancelled",
+                ),
+            )
+
         conn.commit()
         cur.close()
         return affected > 0
@@ -2677,7 +3082,13 @@ def _etiqueta_tasa(rate) -> str:
         return "%d%%" % round(valor)
     return ("%s%%" % round(valor, 2)).replace(".", ",")
 
-def get_daily_trip_count(driver_id: str) -> int:
+def get_daily_trip_count(driver_id: str, incluir_actual: bool = False) -> int:
+    """Viajes completados hoy por el chofer.
+
+    `incluir_actual=True` suma el viaje que se está cerrando, que aún no está
+    commiteado en PostgreSQL. Se usa para congelar la comisión antes del
+    COMMIT (Tarea 4) sin cambiar la regla del tercer viaje.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
         # `completed_at` es UTC naive. El rango del dia se calcula en Python
@@ -2695,9 +3106,9 @@ def get_daily_trip_count(driver_id: str) -> int:
             """,
             (driver_id, inicio, fin),
         )
-        count = cur.fetchone()[0]
+        count = int(cur.fetchone()[0] or 0)
         cur.close()
-        return count
+        return count + (1 if incluir_actual else 0)
 
 
 def apply_daily_bonus(driver_id: str) -> dict:
@@ -2840,7 +3251,8 @@ def liquidar_comision(precio_bruto, total_cobrado, descuento_total,
     return float(nominal), float(cobrada)
 
 
-def resolve_commission(driver_id: str, tasa_base=None) -> dict:
+def resolve_commission(driver_id: str, tasa_base=None,
+                       incluir_actual: bool = False) -> dict:
     """Devuelve la tasa de comision que corresponde al viaje que se esta cerrando.
 
     La regla del TERCER viaje se mantiene: el tercero del dia paga la mitad de la
@@ -2862,7 +3274,8 @@ def resolve_commission(driver_id: str, tasa_base=None) -> dict:
         raise ValueError(f"Conductor no encontrado: {driver_id}")
 
     today_str = datetime.now(CUBA_TZ).strftime("%Y-%m-%d")
-    daily_trips = get_daily_trip_count(driver_id)
+    daily_trips = get_daily_trip_count(driver_id,
+                                       incluir_actual=bool(incluir_actual))
     es_el_tercero = daily_trips == COMMISSION_DISCOUNT_TRIP
 
     # Media tasa base. Es lo que significa "el 3er viaje paga la mitad". Con
@@ -2897,35 +3310,74 @@ def resolve_commission(driver_id: str, tasa_base=None) -> dict:
 def claim_commission_discount(driver_id: str, travel_date: str) -> bool:
     """Intenta reservar el descuento de comision del dia para este viaje.
 
-    Se hace ANTES de tocar el `Fondo` y sin modificar el saldo, de modo que si
-    la operacion no encuentra documento no hay nada que revertir.
-
-    Devuelve `True` solo para la primera peticion que consigue reservarlo. Como
-    el filtro incluye `{"$ne": travel_date}` y Mongo opera de forma atomica
-    sobre el documento, dos peticiones simultaneas no pueden reservarlo las dos.
+    Atomico e idempotente: solo la primera petición del día para el chofer
+    obtiene el descuento. Prioriza Postgres (`driver_commission_discounts`)
+    cuando está disponible para alinear el corte de auxiliares en Mongo; si no,
+    usa el campo legacy `last_commission_discount_date` en Mongo.
     """
-    resultado = chofer_coleccion.find_one_and_update(
-        {"_id": to_mongo_id(driver_id),
-         "last_commission_discount_date": {"$ne": travel_date}},
-        {"$set": {"last_commission_discount_date": travel_date}},
-    )
-    return resultado is not None
+    # 1) Fuente de verdad en Postgres (si la migración 0004 está aplicada).
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO driver_commission_discounts (driver_id, travel_date)
+                VALUES (%s, %s::date)
+                ON CONFLICT (driver_id, travel_date) DO NOTHING
+                RETURNING 1
+                """,
+                (str(driver_id), str(travel_date)),
+            )
+            fila = cur.fetchone()
+            conn.commit()
+            cur.close()
+            if fila is not None:
+                # Compatibilidad opcional: reflejar en Mongo solo mientras haya escrituras legacy.
+                if wallet_flags.WALLET_LEGACY_MONGO_WRITES:
+                    try:
+                        chofer_coleccion.update_one(
+                            {"_id": to_mongo_id(driver_id)},
+                            {"$set": {"last_commission_discount_date": travel_date}},
+                        )
+                    except Exception:
+                        pass
+                return True
+            # Ya reclamado hoy (en Postgres).
+            return False
+    except Exception:
+        # Tabla/BD no disponible: fallback a comportamiento legacy.
+        pass
+
+    # 2) Fallback legacy en Mongo.
+    try:
+        resultado = chofer_coleccion.find_one_and_update(
+            {"_id": to_mongo_id(driver_id),
+             "last_commission_discount_date": {"$ne": travel_date}},
+            {"$set": {"last_commission_discount_date": travel_date}},
+        )
+        return resultado is not None
+    except Exception:
+        return False
 
 
 def commit_commission(driver_id: str, commission: float, discount_applied: bool,
                       travel_date: str) -> None:
-    """Descuenta la comision del `Fondo` del chofer.
+    """Descuenta la comision del `Fondo` del chofer (camino legacy Mongo).
 
-    El precio del viaje (`total_fare`) NO se toca aqui: la comision sale del
-    fondo del chofer, nunca del precio que paga el pasajero.
-
-    El descuento del dia se reserva con `claim_commission_discount` antes de
-    llegar aqui, asi que esta funcion solo hace un unico `$inc` y no necesita
-    ninguna logica de compensacion.
+    Con `WALLET_LEGACY_MONGO_WRITES=0` el descuento se refleja vía ledger/outbox
+    (`acreditar_chofer_viaje` + worker), por lo que no se toca `Fondo` en Mongo.
     """
+    if not wallet_flags.WALLET_LEGACY_MONGO_WRITES:
+        return
+    try:
+        monto = float(commission or 0)
+    except Exception:
+        monto = 0.0
+    if monto <= 0:
+        return
     chofer_coleccion.update_one(
         {"_id": to_mongo_id(driver_id)},
-        {"$inc": {"Fondo": -commission}},
+        {"$inc": {"Fondo": -monto}},
     )
 
 
@@ -3428,22 +3880,64 @@ def update_payout_status(payout_id: str, status: str) -> bool:
 
     with get_connection() as conn:
         cur = conn.cursor()
-
-        if status == "completed":
-            cur.execute(
-                "UPDATE driver_payouts SET status = %s, paid_at = %s WHERE payout_id = %s",
-                (status, datetime.now(timezone.utc), payout_id),
-            )
-        else:
-            cur.execute(
-                "UPDATE driver_payouts SET status = %s WHERE payout_id = %s",
-                (status, payout_id),
-            )
-
-        affected = cur.rowcount
-        conn.commit()
-        cur.close()
-        return affected > 0
+        try:
+            if status == "completed":
+                cur.execute(
+                    """
+                    UPDATE driver_payouts
+                       SET status = 'completed', paid_at = COALESCE(paid_at, %s)
+                     WHERE payout_id = %s AND status <> 'completed'
+                 RETURNING driver_id, net_amount
+                    """,
+                    (datetime.now(timezone.utc), payout_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    try:
+                        from app.money import a_cents
+                        from app.outbox.events import DriverPayoutV1, encolar
+                        driver_id, net_amount = row[0], row[1]
+                        monto_cents = a_cents(net_amount or 0)
+                        if monto_cents > 0:
+                            encolar(
+                                conn,
+                                event_type="driver.payout",
+                                aggregate_type="driver",
+                                aggregate_id=str(driver_id),
+                                payload=DriverPayoutV1(
+                                    payout_id=str(payout_id),
+                                    driver_id=str(driver_id),
+                                    monto_cents=int(monto_cents),
+                                    mongo_aplicado=True,
+                                    descripcion="Liquidación completada",
+                                ),
+                                cur=cur,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "update_payout_status: no se pudo encolar driver.payout %s",
+                            payout_id,
+                        )
+                    conn.commit()
+                    return True
+                # Ya estaba completada o no existe.
+                cur.execute(
+                    "SELECT 1 FROM driver_payouts WHERE payout_id = %s",
+                    (payout_id,),
+                )
+                exists = cur.fetchone() is not None
+                conn.commit()
+                return exists
+            else:
+                cur.execute(
+                    "UPDATE driver_payouts SET status = %s WHERE payout_id = %s",
+                    (status, payout_id),
+                )
+                affected = cur.rowcount
+                conn.commit()
+                return affected > 0
+        finally:
+            cur.close()
 
 
 def get_payout(payout_id: str) -> Optional[dict]:
@@ -3621,6 +4115,18 @@ async def api_create_trip(body: TripCreate, background: BackgroundTasks):
             payment_method=body.payment_method,
             is_retry=body.is_retry,
         )
+    except SaldoInsuficiente as e:
+        # 402 Payment Required: el viaje NO se creo (rollback de la misma
+        # transaccion que lo insertaba).
+        logger.info("Viaje rechazado por saldo insuficiente: %s", body.client_id)
+        raise HTTPException(status_code=402, detail={
+            "code": "saldo_insuficiente",
+            "mensaje": str(e),
+            "requerido_cents": e.requerido_cents,
+            "disponible_cents": e.disponible_cents,
+        })
+    except (MontoInvalido, EstadoViajeInvalido) as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

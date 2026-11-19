@@ -39,9 +39,12 @@ from routers import app_updates
 from routers import descargas
 from routers import tiempo_real
 from routers import campana_promocional
-from routers import app_init
+from routers import outbox_internal
 from services import indices
 from services.traccar_listener import listen_traccar
+
+from app import config as app_config
+from app.outbox import worker as outbox_worker
 
 # Funciones que necesitamos del modulo de viajes
 from routers.Solicitud_de_viajes_v4 import (
@@ -56,7 +59,16 @@ import os
 import secrets
 import asyncio
 import logging
+import re
 import sys
+import time
+import json
+from collections import defaultdict, deque
+
+import httpx
+from apscheduler.triggers.cron import CronTrigger
+from starlette.requests import Request
+from starlette.responses import JSONResponse as StarletteJSONResponse
 
 # La consola de Windows usa cp1252: cualquier print con emoji/acento hacia que
 # la salida se redirija a un archivo revienta el arranque. Se fuerza UTF-8.
@@ -67,6 +79,40 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 logger = logging.getLogger(__name__)
+
+
+_SENSITIVE_LOG_PATTERNS = [
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9\-._~+/]+=*", re.I), r"\1[REDACTED]"),
+    (re.compile(
+        r"((?:password|contrasena|contraseña|secret|token|refresh_token|access_token|authorization|x-admin-token|x-cron-secret|api[_-]?key)\s*[=:]\s*)([^\s,;\"']+)",
+        re.I,
+    ), r"\1[REDACTED]"),
+    (re.compile(
+        r"(\"(?:password|contrasena|contraseña|secret|token|refresh_token|access_token|authorization|api_key)\"\s*:\s*\")[^\"]*(\")",
+        re.I,
+    ), r"\1[REDACTED]\2"),
+]
+
+
+class _RedactSensitiveFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+            redacted = msg
+            for pattern, repl in _SENSITIVE_LOG_PATTERNS:
+                redacted = pattern.sub(repl, redacted)
+            if redacted != msg:
+                record.msg = redacted
+                record.args = ()
+        except Exception:
+            pass
+        return True
+
+
+try:
+    logging.getLogger().addFilter(_RedactSensitiveFilter())
+except Exception:
+    pass
 
 app = FastAPI(
     # orjson: serializacion ~2-4x mas rapida que el json de stdlib en cada
@@ -107,13 +153,27 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# ---- CORS (pruebas locales: flutter web en otro puerto) ----
+# ---- CORS (configurable; estricto por defecto si se definen orígenes) ----
+_cors_origenes_raw = os.getenv("CORS_ALLOWED_ORIGINS", "*").strip()
+_cors_origenes = [o.strip() for o in _cors_origenes_raw.split(",") if o.strip()]
+if not _cors_origenes or _cors_origenes == ["*"]:
+    _cors_allow_origins = ["*"]
+    # Navegadores rechazan wildcard con credenciales; mantener compatibilidad segura.
+    _cors_allow_credentials = False
+else:
+    _cors_allow_origins = _cors_origenes
+    _cors_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "0").strip().lower() in {
+        "1", "true", "yes", "si", "on",
+    }
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_allow_origins,
+    allow_credentials=_cors_allow_credentials,
+    allow_methods=os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS").split(","),
+    allow_headers=[h.strip() for h in os.getenv(
+        "CORS_ALLOW_HEADERS",
+        "Authorization,Content-Type,Accept,X-Admin-Token,X-Cron-Secret",
+    ).split(",") if h.strip()],
 )
 # ---- GZip ----
 # El territorio manda: desde Cuba cada JSON viaja por 3G/GPRS, y las respuestas
@@ -123,6 +183,35 @@ app.add_middleware(
 # nada en las apps para beneficiarse. Brotli NO se anuncia: dart:io no
 # descomprime br de forma transparente y se romperia.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# ---- Rate limiting simple por IP (~100 req/min por defecto) ----
+_RATE_LIMIT_PER_MINUTE = max(0, int(os.getenv("RATE_LIMIT_PER_MINUTE", "100") or "100"))
+_rate_limit_hits: dict[str, deque[float]] = defaultdict(deque)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if _RATE_LIMIT_PER_MINUTE <= 0:
+        return await call_next(request)
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    ip = forwarded or (request.client.host if request.client else "unknown")
+    ahora = time.monotonic()
+    ventana = 60.0
+    limite_ventana = ahora - ventana
+    cola = _rate_limit_hits[ip]
+    while cola and cola[0] < limite_ventana:
+        cola.popleft()
+    if len(cola) >= _RATE_LIMIT_PER_MINUTE:
+        return StarletteJSONResponse(
+            status_code=429,
+            content={"detail": "Demasiadas solicitudes. Intente más tarde."},
+            headers={"Retry-After": "60"},
+        )
+    cola.append(ahora)
+    if len(_rate_limit_hits) > 10000:
+        for k in [k for k, v in _rate_limit_hits.items() if not v or v[-1] < limite_ventana]:
+            _rate_limit_hits.pop(k, None)
+    return await call_next(request)
 
 # ---- Routers ----
 # El panel de administracion va antes que CRUD_MONGODB: si no, el GET /admin/{id}
@@ -169,6 +258,8 @@ app.include_router(app_updates.router)
 # WhatsApp en lugar de un acortador externo.
 app.include_router(descargas.router)
 app.include_router(tiempo_real.router)
+# Trigger manual del outbox (operación interna, sin esquema público).
+app.include_router(outbox_internal.router)
 
 # Tabla de conteo de cancelaciones por chofer y dia. Si la BD no responde, la
 # app arranca igualmente: lo reintentan el startup y el job de APScheduler.
@@ -292,21 +383,209 @@ def health():
     }
 
 
-# ===================== DIAGNOSTICO DE 500 =====================
-# Temporal: el 500 generico de FastAPI se come el mensaje y desde el movil no
-# hay forma de saber QUE endpoint y por que fallo. Con este handler el snackbar
-# de la app muestra `TipoError: mensaje` y el despliegue se depura en un solo
-# intento. Quitar cuando la causa del 500 este cerrada.
+# ===================== Outbox loop in-process + cuadre diario =====================
+_outbox_stop_event: asyncio.Event | None = None
+_outbox_task: asyncio.Task | None = None
+_outbox_alert_since: float | None = None
+
+
+async def _outbox_enviar_alerta(mensaje: str) -> None:
+    """Alerta crítica por Telegram si la integración está configurada."""
+    try:
+        if not os.getenv("TELEGRAM_BOT_TOKEN"):
+            return
+        chats = telegram_webhook._chats_admin()
+        if not chats:
+            return
+        bot = telegram_webhook._cliente()
+        for chat_id in chats:
+            try:
+                await bot.enviar(chat_id, mensaje)
+            except Exception:
+                logger.exception("Outbox: no se pudo enviar alerta Telegram a %s", chat_id)
+    except Exception:
+        logger.exception("Outbox: fallo al preparar alerta Telegram")
+
+
+async def _outbox_loop() -> None:
+    """Loop in-process del worker outbox (Postgres → Mongo).
+
+    Requisitos: uvicorn --workers 1 (instancia única). Lote 50-100, sleep 3-5s
+    cuando la cola está vacía, heartbeat cada minuto con pendientes, alerta si
+    pendientes > umbral sostenidos.
+    """
+    global _outbox_alert_since
+    mongo_uri = os.getenv("MONGODB_URI", "").strip()
+    if not mongo_uri:
+        logger.error("Outbox loop: MONGODB_URI no configurado; no se inicia")
+        return
+
+    def _abrir():
+        cliente, chofer_col, processed_col = outbox_worker.conectar_mongo(mongo_uri)
+        outbox_worker.asegurar_indice(processed_col)
+        conn = outbox_worker.conectar_pg()
+        return cliente, chofer_col, processed_col, conn
+
+    try:
+        cliente, chofer_col, processed_col, conn = await asyncio.to_thread(_abrir)
+    except Exception:
+        logger.exception("Outbox loop: no se pudo iniciar (conexiones)")
+        return
+
+    logger.info(
+        "Outbox loop iniciado (batch=%s sleep_vacio=%.1fs heartbeat=%.1fs umbral=%s)",
+        app_config.OUTBOX_LOOP_BATCH_SIZE,
+        app_config.OUTBOX_LOOP_SLEEP_EMPTY_S,
+        app_config.OUTBOX_LOOP_HEARTBEAT_S,
+        app_config.OUTBOX_LOOP_ALERT_PENDING,
+    )
+
+    ultimo_heartbeat = time.monotonic()
+    try:
+        while _outbox_stop_event and not _outbox_stop_event.is_set():
+            try:
+                stats = await asyncio.to_thread(
+                    outbox_worker.procesar_lote,
+                    conn,
+                    chofer_col,
+                    processed_col,
+                    limite=max(1, int(app_config.OUTBOX_LOOP_BATCH_SIZE)),
+                )
+            except Exception:
+                logger.exception("Outbox loop: error en pasada")
+                stats = {"tomados": 0}
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                # Reintentar conexiones en la siguiente iteración tras breve espera.
+                try:
+                    await asyncio.wait_for(
+                        _outbox_stop_event.wait(),
+                        timeout=min(5.0, app_config.OUTBOX_LOOP_SLEEP_EMPTY_S),
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
+
+            ahora = time.monotonic()
+            if (ahora - ultimo_heartbeat) >= app_config.OUTBOX_LOOP_HEARTBEAT_S:
+                try:
+                    pendientes = await asyncio.to_thread(outbox_worker.contar_pendientes, conn)
+                except Exception:
+                    logger.exception("Outbox loop: no se pudo contar pendientes")
+                    pendientes = -1
+
+                logger.info(
+                    "Outbox heartbeat: pendientes=%s ultima_pasada=%s",
+                    pendientes,
+                    json.dumps(stats, ensure_ascii=False),
+                )
+
+                umbral = app_config.OUTBOX_LOOP_ALERT_PENDING
+                sostenido = app_config.OUTBOX_LOOP_ALERT_SUSTAINED_S
+                if pendientes > umbral:
+                    if _outbox_alert_since is None:
+                        _outbox_alert_since = ahora
+                    if (ahora - _outbox_alert_since) >= sostenido:
+                        msg = (
+                            f"[CRITICO] Outbox: {pendientes} eventos pendientes sostenidos "
+                            f"(umbral {umbral}, >={sostenido:.0f}s)"
+                        )
+                        logger.critical(msg)
+                        await _outbox_enviar_alerta(msg)
+                        _outbox_alert_since = ahora
+                else:
+                    _outbox_alert_since = None
+
+                ultimo_heartbeat = ahora
+
+            if int(stats.get("tomados", 0) or 0) == 0:
+                try:
+                    await asyncio.wait_for(
+                        _outbox_stop_event.wait(),
+                        timeout=max(1.0, float(app_config.OUTBOX_LOOP_SLEEP_EMPTY_S)),
+                    )
+                except asyncio.TimeoutError:
+                    pass
+    except asyncio.CancelledError:
+        logger.info("Outbox loop cancelado")
+        raise
+    finally:
+        for cierre in (
+            lambda: conn.close(),
+            lambda: cliente.close(),
+        ):
+            try:
+                cierre()
+            except Exception:
+                pass
+        logger.info("Outbox loop detenido")
+
+
+async def job_cuadre_diario() -> None:
+    """Cuadre diario Mongo vs wallet_ledger (tolerante al outbox del chofer)."""
+    mongo_uri = os.getenv("MONGODB_URI", "").strip()
+    if not mongo_uri:
+        logger.warning("Cuadre diario: MONGODB_URI no configurado")
+        return
+
+    def _ejecutar():
+        from pymongo import MongoClient
+
+        from app.wallet.backfill import comparar_cuadre
+
+        cliente = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)
+        try:
+            col_cliente = cliente["Cliente"]["users"]
+            col_chofer = cliente["Chofer"]["users"]
+            init_pool()
+            with get_connection() as conn:
+                return comparar_cuadre(conn, col_cliente, col_chofer)
+        finally:
+            cliente.close()
+
+    try:
+        informe = await asyncio.to_thread(_ejecutar)
+    except Exception:
+        logger.exception("Cuadre diario: fallo al ejecutar")
+        return
+
+    pendientes_outbox = informe.get("pendientes_outbox_cents") or {}
+    resumen = {
+        "ok": informe.get("ok"),
+        "diferencias": len(informe.get("diferencias", [])),
+        "solo_en_postgres": len(informe.get("solo_en_postgres", [])),
+        "tolerados_por_outbox": len(informe.get("tolerados_por_outbox", [])),
+        "pendiente_outbox_cents": sum(pendientes_outbox.values()),
+    }
+    if informe.get("ok"):
+        logger.info("Cuadre diario OK: %s", json.dumps(resumen, ensure_ascii=False))
+    else:
+        logger.error(
+            "Cuadre diario con diferencias: %s",
+            json.dumps(resumen, ensure_ascii=False),
+        )
+
+
+# ===================== Manejo de errores (sanitizado) =====================
 from fastapi.responses import JSONResponse  # noqa: E402
+
+
+_EXPOSE_ERROR_DETAILS = os.getenv("EXPOSE_ERROR_DETAILS", "0").strip().lower() in {
+    "1", "true", "yes", "si", "on",
+}
 
 
 @app.exception_handler(Exception)
 async def handler_500_generico(request, exc):
+    # No exponer detalles internos al cliente; el traceback queda en logs del servidor.
     logger.exception("500 en %s %s", request.method, request.url.path)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": f"[{type(exc).__name__}] {exc}"},
-    )
+    if _EXPOSE_ERROR_DETAILS:
+        detalle = f"[{type(exc).__name__}] {exc}"
+    else:
+        detalle = "Error interno del servidor"
+    return JSONResponse(status_code=500, content={"detail": detalle})
 
 
 @app.post("/admin/init")
@@ -388,7 +667,7 @@ async def startup_event():
             logger.warning("No se pudieron publicar los comandos del bot",
                            exc_info=True)
 
-    # Scheduler: expiracion de viajes + autorreparacion de tablas
+    # Scheduler: expiracion de viajes + autorreparacion de tablas + cuadre diario
     scheduler.add_job(sweep_expired_trips, "interval", seconds=15, id="sweep_expired_trips")
     try:
         if tablas_faltantes():
@@ -398,11 +677,41 @@ async def startup_event():
         scheduler.add_job(job_reintento_bd, "interval", seconds=60, id="reintento_bd")
         logger.warning("No se pudo comprobar las tablas al arrancar; job de reintento activo",
                        exc_info=True)
+    try:
+        scheduler.add_job(
+            job_cuadre_diario,
+            CronTrigger(hour=4, minute=30, timezone=CUBA_TZ),
+            id="cuadre_diario",
+            replace_existing=True,
+        )
+    except Exception:
+        logger.exception("No se pudo programar el cuadre diario")
     scheduler.start()
     logger.info("Scheduler de expiracion de viajes iniciado")
+
+    # Outbox loop in-process (requiere uvicorn --workers 1)
+    global _outbox_stop_event, _outbox_task, _outbox_alert_since
+    _outbox_stop_event = None
+    _outbox_task = None
+    _outbox_alert_since = None
+    if app_config.OUTBOX_WORKER_ENABLED:
+        _outbox_stop_event = asyncio.Event()
+        _outbox_task = asyncio.create_task(_outbox_loop(), name="outbox-loop")
+        logger.info("Outbox loop encolado (OUTBOX_WORKER_ENABLED=1)")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    global _outbox_stop_event, _outbox_task
+    if _outbox_stop_event:
+        _outbox_stop_event.set()
+    if _outbox_task:
+        _outbox_task.cancel()
+        try:
+            await _outbox_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Error al detener outbox loop")
     if scheduler.running:
         scheduler.shutdown()
