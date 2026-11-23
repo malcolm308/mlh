@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
@@ -23,13 +25,14 @@ import 'location_service.dart';
 ///    359° a 1° cuenta como +2° y no como -358°.
 class RumboMovimiento {
   /// Por debajo de esta velocidad no se actualiza el rumbo.
-  static const double velocidadMinimaKmh = 5.0;
+  ///
+  /// Era 5 km/h. A 1 Hz eso son 1,4 m y, con el mínimo de 1,5 m de entonces, la
+  /// dirección quedaba congelada en tráfico lento precisamente cuando el coche
+  /// morenea para doblar. 2,5 km/h sigue descartando el baile del GPS parado.
+  static const double velocidadMinimaKmh = 2.5;
 
   /// Desplazamiento mínimo entre dos fixes para que la dirección tenga sentido.
-  ///
-  /// A 1 Hz y 5 km/h el coche avanza 1,4 m por muestra; con 1,5 m se exige algo
-  /// más que un punto repetido, pero sin bloquear la conducción lenta.
-  static const double distanciaMinimaM = 1.5;
+  static const double distanciaMinimaM = 0.8;
 
   /// Si el ancla es más vieja que esto (por ejemplo el GPS estuvo pausado
   /// parado), se descarta y se vuelve a sembrar con el fix actual. Evita medir
@@ -37,10 +40,19 @@ class RumboMovimiento {
   static const int _maxEdadAnclaMs = 30000;
 
   /// Ruido del proceso: cuánto puede cambiar el rumbo entre dos muestras.
-  static const double _ruidoProceso = 4.0;
+  ///
+  /// Con Q=4 y R=25 la ganancia en régimen era 0,29: un giro de 90° necesitaba
+  /// siete fixes (7 s a 1 Hz) para asimilarse. Con Q=45/R=16 la ganancia es
+  /// ~0,82, así que la curva se sigue en uno o dos fixes.
+  static const double _ruidoProceso = 45.0;
 
   /// Ruido de la medición: varianza del bearing GPS en grados².
-  static const double _ruidoMedicion = 25.0;
+  static const double _ruidoMedicion = 16.0;
+
+  /// Si la medición se aparta tanto del rumbo anterior, es un giro real: se le
+  /// hace caso casi en seguida en vez de esperar a que el Kalman lo digiera.
+  static const double _giroBruscoGrados = 25.0;
+  static const double _gananciaGiroBrusco = 0.85;
 
   double? _rumbo;
   double _varianza = _ruidoMedicion;
@@ -123,8 +135,11 @@ class RumboMovimiento {
 
     // Kalman 1D: predecir (el rumbo no tiene modelo de velocidad) y corregir.
     _varianza += _ruidoProceso;
-    final ganancia = _varianza / (_varianza + _ruidoMedicion);
+    var ganancia = _varianza / (_varianza + _ruidoMedicion);
     final error = _deltaAngular(medicion, actual);
+    if (error.abs() >= _giroBruscoGrados) {
+      ganancia = math.max(ganancia, _gananciaGiroBrusco);
+    }
     _rumbo = _normalizar360(actual + ganancia * error);
     _varianza = (1.0 - ganancia) * _varianza;
     return _rumbo;

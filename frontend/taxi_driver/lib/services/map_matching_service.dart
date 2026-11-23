@@ -61,10 +61,16 @@ class PuntoRuta {
 /// misma geometría que dibuja el mapa) MIENTRAS el coche va por ella.
 ///
 /// Reglas:
-///  * en ruta, se busca en una ventana alrededor del tramo anterior para no
-///    saltar a una calle paralela;
-///  * cambiar de calle exige varios fixes seguidos, salvo que los tramos sean
+///  * se compara la ventana local con TODA la polilínea en cada fix. Buscar solo
+///    en local y mirar la ruta completa cuando la distancia local ya era grande
+///    dejaba el coche encajado en la calle abandonada: esa geometría seguía
+///    siendo la más cercana dentro de la ventana;
+///  * cambiar de calle exige dos fixes seguidos, salvo que los tramos sean
 ///    adyacentes y el rumbo sea compatible: es un giro real, no una deriva;
+///  * **mientras se confirma un cambio de calle se dibuja la posición real, no
+///    la calle vieja**. Es la corrección clave del "coche sobre los edificios":
+///    la histeresis evita saltos, pero nunca debe proyectar el punto a 40 m del
+///    sitio donde está el vehículo;
 ///  * con el coche parado se conserva el tramo anterior;
 ///  * **al desviarse se suelta el encaje**: si la distancia supera
 ///    [distanciaSalidaRutaMetros] (adaptada a la precisión del GPS), [posicion]
@@ -74,19 +80,33 @@ class PuntoRuta {
 ///    proyectado cae de verdad en el tramo nuevo.
 class MapMatchingService {
   /// Distancia máxima para ENTRAR en la ruta, en metros.
-  static const double distanciaEntradaRutaMetros = 45.0;
+  ///
+  /// Antes era 45 m: con el GPS rebotando en los edificios el coche se dibujaba
+  /// en la calle de la ruta aunque estuviera a 40 m de ella, es decir, dentro de
+  /// una manzana. 20 m son suficientes para absorber el ruido urbano sin
+  /// inventar una calle donde no se está.
+  static const double distanciaEntradaRutaMetros = 20.0;
+
+  /// Tope de la distancia de entrada cuando el GPS declara mucha imprecisión.
+  static const double distanciaEntradaMaximaMetros = 35.0;
 
   /// Distancia a partir de la cual se SALE de la ruta, en metros.
   ///
-  /// Es mayor que la de entrada a propósito (histéresis): un fix con 50 m de
-  /// error no debe soltar y volver a enganchar el marcador cada segundo.
-  static const double distanciaSalidaRutaMetros = 65.0;
+  /// Antes era 65 m (hasta 95 m con poca precisión): el marcador seguía pegado
+  /// a la polilínea vieja medio metro por encima de los tejados. Se mantiene la
+  /// histéresis (salida > entrada), pero en una escala de manzana, no de cuadra.
+  static const double distanciaSalidaRutaMetros = 30.0;
+
+  /// Tope de la distancia de salida cuando el GPS declara mucha imprecisión.
+  static const double distanciaSalidaMaximaMetros = 45.0;
 
   /// Distancia máxima para considerar el encaje "confiable".
   static const double distanciaMaximaMetros = distanciaEntradaRutaMetros;
 
-  /// Más allá de esto se hace una búsqueda global en toda la polilínea.
-  static const double distanciaBuscaGlobalMetros = 150.0;
+  /// Ventaja que debe tener la búsqueda global sobre la local para imponerse.
+  ///
+  /// Evita saltos a una calle paralela por una diferencia de dos metros de ruido.
+  static const double margenBusquedaGlobalMetros = 3.0;
 
   /// Tramos que se miran hacia delante en la ventana local.
   static const int ventanaTramos = 60;
@@ -95,7 +115,11 @@ class MapMatchingService {
   static const int tramosAtras = 10;
 
   /// Fixes seguidos que hacen falta para aceptar un cambio de tramo.
-  static const int fixesParaCambiarTramo = 3;
+  ///
+  /// Eran 3 (3 s a 1 Hz). Mientras se confirma el cambio se dibuja la posición
+  /// REAL, no la calle vieja, así que dos muestras bastan para no arrastrar el
+  /// coche por la geometría abandonada.
+  static const int fixesParaCambiarTramo = 2;
 
   /// Tolerancia de rumbo para aceptar un cambio de tramo, en grados.
   static const double toleranciaRumboGrados = 45.0;
@@ -190,16 +214,19 @@ class MapMatchingService {
     final entrada = _umbralEntrada(precisionMetros);
     final salida = _umbralSalida(precisionMetros);
 
-    // Ventana local alrededor del progreso actual. Al volver de un desvío se
-    // mira hacia delante desde el último tramo conocido; si no aparece nada
-    // cerca, se busca en toda la ruta (rodeos, calles que se vuelven a cruzar).
+    // Se comparan SIEMPRE la ventana local y la ruta completa. El código anterior
+    // solo miraba la ruta entera cuando la mejor distancia local ya superaba el
+    // umbral de salida; si el coche se desviaba pero la calle vieja seguía cerca
+    // (calles paralelas, rodeos cortos), la ventana ganaba y el marcador se
+    // quedaba en la geometría equivocada. La ventana sigue teniendo prioridad
+    // para no saltar a una paralela por dos metros de ruido GPS.
     final desde = math.max(0, _tramo - tramosAtras);
     final hasta = math.min(ultimo, _tramo + ventanaTramos);
-    var mejor = _mejorTramo(crudo, desde, hasta);
-    if (mejor.$3 > (_enRuta ? salida : entrada)) {
-      final global = _mejorTramo(crudo, 0, ultimo);
-      if (global.$3 < mejor.$3) mejor = global;
-    }
+    final local = _mejorTramo(crudo, desde, hasta);
+    final global = _mejorTramo(crudo, 0, ultimo);
+    final mejor = local.$3 <= global.$3 + margenBusquedaGlobalMetros
+        ? local
+        : global;
 
     var (i, t, d) = mejor;
 
@@ -235,8 +262,9 @@ class MapMatchingService {
         _rumboCompatible(i, rumbo);
 
     // Al arrancar (nunca se ha encajado) o yendo en ruta, un cambio de calle
-    // exige varios fixes para no saltar a una paralela. Al VOLVER de un desvío
-    // se engancha en el acto: ya se sabe que la calle anterior no era.
+    // exige un par de fixes para no saltar a una paralela por un fix malo. Al
+    // VOLVER de un desvío se engancha en el acto: ya se sabe que la calle
+    // anterior no era.
     final exigeHisteresis =
         i != _tramo &&
         !parado &&
@@ -251,25 +279,22 @@ class MapMatchingService {
       }
 
       if (_fixesCandidato < fixesParaCambiarTramo) {
-        // Se mantiene el tramo anterior. Si aun así el punto queda demasiado
-        // lejos de él, el GPS está claramente en la calle nueva: se acepta para
-        // no dibujar el coche a 80 m de donde está.
-        final (tAnterior, dAnterior) = _proyectarEnTramo(crudo, _tramo);
-        if (dAnterior <= salida) {
-          final ajustado = _puntoEnTramo(_tramo, tAnterior);
-          _ultimoAjuste = ajustado;
-          _enRuta = true;
-          _algunaVezEnRuta = true;
-          return PuntoRuta(
-            posicion: ajustado,
-            posicionCruda: crudo,
-            tramo: _tramo,
-            fraccion: tAnterior,
-            distanciaMetros: dAnterior,
-            confiable: dAnterior <= distanciaMaximaMetros,
-            enRuta: true,
-          );
-        }
+        // Antes aquí se proyectaba sobre la calle VIEJA aunque el GPS estuviera
+        // 60 m lejos, esperando a que se confirmase el cambio. Eso era
+        // literalmente dibujar el coche encima de los edificios. La histeresis
+        // solo retrasa el salto entre calle y calle; nunca debe mover el punto:
+        // mientras se decide, se muestra la posición real filtrada.
+        _enRuta = false;
+        _ultimoAjuste = null;
+        return PuntoRuta(
+          posicion: crudo,
+          posicionCruda: crudo,
+          tramo: _tramo,
+          fraccion: _fraccion,
+          distanciaMetros: d,
+          confiable: false,
+          enRuta: false,
+        );
       }
     }
 
@@ -348,17 +373,23 @@ class MapMatchingService {
   }
 
   /// Umbral de entrada, ampliado si el GPS declara poca precisión.
+  ///
+  /// El tope bajó de 75 m a 35 m: una precisión de 60 m NO autoriza a dibujar el
+  /// coche en la calle de la ruta cuando está a 72 m de ella.
   static double _umbralEntrada(double? precisionMetros) {
     final p = precisionMetros;
     if (p == null || p <= 0) return distanciaEntradaRutaMetros;
-    return (p * 1.5).clamp(distanciaEntradaRutaMetros, 75.0);
+    return (p * 1.5).clamp(
+      distanciaEntradaRutaMetros,
+      distanciaEntradaMaximaMetros,
+    );
   }
 
   /// Umbral de salida. Siempre por encima del de entrada (histéresis).
   static double _umbralSalida(double? precisionMetros) {
-    return (_umbralEntrada(precisionMetros) + 20.0).clamp(
+    return (_umbralEntrada(precisionMetros) + 10.0).clamp(
       distanciaSalidaRutaMetros,
-      95.0,
+      distanciaSalidaMaximaMetros,
     );
   }
 

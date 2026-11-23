@@ -174,7 +174,7 @@ Comandos usados (la clave se pasa solo en la línea de comandos):
 # Chofer
 flutter build appbundle --release --no-pub --obfuscate `
   --split-debug-info=build/app/outputs/symbols `
-  --build-name 1.0.44 --build-number 6051 `
+  --build-name 1.0.45 --build-number 6052 `
   --dart-define=MAPTILER_API_KEY=<CLAVE> `
   --dart-define=PLAY_STORE_BUILD=true
 
@@ -186,7 +186,7 @@ flutter build appbundle --release --no-pub --obfuscate `
   --dart-define=PLAY_STORE_BUILD=true
 ```
 
-### 6.1 Por qué el AAB usa `6051` y `6045`
+### 6.1 Por qué el AAB usa `6052` y `6045`
 
 Los APK que se reparten desde Render se compilan con `--split-per-abi`, y
 Flutter suma un desplazamiento al `versionCode` según la ABI: `armeabi-v7a`
@@ -196,19 +196,21 @@ queda en `5xxx` y `arm64-v8a` en `6xxx`. Los APK instalados hoy son:
 - Pasajero: `1.0.40`, `versionCode 6043` (arm64).
 
 El AAB de Play es universal y **no** lleva ese desplazamiento. Para que Google
-lo acepte sin obligar a desinstalar, se compila con `6051` y `6045`, por encima
-de los versionCode instalados y de cualquier AAB subido antes.
+lo acepte sin obligar a desinstalar, se compila con `6052` y `6045`, por encima
+de los versionCode instalados y de cualquier AAB subido antes. El chofer pasó de
+`6051` a `6052` porque este AAB incluye la segunda corrección del encaje y del
+rumbo; el pasajero no cambió.
 
 ### 6.2 Artefactos generados y verificados
 
 | App | Archivo de entrega | `versionName` | `versionCode` | Peso | Firma release (SHA-256 del certificado) |
 |---|---|---|---|---|---|
-| Chofer | `dist_play/RapiTaxi_Chofer_1.0.44_vc6051.aab` | 1.0.44 | **6051** | 57,1 MiB (59.918.231 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
+| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.45_vc6052.aab` | 1.0.45 | **6052** | 57,1 MiB (59.165.556 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
 | Pasajero | `dist_play/RapiTaxi_Pasajero_1.0.42_vc6045.aab` | 1.0.42 | **6045** | 57,2 MiB (60.009.425 B) | `E2:B9:CC:51:D6:A8:4F:AB:69:74:6A:47:8F:68:4E:B2:E2:FD:AD:41:78:36:39:5D:E8:19:8B:48:1D:D3:63:BF` |
 
 Hashes de los archivos (para verificar la subida):
 
-- Chofer: `8D98269D5F9A69E52FE233A81DCB8994BF550F1455A08D0C18A2E9E7B0108225`
+- Chofer: `E695ED7178C58F9978BAB56F27AAD61AD70F9F995A3070906F3232B427DAA036`
 - Pasajero: `A9D0988B42A57B8530A41879BBD943B622207ECED7AAD40E2707832897DF9640`
 
 Los dos AAB quedan muy por debajo del límite de 150 MB. Se comprobó que la

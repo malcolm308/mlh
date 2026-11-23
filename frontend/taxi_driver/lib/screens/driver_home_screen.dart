@@ -371,7 +371,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// interviene, ni siquiera parado: en un semaforo la ruta puede doblar en la
   /// esquina mientras el coche sigue apuntando a la calle actual.
   double? _rumboParaFlecha() {
-    if (_nav.hayViajeActivo) return _nav.rumbo ?? _bearingLibre;
+    if (_nav.hayViajeActivo) {
+      // La camara usa `rotacionActual` (el angulo ya interpolado) y antes la
+      // flecha usaba `rumbo` (el objetivo). En un giro apuntaban a lados
+      // distintos durante casi un segundo. Se usa la MISMA fuente que la
+      // camara; con la respuesta de giro nueva la diferencia es imperceptible.
+      return _nav.rotacionActual ?? _nav.rumbo ?? _bearingLibre;
+    }
     return _bearingLibre;
   }
 
@@ -3188,7 +3194,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 // real si el coche se ha desviado). Sin viaje, la posicion real
                 // filtrada a 1 Hz: antes se pintaba el fix crudo y el ruido del
                 // GPS se veia en el mapa.
-                posicionVehiculo: (!libre && _nav.debeSeguir)
+                posicionVehiculo: _nav.hayViajeActivo
                     ? _nav.posicion
                     : (_nav.tieneFix ? _nav.posicionFiltrada : _driverPos),
                 rumboVehiculo: libreActiva

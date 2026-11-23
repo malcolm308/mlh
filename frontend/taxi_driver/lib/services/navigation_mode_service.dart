@@ -89,23 +89,24 @@ class NavigationModeService {
   /// lo saca de la calle.
   static const double _extrapolacionMaxima = 3.0;
 
-  /// Cuanto se acerca la camara a su objetivo por frame (a 60 Hz).
+  /// Cuanto se acerca la camara al CENTRO y al ZOOM por frame (a 60 Hz).
   ///
-  /// Estaba en 0.16: llega al 90 % del camino en unos 14 frames, ~230 ms. Con el
-  /// sensor a 50 Hz eso no se notaba, porque el sensor es continuo. Pero ahora,
-  /// por encima de [ApiConfig.velocidadRumboGps] manda el rumbo del GPS, que va a
-  /// 1 Hz y es ruidoso.
+  /// El rumbo ya NO usa este valor: tiene su propia respuesta, [_respuestaRotacion].
+  /// 0.12 son ~135 ms de constante de tiempo, suficiente para que el vehiculo no
+  /// se vea atrasado respecto al marcador sin que el mapa tiemble con el ruido
+  /// del GPS a 1 Hz.
+  static const double _respuesta = 0.12;
+
+  /// Respuesta de la ROTACION por frame (a 60 Hz).
   ///
-  /// Medido en un viaje real: el rumbo del GPS se aparta mas de 15 grados del
-  /// sensor en el 76 % de las muestras en marcha, y se va de 90 a 150 grados en
-  /// el 25 %. Con una constante de 230 ms la camara seguia cada muestra casi sin
-  /// filtrar, de ahi que el mapa se orientara de golpe y la flecha pareciera
-  /// apuntar en sentido contrario al de la marcha.
-  ///
-  /// 0.035 son ~470 ms de constante de tiempo: deja pasar los saltos de un
-  /// instante y sigue las curvas, que duran segundos. Es el punto de equilibrio:
-  /// filtrar ruido de 1 Hz y no retrasar una maniobra.
-  static const double _respuesta = 0.035;
+  /// Estaba en 0.035 (~470 ms): sumado al Kalman lento del rumbo, el mapa tardaba
+  /// varios segundos en girar en una curva y la flecha apuntaba por un lado
+  /// mientras el mapa miraba por otro. 0.22 llega al 90 % del giro en ~160 ms.
+  static const double _respuestaRotacion = 0.22;
+
+  /// Si el error angular es grande, se acelera todavía más la rotación.
+  static const double _giroCamaraGrados = 12.0;
+  static const double _respuestaGiroCamara = 0.45;
 
   final Ticker _ticker;
 
@@ -728,7 +729,11 @@ class NavigationModeService {
     if (!identical(fix, _fixAjustado)) {
       _ajusteActual = _mapMatching.ajustar(
         posicionFiltrada,
-        rumbo: _rumbo,
+        // [_rumbo] se actualiza mas abajo, en [_aplicarOrientacion], con este
+        // mismo fix: usarlo aqui era usar el rumbo del fix ANTERIOR y el mapa
+        // aceptaba el giro una muestra tarde. [_rumboGps] ya se actualizo en
+        // [_alRecibirFix], asi que es la medicion fresca.
+        rumbo: _rumboGps.rumbo ?? _rumbo,
         precisionMetros: _precisionMetros,
         velocidadKmh: _velocidadKmh,
       );
@@ -959,7 +964,10 @@ class NavigationModeService {
       if (ra != null && rotacionObjetivo != null) {
         final d = deltaCorto(ra, rotacionObjetivo);
         if (d.abs() >= ApiConfig.deadbandRotacion) {
-          _rotacionActual = normalizarGrados(ra + d * k);
+          final kRot = d.abs() >= _giroCamaraGrados
+              ? math.max(k, _respuestaGiroCamara)
+              : 1 - math.pow(1 - _respuestaRotacion, dt * 60).toDouble();
+          _rotacionActual = normalizarGrados(ra + d * kRot);
         }
       } else {
         _rotacionActual = rotacionObjetivo;

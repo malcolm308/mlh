@@ -40,11 +40,19 @@ class FiltroGps {
   /// Precision por debajo de la cual se puede confiar casi por completo.
   static const double precisionBuenaMetros = 10;
 
+  /// Fixes malos seguidos que se toleran antes de mover el marcador aunque sea
+  /// poco. Con tres o mas, quedarse quieto es peor que avanzar 25 m.
+  static const int maxDescartesConsecutivos = 3;
+
+  /// Avance maximo por muestra en la recuperacion tras varios descartes.
+  static const double pasoRecuperacionMetros = 25.0;
+
   LatLng? _ultimoCrudo;
   DateTime? _ultimoInstante;
   LatLng? _ultimoFiltrado;
   double? _velocidadKmh;
   double? _precisionMetros;
+  int _descartesConsecutivos = 0;
 
   // Vector de velocidad en m/s: este (x) y norte (y).
   double _vx = 0;
@@ -65,6 +73,7 @@ class FiltroGps {
     _ultimoFiltrado = null;
     _velocidadKmh = null;
     _precisionMetros = null;
+    _descartesConsecutivos = 0;
     _vx = 0;
     _vy = 0;
   }
@@ -107,24 +116,47 @@ class FiltroGps {
 
     final dt = t.difference(instanteAnterior).inMilliseconds / 1000.0;
     final distancia = _distancia(anterior, punto);
+    final (dx, dy) = _desplazamientoMetros(anterior, punto);
 
-    // Un fix con precision pesima no mueve el marcador: es peor que quedarse
-    // en la ultima posicion buena.
-    if (precision > precisionInservibleMetros) {
-      return filtradoAnterior;
+    // Un fix con precision pesima o un salto imposible no mueve el marcador.
+    // PERO el ancla crudo SI avanza: antes se descartaba el fix sin tocar el
+    // ancla, y el siguiente fix bueno se comparaba con una posicion de hace
+    // varios segundos, volvia a parecer un salto y se descartaba tambien. Ese
+    // bucle era el marcador congelado hasta que llegaba un recalculo de ruta.
+    final saltoImposible =
+        dt > 0 && dt < ventanaSaltoSegundos && distancia > saltoMaximoMetros;
+    final descartable =
+        precision > precisionInservibleMetros || saltoImposible || dt <= 0;
+
+    if (descartable) {
+      _descartesConsecutivos++;
+      if (_descartesConsecutivos < maxDescartesConsecutivos) {
+        _moverAncla(punto, t, instanteAnterior);
+        return filtradoAnterior;
+      }
+
+      // Tres o mas fixes malos seguidos: el canyon GPS no se va a arreglar solo.
+      // Se acepta un avance LIMITADO hacia la posicion real para que el coche no
+      // se quede clavado, sin dar un salto de cientos de metros de una vez.
+      final fraccion = distancia > 0
+          ? math.min(distancia, pasoRecuperacionMetros) / distancia
+          : 0.0;
+      final recuperado = _desplazar(
+        filtradoAnterior,
+        dx * fraccion,
+        dy * fraccion,
+      );
+      _ultimoCrudo = punto;
+      _ultimoInstante = t;
+      _ultimoFiltrado = recuperado;
+      _vx = 0;
+      _vy = 0;
+      _descartesConsecutivos = 0;
+      return recuperado;
     }
+    _descartesConsecutivos = 0;
     _precisionMetros = precision;
 
-    // Salto imposible: un coche no recorre 120 m en menos de 2 s. El fix se
-    // descarta entero, incluida su velocidad.
-    if (dt > 0 && dt < ventanaSaltoSegundos && distancia > saltoMaximoMetros) {
-      return filtradoAnterior;
-    }
-
-    // Reloj detenido o hacia atras: no se puede integrar.
-    if (dt <= 0) return filtradoAnterior;
-
-    final (dx, dy) = _desplazamientoMetros(anterior, punto);
     final velocidadObservadaKmh = (distancia / dt) * 3.6;
     final velocidad = (velocidadKmh != null && velocidadKmh >= 0)
         ? velocidadKmh
@@ -205,6 +237,15 @@ class FiltroGps {
       a.latitude + (b.latitude - a.latitude) * f,
       a.longitude + (b.longitude - a.longitude) * f,
     );
+  }
+
+  /// Actualiza la referencia cruda sin adoptar la posición del fix.
+  ///
+  /// Así el siguiente fix se mide contra la lectura inmediatamente anterior y
+  /// no contra una posición antigua que hacía descartar todos los fixes futuros.
+  void _moverAncla(LatLng punto, DateTime t, DateTime instanteAnterior) {
+    _ultimoCrudo = punto;
+    if (!t.isBefore(instanteAnterior)) _ultimoInstante = t;
   }
 
   static double _distancia(LatLng a, LatLng b) {

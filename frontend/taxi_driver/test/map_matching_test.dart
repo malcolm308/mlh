@@ -58,17 +58,65 @@ void main() {
       expect(vuelta.posicion.latitude, closeTo(23.1400, 1e-6));
     });
 
-    test('la precision mala del GPS amplia el umbral de encaje', () {
+    test('la precision mala amplia el umbral, pero nunca mete el coche en un edificio', () {
       final svc = MapMatchingService()..actualizarRuta(calle);
-      const crudo = LatLng(23.14065, -82.3550); // ~72 m al norte
+      const cercano = LatLng(23.14018, -82.3550); // ~20 m al norte
+      const lejano = LatLng(23.14065, -82.3550); // ~72 m al norte
 
-      // Con precision normal seria un desvio (> 45 m).
-      final normal = svc.ajustar(crudo, precisionMetros: 5, velocidadKmh: 30);
-      expect(normal.enRuta, isFalse);
+      // 20 m con precision normal esta justo en el limite de entrada.
+      final normal = svc.ajustar(
+        cercano,
+        precisionMetros: 5,
+        velocidadKmh: 30,
+      );
+      expect(normal.enRuta, isTrue);
 
-      // Con 60 m de error declarado, el fix de 72 m es plausible.
-      final malo = svc.ajustar(crudo, precisionMetros: 60, velocidadKmh: 30);
-      expect(malo.enRuta, isTrue);
+      // Con 45 m declarados, 20 m sigue siendo plausible.
+      final tolerante = svc.ajustar(
+        cercano,
+        precisionMetros: 45,
+        velocidadKmh: 30,
+      );
+      expect(tolerante.enRuta, isTrue);
+
+      // Antes 60 m de precision autorizaban a dibujar el coche a 72 m de la
+      // calle: eso es pintarlo encima de la manzana. El tope es 35 m de entrada
+      // y 45 m de salida, asi que este fix se dibuja donde esta de verdad.
+      final lejanoSvc = MapMatchingService()..actualizarRuta(calle);
+      final malo = lejanoSvc.ajustar(
+        lejano,
+        precisionMetros: 60,
+        velocidadKmh: 30,
+      );
+      expect(malo.enRuta, isFalse);
+      expect(malo.posicion, lejano);
+    });
+
+    test('una calle paralela mas cercana gana aunque la vieja siga dentro del umbral', () {
+      // Vuelta cerrada: la calle de abajo (tramo 0) y la de arriba (tramo 2).
+      final svc = MapMatchingService()
+        ..actualizarRuta(const <LatLng>[
+          LatLng(23.1400, -82.3600),
+          LatLng(23.1400, -82.3500),
+          LatLng(23.14036, -82.3500),
+          LatLng(23.14036, -82.3600),
+        ]);
+      svc.ajustar(
+        const LatLng(23.14002, -82.3580),
+        rumbo: 90,
+        velocidadKmh: 30,
+      );
+
+      // El coche ya esta en la calle de arriba: 1 m de la nueva, 38 de la
+      // vieja. La busqueda global impone la nueva (el primer fix muestra la
+      // posicion real mientras se confirma el cambio de calle).
+      const arriba = LatLng(23.14035, -82.3580);
+      svc.ajustar(arriba, rumbo: 270, velocidadKmh: 30);
+      final r = svc.ajustar(arriba, rumbo: 270, velocidadKmh: 30);
+
+      expect(r.tramo, 2);
+      expect(r.enRuta, isTrue);
+      expect(r.posicion.latitude, closeTo(23.14036, 1e-6));
     });
 
     test('fuera de ruta no se extrapola por la polilinea vieja', () {
@@ -94,7 +142,7 @@ void main() {
       expect(r.posicion, crudo);
     });
 
-    test('un solo fix no salta a una calle paralela', () {
+    test('un solo fix no salta a una calle paralela, pero tampoco pinta la vieja', () {
       // Dos calles este-oeste separadas 40 m. El GPS de la primera se desvía
       // un instante hacia la segunda: no debe cambiar de tramo con un solo fix.
       final svc = MapMatchingService()
@@ -105,14 +153,20 @@ void main() {
           LatLng(23.14036, -82.3600),
         ]);
 
-      final r = svc.ajustar(
-        const LatLng(23.14036, -82.3550),
-        rumbo: 270,
-        velocidadKmh: 30,
-      );
+      const crudo = LatLng(23.14036, -82.3550);
+      final r = svc.ajustar(crudo, rumbo: 270, velocidadKmh: 30);
 
+      // La histeresis sigue evitando el salto de calle...
       expect(r.tramo, 0);
-      expect(r.posicion.latitude, closeTo(23.1400, 1e-6));
+      // ...pero ANTES se dibujaba a 40 m de aqui, sobre la calle vieja. Ahora
+      // se muestra la posicion real hasta que se confirma el cambio.
+      expect(r.enRuta, isFalse);
+      expect(r.posicion, crudo);
+
+      final confirmado = svc.ajustar(crudo, rumbo: 270, velocidadKmh: 30);
+      expect(confirmado.enRuta, isTrue);
+      expect(confirmado.tramo, 2);
+      expect(confirmado.posicion.latitude, closeTo(23.14036, 1e-6));
     });
 
     test('varios fixes compatibles acaban cambiando de tramo', () {

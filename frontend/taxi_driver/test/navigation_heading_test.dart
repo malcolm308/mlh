@@ -142,7 +142,7 @@ void main() {
       nav.dispose();
     });
 
-    testWidgets('un giro brusco se suaviza con el filtro de Kalman',
+    testWidgets('un giro brusco se sigue enseguida sin dar un salto',
         (tester) async {
       final nav = await _servicio(tester);
       const lat = 23.14;
@@ -153,8 +153,9 @@ void main() {
       final este = nav.rumbo!;
       expect(este, closeTo(90, 2));
 
-      // Giro de 90 grados en una muestra: el medicion es 0 (norte), pero el
-      // Kalman tiene que quedarse en un valor intermedio, no dar un salto.
+      // Giro de 90 grados en una muestra: la medición es 0 (norte). El Kalman
+      // va rápido (ganancia 0,85) pero no salta de golpe: queda cerca del norte
+      // en un solo fix, en vez de arrastrar 7 s el rumbo anterior.
       nav.informarFix(_fix(
         LatLng(lat + _dLat(50), -82.36 + _dLon(50, lat)),
       ));

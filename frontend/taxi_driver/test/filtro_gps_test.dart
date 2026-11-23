@@ -70,6 +70,57 @@ void main() {
       expect(f.precisionMetros, 5);
     });
 
+    test('varios fixes con precision pesima no congelan el marcador', () {
+      final f = FiltroGps();
+      const a = LatLng(23.1400, -82.3600);
+      f.filtrar(a, ahora: t0, accuracyMetros: 5, velocidadKmh: 30);
+
+      LatLng? ultimo;
+      for (var i = 1; i <= 4; i++) {
+        ultimo = f.filtrar(
+          este(a, 10.0 * i),
+          ahora: t0.add(Duration(seconds: i)),
+          accuracyMetros: 200,
+          velocidadKmh: 30,
+        );
+      }
+
+      // Los dos primeros se descartan, pero el tercero ya hace avanzar el
+      // marcador: un canyon GPS de cuatro segundos no deja el coche clavado.
+      expect(dist(a, ultimo!), greaterThan(8.0));
+    });
+
+    test('un salto descartado no bloquea los fixes siguientes', () {
+      final f = FiltroGps();
+      const a = LatLng(23.1400, -82.3600);
+      f.filtrar(a, ahora: t0, accuracyMetros: 5, velocidadKmh: 30);
+
+      final salto = f.filtrar(
+        este(a, 500),
+        ahora: t0.add(const Duration(seconds: 1)),
+        accuracyMetros: 5,
+        velocidadKmh: 30,
+      );
+      expect(salto, a);
+
+      // Antes el ancla seguia en `a`: este fix parecia otro salto de 500 m y
+      // se descartaba una y otra vez. Ahora el ancla ya se movio al fix malo.
+      f.filtrar(
+        este(a, 8),
+        ahora: t0.add(const Duration(seconds: 2)),
+        accuracyMetros: 5,
+        velocidadKmh: 30,
+      );
+      final r = f.filtrar(
+        este(a, 16),
+        ahora: t0.add(const Duration(seconds: 3)),
+        accuracyMetros: 5,
+        velocidadKmh: 30,
+      );
+
+      expect(dist(a, r), greaterThan(5.0));
+    });
+
     test('en marcha sigue al fix nuevo sin el retraso de la media movil', () {
       final f = FiltroGps();
       var p = const LatLng(23.1400, -82.3600);
