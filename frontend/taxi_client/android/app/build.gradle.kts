@@ -7,15 +7,20 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Credenciales de firma de release. El archivo keystore.properties y el .jks
-// estan en .gitignore: no se suben al repo. Para compilar release en otra
-// maquina hay que copiarlos a mano.
+// Credenciales de firma de release. Se aceptan dos nombres porque el proyecto
+// ya venia usando `app/keystore.properties` y la documentacion de Flutter/Play
+// habla de `key.properties`; cualquiera de los dos funciona. Ambos y el .jks
+// estan en .gitignore: no se suben al repo.
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("app/keystore.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(keystorePropertiesFile.inputStream())
+val archivoFirma = listOf(
+    rootProject.file("key.properties"),
+    rootProject.file("app/key.properties"),
+    rootProject.file("app/keystore.properties"),
+).firstOrNull { it.exists() }
+if (archivoFirma != null) {
+    keystoreProperties.load(archivoFirma.inputStream())
 }
-val tieneKeystore = keystorePropertiesFile.exists() && keystoreProperties.getProperty("storeFile") != null
+val tieneKeystore = archivoFirma != null && keystoreProperties.getProperty("storeFile") != null
 
 android {
     namespace = "com.taxirapid.taxi_client"
@@ -34,7 +39,8 @@ android {
     defaultConfig {
         applicationId = "com.taxirapid.taxi_client"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // Play Store exige API 36 (Android 16) o superior para apps nuevas.
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -59,6 +65,16 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+
+            // R8 ofusca y elimina codigo Java/Kotlin no usado. El shrinker de
+            // recursos queda apagado para no borrar ficheros que Dart
+            // referencia por nombre de cadena (sonidos, etc.).
+            isMinifyEnabled = true
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

@@ -68,4 +68,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Actualización requerida'), findsOneWidget);
   });
+
+  testWidgets('cuando el backend deja de pedirla el cartel se cierra solo',
+      (tester) async {
+    update
+      ..depurarApkPendiente('https://example.com/static/app_latest.apk')
+      ..viajeActivo = false;
+
+    await disparar(tester);
+    expect(find.text('Actualización requerida'), findsOneWidget);
+
+    // El usuario instalo el APK por su cuenta y el backend ya dice "none".
+    update.depurarSinActualizacion();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Actualización requerida'), findsNothing);
+    expect(update.hayActualizacionPendiente, isFalse);
+  });
 }

@@ -1,10 +1,15 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Red: API, WebSocket y teselas del mapa, siempre por HTTPS. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <!-- GPS: el chofer comparte su posicion real para que el cliente lo vea
          en el mapa y para que el backend le asigne viajes cercanos. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <!-- Registro del chofer: fotos de rostro, licencia, carnet y vehiculo -->
-    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Fotos de registro: `image_picker` lanza la app de camara del sistema
+         (ACTION_IMAGE_CAPTURE), que no exige el permiso CAMERA en esta app.
+         Declararlo solo anadiria una revision extra en Play Store. -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
 
@@ -19,9 +24,9 @@
          notificacion, que se crea desde la app porque su nombre y su
          importancia se eligen en tiempo de ejecucion.
 
-         No se pide USE_FULL_SCREEN_INTENT ni ningun servicio en primer plano:
-         la oferta se avisa en el panel de notificaciones, sin ocupar la
-         pantalla ni despertarla. -->
+         No se pide USE_FULL_SCREEN_INTENT: la oferta se avisa en el panel de
+         notificaciones, sin ocupar la pantalla ni despertarla. El servicio en
+         primer plano (mas abajo) es solo para seguir en linea y con GPS. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
 
@@ -34,6 +39,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- El plugin del servicio declara RECEIVE_BOOT_COMPLETED y un receptor de
+         arranque, pero aqui `autoStartOnBoot` es false: el chofer debe pulsar
+         "En linea" tras reiniciar. Se quitan para no pedir un permiso que no
+         se usa. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove"/>
 
 
     <!-- Modo navegacion: el rumbo sale del giroscopio/brújula. -->
@@ -48,7 +59,9 @@
     <application
         android:label="RapiTaxi Chofer"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="false"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -87,6 +100,11 @@
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location"/>
+
+        <!-- Sin autoStartOnBoot no hay nada que hacer al reiniciar. -->
+        <receiver
+            android:name="id.flutter.flutter_background_service.BootReceiver"
+            tools:node="remove"/>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

@@ -13,7 +13,7 @@ import 'api_client.dart';
 /// User-Agent de la aplicación. Además se cachea en memoria para no repetir
 /// llamadas al cambiar de oferta/viaje.
 class GeocodeService {
-  static const String _userAgent = 'TaxiRapid/1.0 (flutter taxi_driver)';
+  static const String _userAgent = 'RapiTaxi/1.0 (flutter taxi_driver)';
 
   static final Map<String, String> _cache = {};
   static DateTime _lastRequest = DateTime.fromMillisecondsSinceEpoch(0);

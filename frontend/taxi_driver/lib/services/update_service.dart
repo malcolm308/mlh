@@ -35,6 +35,14 @@ class UpdateService {
   bool _consultando = false;
   bool _dialogoAbierto = false;
 
+  /// Contexto que abrio el dialogo. Se guarda para poder cerrarlo si una
+  /// reconsulta dice que ya no hace falta actualizar.
+  BuildContext? _dialogoContexto;
+
+  /// `PopScope.canPop` del dialogo. Se pone en true antes de hacer `pop()`
+  /// porque con `canPop: false` Flutter bloquea tambien el pop programatico.
+  ValueNotifier<bool>? _puedeCerrarDialogo;
+
   /// Un viaje esta en curso: no se puede tapar la pantalla con el dialogo.
   bool viajeActivo = false;
 
@@ -54,7 +62,18 @@ class UpdateService {
 
   /// Solo para pruebas: olvida el estado del dialogo entre casos.
   @visibleForTesting
-  void depurarReiniciarDialogo() => _dialogoAbierto = false;
+  void depurarReiniciarDialogo() {
+    _dialogoAbierto = false;
+    _dialogoContexto = null;
+    _puedeCerrarDialogo = null;
+  }
+
+  /// Solo para pruebas: simula que el backend dejo de pedir actualizacion.
+  @visibleForTesting
+  void depurarSinActualizacion() {
+    _apkPendiente = null;
+    _cerrarDialogoSiNoHaceFalta();
+  }
 
   /// Consulta el backend y aplica lo que corresponda.
   ///
@@ -62,6 +81,9 @@ class UpdateService {
   /// tiene. Se puede llamar al iniciar, al recuperar sesion y al volver del
   /// segundo plano.
   Future<void> revisar() async {
+    // Build de Google Play: las actualizaciones las gestiona Play. No se
+    // descargan parches ni se ofrece un APK externo (Device and Network Abuse).
+    if (ApiConfig.playStoreBuild) return;
     if (_consultando) return;
     _consultando = true;
     try {
@@ -76,10 +98,12 @@ class UpdateService {
         'app': appId,
       };
       if (abi.isNotEmpty) parametros['abi'] = abi;
-      final uri = Uri.parse(ApiConfig.appVersion())
-          .replace(queryParameters: parametros);
-      final respuesta =
-          await http.get(uri).timeout(const Duration(seconds: 25));
+      final uri = Uri.parse(
+        ApiConfig.appVersion(),
+      ).replace(queryParameters: parametros);
+      final respuesta = await http
+          .get(uri)
+          .timeout(const Duration(seconds: 25));
       if (respuesta.statusCode != 200) {
         debugPrint('[OTA] /app/version respondio ${respuesta.statusCode}');
         return;
@@ -100,6 +124,7 @@ class UpdateService {
         default:
           _apkPendiente = null;
       }
+      if (_apkPendiente == null) _cerrarDialogoSiNoHaceFalta();
     } catch (e) {
       // Sin red, con Render dormido o con un JSON raro: se reintenta en la
       // proxima apertura. No se molesta al chofer.
@@ -117,10 +142,9 @@ class UpdateService {
     final bloque = datos['patch'];
     final parche = bloque is Map<String, dynamic> ? bloque : datos;
 
-    final version =
-        (parche['version'] ?? datos['patch_version'] ?? '').toString();
-    final url =
-        (parche['patch_url'] ?? datos['patch_url'] ?? '').toString();
+    final version = (parche['version'] ?? datos['patch_version'] ?? '')
+        .toString();
+    final url = (parche['patch_url'] ?? datos['patch_url'] ?? '').toString();
     final md5 = (parche['md5'] ?? datos['patch_md5'] ?? '').toString();
     final destinoCrudo =
         parche['target_version_code'] ?? datos['target_version_code'];
@@ -133,8 +157,10 @@ class UpdateService {
         ? destinoCrudo.toInt()
         : int.tryParse('$destinoCrudo');
     if (destino != null && destino != codigoInstalado) {
-      debugPrint('[OTA] parche $version es para vc=$destino, '
-          'instalado vc=$codigoInstalado: ignorado');
+      debugPrint(
+        '[OTA] parche $version es para vc=$destino, '
+        'instalado vc=$codigoInstalado: ignorado',
+      );
       return;
     }
     if (_parchesIntentados.contains(version)) return;
@@ -150,56 +176,91 @@ class UpdateService {
       ),
     );
     if (resultado.ok) {
-      debugPrint('[OTA] parche $version instalado. '
-          'Se aplicara al reabrir la app.');
+      debugPrint(
+        '[OTA] parche $version instalado. '
+        'Se aplicara al reabrir la app.',
+      );
     } else {
       // Plan B: si el parche no se puede instalar (md5, base distinta o fallo
       // del plugin), se avisa con el APK completo que ya manda el backend
       // para esta ABI. Sin esto la app se quedaba atascada en silencio.
       final urlApk = (datos['url_apk'] ?? '').toString();
       if (urlApk.isNotEmpty) _apkPendiente = urlApk;
-      debugPrint('[OTA] parche $version fallo: '
-          '${resultado.error?.name} ${resultado.message ?? ''} '
-          '-> APK de respaldo: $urlApk');
+      debugPrint(
+        '[OTA] parche $version fallo: '
+        '${resultado.error?.name} ${resultado.message ?? ''} '
+        '-> APK de respaldo: $urlApk',
+      );
     }
   }
 
   /// Muestra el dialogo bloqueante si hace falta y no hay viaje en curso.
   ///
   /// El dialogo no se puede cerrar con el boton atras ni tocando fuera: la
-  /// unica salida es instalar la version nueva.
+  /// unica salida es instalar la version nueva, salvo que una reconsulta
+  /// demuestre que el backend ya no la exige ([_cerrarDialogoSiNoHaceFalta]).
   Future<void> mostrarSiHaceFalta(BuildContext context) async {
     final url = _apkPendiente;
     if (url == null || viajeActivo || _dialogoAbierto) return;
     if (!context.mounted) return;
 
+    final puedeCerrar = ValueNotifier<bool>(false);
+    _puedeCerrarDialogo = puedeCerrar;
+    _dialogoContexto = context;
     _dialogoAbierto = true;
     try {
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
         useRootNavigator: true,
-        builder: (ctx) => PopScope(
-          canPop: false,
-          child: AlertDialog(
-            title: const Text('Actualización requerida'),
-            content: const Text(
-              'Tu versión ya no es compatible con el servicio. '
-              'Instala la nueva versión para seguir recibiendo viajes. '
-              'Tu cuenta y tus ganancias no se pierden.',
-            ),
-            actions: [
-              FilledButton(
-                onPressed: () => _abrirDescarga(ctx, url),
-                child: const Text('Actualizar ahora'),
+        builder: (ctx) => ValueListenableBuilder<bool>(
+          valueListenable: puedeCerrar,
+          builder: (contextoDialogo, permitir, child) => PopScope(
+            canPop: permitir,
+            child: AlertDialog(
+              title: const Text('Actualización requerida'),
+              content: const Text(
+                'Tu versión ya no es compatible con el servicio. '
+                'Instala la nueva versión para seguir recibiendo viajes. '
+                'Tu cuenta y tus ganancias no se pierden.',
               ),
-            ],
+              actions: [
+                FilledButton(
+                  onPressed: () => _abrirDescarga(contextoDialogo, url),
+                  child: const Text('Actualizar ahora'),
+                ),
+              ],
+            ),
           ),
         ),
       );
     } finally {
       _dialogoAbierto = false;
+      _dialogoContexto = null;
+      _puedeCerrarDialogo = null;
+      puedeCerrar.dispose();
     }
+  }
+
+  /// Cierra el aviso si una reconsulta (`none` o `patch`) dejo sin efecto la
+  /// exigencia de actualizar.
+  ///
+  /// Hace falta porque el dialogo se queda montado aunque `_apkPendiente` pase
+  /// a null: el chofer podia instalar el APK por su cuenta y volver a la
+  /// pantalla antigua, y el cartel seguia ahi. Con `canPop: false` Flutter
+  /// bloquea incluso el `pop()` programatico, asi que primero se habilita el
+  /// cierre y se espera al siguiente frame para que PopScope se reconstruya.
+  void _cerrarDialogoSiNoHaceFalta() {
+    final contexto = _dialogoContexto;
+    final puedeCerrar = _puedeCerrarDialogo;
+    if (!_dialogoAbierto || contexto == null || puedeCerrar == null) return;
+    if (!contexto.mounted) return;
+
+    puedeCerrar.value = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!contexto.mounted || !_dialogoAbierto) return;
+      Navigator.of(contexto, rootNavigator: true).pop();
+    });
   }
 
   Future<void> _abrirDescarga(BuildContext context, String url) async {
@@ -208,7 +269,9 @@ class UpdateService {
     final abierto = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!abierto && context.mounted) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(content: Text('No se pudo abrir el navegador. Descarga: $url')),
+        SnackBar(
+          content: Text('No se pudo abrir el navegador. Descarga: $url'),
+        ),
       );
     }
   }

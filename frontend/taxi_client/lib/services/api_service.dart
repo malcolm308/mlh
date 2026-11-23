@@ -10,7 +10,7 @@ import 'token_store.dart';
 
 export 'api_client.dart' show ApiException;
 
-/// Cliente HTTP de alto nivel para el backend FastAPI de TaxiRapid.
+/// Cliente HTTP de alto nivel para el backend FastAPI de RapiTaxi.
 class ApiService {
   final String base;
 

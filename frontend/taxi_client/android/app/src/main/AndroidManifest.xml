@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Red: API, WebSocket y teselas del mapa, siempre por HTTPS. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <!-- GPS: el pasajero marca su ubicacion real como punto de recogida. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
@@ -6,7 +9,9 @@
     <application
         android:label="RapiTaxi"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="false"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

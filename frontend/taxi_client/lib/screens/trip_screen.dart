@@ -38,8 +38,8 @@ class _TripScreenState extends State<TripScreen> {
   final ClientMapController _mapController = ClientMapController();
   ClientTrip? _trip;
   bool _cancelling = false;
-  bool _popped = false;  // Flag to prevent double pop
-  bool _avisoChoferCanceloMostrado = false;  // Evita mostrar el aviso dos veces
+  bool _popped = false; // Flag to prevent double pop
+  bool _avisoChoferCanceloMostrado = false; // Evita mostrar el aviso dos veces
   String? _error;
   Timer? _poll;
 
@@ -169,14 +169,14 @@ class _TripScreenState extends State<TripScreen> {
         // Los eventos especificos se mantienen por compatibilidad con apps
         // viejas y como respaldo.
         case 'driver_on_the_way' ||
-              'driver_arrived' ||
-              'trip_accepted' ||
-              'trip_started' ||
-              'trip_status_updated' ||
-              'trip_cancelled' ||
-              'trip_cancelled_by_driver' ||
-              'trip_expired' ||
-              'trip_completed':
+            'driver_arrived' ||
+            'trip_accepted' ||
+            'trip_started' ||
+            'trip_status_updated' ||
+            'trip_cancelled' ||
+            'trip_cancelled_by_driver' ||
+            'trip_expired' ||
+            'trip_completed':
           unawaited(_refresh());
         case 'trip_route' || 'trip_route_updated':
           // El chofer es el DUEÑO de la ruta: replica SU geometria (mismas
@@ -200,10 +200,7 @@ class _TripScreenState extends State<TripScreen> {
       }
     };
     // arranca el socket (token del usuario sesionado) y suscribe el viaje
-    _ws.iniciar(
-      clienteId: widget.clientId,
-      token: widget.api.token ?? '',
-    );
+    _ws.iniciar(clienteId: widget.clientId, token: widget.api.token ?? '');
     _ws.suscribirViaje(widget.tripId);
   }
 
@@ -245,13 +242,18 @@ class _TripScreenState extends State<TripScreen> {
         _seguidorRuta.reiniciar();
         // El panel cambia de alto al cambiar de fase: se le da un respiro al
         // PlatformView antes de volver a mover la camara.
-        _pausaCamaraHasta =
-            DateTime.now().add(const Duration(milliseconds: 450));
+        _pausaCamaraHasta = DateTime.now().add(
+          const Duration(milliseconds: 450),
+        );
       }
-      if (t.status == 'completed' || t.status == 'cancelled' || t.status == 'expired') {
+      if (t.status == 'completed' ||
+          t.status == 'cancelled' ||
+          t.status == 'expired') {
         _poll?.cancel();
       }
-      if (t.status == 'cancelled' && t.cancelledBy == 'driver' && !_avisoChoferCanceloMostrado) {
+      if (t.status == 'cancelled' &&
+          t.cancelledBy == 'driver' &&
+          !_avisoChoferCanceloMostrado) {
         _avisoChoferCanceloMostrado = true;
         _aviso_('El chófer ha cancelado el viaje');
       }
@@ -282,6 +284,7 @@ class _TripScreenState extends State<TripScreen> {
         await _loadRoute(t.tripId);
       }
     } catch (e) {
+      debugPrint('[TripScreen] no se pudo cargar ${widget.tripId}: $e');
       if (mounted && !_popped) setState(() => _error = '$e');
     } finally {
       _refrescando = false;
@@ -335,7 +338,10 @@ class _TripScreenState extends State<TripScreen> {
         // Ruta PLANEADA por calles, tanto esperando como en curso.
         final pickup = t.pickupLocation ?? t.requestLocation;
         if (pickup != null && t.dropoffLocation != null) {
-          final planificada = await OsrmService.route(pickup, t.dropoffLocation!);
+          final planificada = await OsrmService.route(
+            pickup,
+            t.dropoffLocation!,
+          );
           if (!mounted) return;
           setState(() => _route = planificada?.points ?? const []);
         }
@@ -386,11 +392,13 @@ class _TripScreenState extends State<TripScreen> {
     }
     final rumbo = _rumboParaCamara();
     if (rumbo == null) return;
-    unawaited(_mapController.animar3D(
-      vehiculo,
-      rumbo,
-      zoom: ApiConfig.zoomNavegacion(velocidadKmh: _velocidadKmh),
-    ));
+    unawaited(
+      _mapController.animar3D(
+        vehiculo,
+        rumbo,
+        zoom: ApiConfig.zoomNavegacion(velocidadKmh: _velocidadKmh),
+      ),
+    );
   }
 
   /// Rumbo de la camara, SIEMPRE calculado sobre la ruta dibujada.
@@ -484,7 +492,8 @@ class _TripScreenState extends State<TripScreen> {
     }
 
     final rumbo = _rumboParaCamara();
-    final activo = t.status == 'accepted' ||
+    final activo =
+        t.status == 'accepted' ||
         t.status == 'driver_on_the_way' ||
         t.status == 'in_progress';
 
@@ -631,10 +640,12 @@ class _TripScreenState extends State<TripScreen> {
     } catch (e) {
       if (!mounted || _popped) return;
       setState(() => _cancelling = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('$e'),
-        backgroundColor: Theme.of(context).colorScheme.error,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$e'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
     }
   }
 
@@ -648,7 +659,8 @@ class _TripScreenState extends State<TripScreen> {
   Future<void> _salirDelViaje() async {
     if (_popped) return;
     final status = _trip?.status;
-    final sigueVivo = status == 'requested' ||
+    final sigueVivo =
+        status == 'requested' ||
         status == 'accepted' ||
         status == 'driver_on_the_way' ||
         status == 'driver_arrived' ||
@@ -656,8 +668,14 @@ class _TripScreenState extends State<TripScreen> {
     if (!sigueVivo) {
       _popped = true;
       _poll?.cancel();
+      // `expired` debe devolver 'retry', lo mismo que el boton visible:
+      // asi el home reabre el formulario con la misma recogida/destino.
       Navigator.of(context).pop(
-        status == 'completed' ? 'completed' : 'cancelled',
+        status == 'completed'
+            ? 'completed'
+            : status == 'expired'
+            ? 'retry'
+            : 'cancelled',
       );
       return;
     }
@@ -679,6 +697,79 @@ class _TripScreenState extends State<TripScreen> {
       default:
         return 0;
     }
+  }
+
+  /// Pantalla mientras llega el primer `GET /trips/{id}`.
+  ///
+  /// Antes aqui solo habia un `CircularProgressIndicator`: si el GET fallaba
+  /// (por ejemplo, un 500 del backend), `_error` se guardaba pero solo se
+  /// pintaba dentro del panel de detalles, al que nunca se llegaba porque
+  /// `_trip` seguia a null. La pantalla se quedaba en blanco para siempre.
+  Widget _buildCargandoOError() {
+    final error = _error;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: error == null
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text(
+                    'Cargando el viaje...',
+                    style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+                  ),
+                ],
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.cloud_off_outlined,
+                    size: 40,
+                    color: Color(0xFF9CA3AF),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'No se pudo cargar el viaje',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    error,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          _popped = true;
+                          _poll?.cancel();
+                          Navigator.of(context).pop('cancelled');
+                        },
+                        child: const Text('Volver'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: () {
+                          setState(() => _error = null);
+                          unawaited(_refresh());
+                        },
+                        child: const Text('Reintentar'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+      ),
+    );
   }
 
   @override
@@ -706,107 +797,108 @@ class _TripScreenState extends State<TripScreen> {
         unawaited(_salirDelViaje());
       },
       child: Scaffold(
-      // Sin AppBar: el mapa ocupa tambien la franja superior. La X de salida
-      // flota sobre el mapa para no robarle ancho a la vista ni dejar una
-      // barra con el codigo del viaje (dato tecnico que no aporta nada).
-      body: t == null
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: Stack(
-                    children: [
-                      ClientMapView(
-                        controller: _mapController,
-                        initialCenter:
-                            t.requestLocation ?? ApiConfig.defaultClientLocation,
-                        initialZoom: ApiConfig.defaultZoom,
-                        minZoom: ApiConfig.minZoom.toDouble(),
-                        maxZoom: ApiConfig.maxZoom.toDouble(),
-                        route: _route,
-                        // Fase 1: SIN recta de dos puntos en el viaje. Si
-                        // OSRM falla, no se dibuja nada: la app re-pide en
-                        // el siguiente sondeo de 3 s.
-                        straightLine: const [],
-                        // Ruta real por calles: AZUL OSCURO, grosor 5 (Fase 1).
-                        // La recta de dos puntos SOLO queda como respaldo si
-                        // OSRM fallo, y sale PUNTEADA y sutil (ver wrapper).
-                        routeColor: const Color(0xFF0047B3),
-                        routeWidth: 5,
-                        // Fallback punteado, azul muy tenue: visible pero no
-                        // confundible con la ruta real.
-                        straightColor: const Color(0x33007AFF),
-                        pins: [
-                          if (_driverPos != null)
-                            MapPin(
-                              _driverPos!,
-                              color: const Color(0xFF007AFF),
-                              // Reducido un 25 % (era 19): tapaba la calle de
-                              // al lado y no dejaba ver el trayecto util.
-                              radius: 14,
-                            ),
-                          if (t.requestLocation != null)
-                            MapPin(
-                              t.requestLocation!,
-                              color: Colors.green,
-                              radius: 19,
-                            ),
-                          if (t.dropoffLocation != null)
-                            MapPin(
-                              t.dropoffLocation!,
-                              color: Colors.red,
-                              radius: 19,
-                            ),
-                        ],
-                        // Al tocar o arrastrar el mapa deja de seguir al
-                        // vehiculo, como en cualquier navegador.
-                        onTap: (_) => setState(() => _siguiendo = false),
-                        onGesture: () {
-                          if (_siguiendo) setState(() => _siguiendo = false);
-                        },
-                      ),
-                      // Salir del seguimiento sin ocupar una barra entera: la
-                      // X flota arriba a la izquierda sobre el mapa. El estado
-                      // ya se ve en el stepper del panel inferior.
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        child: SafeArea(
-                          bottom: false,
-                          child: Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: FloatingActionButton.small(
-                              heroTag: 'salirViaje',
-                              tooltip: 'Salir o cancelar el viaje',
-                              backgroundColor: Colors.white,
-                              foregroundColor: AppColors.tinta,
-                              onPressed: () => unawaited(_salirDelViaje()),
-                              child: const Icon(Icons.close),
+        // Sin AppBar: el mapa ocupa tambien la franja superior. La X de salida
+        // flota sobre el mapa para no robarle ancho a la vista ni dejar una
+        // barra con el codigo del viaje (dato tecnico que no aporta nada).
+        body: t == null
+            ? _buildCargandoOError()
+            : Column(
+                children: [
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        ClientMapView(
+                          controller: _mapController,
+                          initialCenter:
+                              t.requestLocation ??
+                              ApiConfig.defaultClientLocation,
+                          initialZoom: ApiConfig.defaultZoom,
+                          minZoom: ApiConfig.minZoom.toDouble(),
+                          maxZoom: ApiConfig.maxZoom.toDouble(),
+                          route: _route,
+                          // Fase 1: SIN recta de dos puntos en el viaje. Si
+                          // OSRM falla, no se dibuja nada: la app re-pide en
+                          // el siguiente sondeo de 3 s.
+                          straightLine: const [],
+                          // Ruta real por calles: AZUL OSCURO, grosor 5 (Fase 1).
+                          // La recta de dos puntos SOLO queda como respaldo si
+                          // OSRM fallo, y sale PUNTEADA y sutil (ver wrapper).
+                          routeColor: const Color(0xFF0047B3),
+                          routeWidth: 5,
+                          // Fallback punteado, azul muy tenue: visible pero no
+                          // confundible con la ruta real.
+                          straightColor: const Color(0x33007AFF),
+                          pins: [
+                            if (_driverPos != null)
+                              MapPin(
+                                _driverPos!,
+                                color: const Color(0xFF007AFF),
+                                // Reducido un 25 % (era 19): tapaba la calle de
+                                // al lado y no dejaba ver el trayecto util.
+                                radius: 14,
+                              ),
+                            if (t.requestLocation != null)
+                              MapPin(
+                                t.requestLocation!,
+                                color: Colors.green,
+                                radius: 19,
+                              ),
+                            if (t.dropoffLocation != null)
+                              MapPin(
+                                t.dropoffLocation!,
+                                color: Colors.red,
+                                radius: 19,
+                              ),
+                          ],
+                          // Al tocar o arrastrar el mapa deja de seguir al
+                          // vehiculo, como en cualquier navegador.
+                          onTap: (_) => setState(() => _siguiendo = false),
+                          onGesture: () {
+                            if (_siguiendo) setState(() => _siguiendo = false);
+                          },
+                        ),
+                        // Salir del seguimiento sin ocupar una barra entera: la
+                        // X flota arriba a la izquierda sobre el mapa. El estado
+                        // ya se ve en el stepper del panel inferior.
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          child: SafeArea(
+                            bottom: false,
+                            child: Padding(
+                              padding: const EdgeInsets.all(10),
+                              child: FloatingActionButton.small(
+                                heroTag: 'salirViaje',
+                                tooltip: 'Salir o cancelar el viaje',
+                                backgroundColor: Colors.white,
+                                foregroundColor: AppColors.tinta,
+                                onPressed: () => unawaited(_salirDelViaje()),
+                                child: const Icon(Icons.close),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      // Boton flotante "Centrar": SIEMPRE visible, para que el
-                      // pasajero pueda volver a la vista 3D del vehiculo en
-                      // cualquier momento. Si ya va siguiendo, el toque
-                      // re-aplica el encuadre; la proxima indicacion del
-                      // sondeo (3 s) re-anima la camara con bearing + tilt.
-                      Positioned(
-                        right: 12,
-                        bottom: 12,
-                        child: FloatingActionButton.small(
-                          heroTag: 'recentrar',
-                          tooltip: 'Volver a seguir al vehiculo (vista 3D)',
-                          onPressed: _recentrarEnVehiculo,
-                          child: const Icon(Icons.my_location),
+                        // Boton flotante "Centrar": SIEMPRE visible, para que el
+                        // pasajero pueda volver a la vista 3D del vehiculo en
+                        // cualquier momento. Si ya va siguiendo, el toque
+                        // re-aplica el encuadre; la proxima indicacion del
+                        // sondeo (3 s) re-anima la camara con bearing + tilt.
+                        Positioned(
+                          right: 12,
+                          bottom: 12,
+                          child: FloatingActionButton.small(
+                            heroTag: 'recentrar',
+                            tooltip: 'Volver a seguir al vehiculo (vista 3D)',
+                            onPressed: _recentrarEnVehiculo,
+                            child: const Icon(Icons.my_location),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                _buildDetailsPanel(),
-              ],
-            ),
+                  _buildDetailsPanel(),
+                ],
+              ),
       ),
     );
   }
@@ -814,7 +906,13 @@ class _TripScreenState extends State<TripScreen> {
   Widget _buildDetailsPanel() {
     final t = _trip!;
     final scheme = Theme.of(context).colorScheme;
-    final steps = ['Solicitado', 'Chofer', 'Recogida', 'En curso', 'Completado'];
+    final steps = [
+      'Solicitado',
+      'Chofer',
+      'Recogida',
+      'En curso',
+      'Completado',
+    ];
     const stepIcons = [
       Icons.access_time_rounded,
       Icons.directions_car_outlined,
@@ -930,7 +1028,9 @@ class _TripScreenState extends State<TripScreen> {
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: AppColors.ambar.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(14),
@@ -950,11 +1050,12 @@ class _TripScreenState extends State<TripScreen> {
                   ] else if (t.cancelledBy == 'driver')
                     WarningBox(
                       title: 'El chófer ha cancelado el viaje',
-                      message: (t.cancellationReason != null &&
+                      message:
+                          (t.cancellationReason != null &&
                               t.cancellationReason!.trim().isNotEmpty)
                           ? t.cancellationReason!
                           : 'El chófer no pudo continuar con tu viaje. '
-                              'Solicita uno nuevo cuando quieras.',
+                                'Solicita uno nuevo cuando quieras.',
                       icon: Icons.cancel_outlined,
                     )
                   else
@@ -995,8 +1096,10 @@ class _TripScreenState extends State<TripScreen> {
                 // ---------------- TARIFA ESTIMADA ----------------
                 Container(
                   width: double.infinity,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFF8D6),
                     borderRadius: BorderRadius.circular(18),
@@ -1021,7 +1124,9 @@ class _TripScreenState extends State<TripScreen> {
                             Text(
                               'Al final se cobra lo recorrido, no lo estimado.',
                               style: TextStyle(
-                                  fontSize: 11, color: AppColors.secundario),
+                                fontSize: 11,
+                                color: AppColors.secundario,
+                              ),
                             ),
                           ],
                         ),
@@ -1042,8 +1147,10 @@ class _TripScreenState extends State<TripScreen> {
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(_error!,
-                        style: TextStyle(color: scheme.error, fontSize: 12)),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(color: scheme.error, fontSize: 12),
+                    ),
                   ),
 
                 // ---------------- CANCELAR / LISTO ----------------
@@ -1057,13 +1164,13 @@ class _TripScreenState extends State<TripScreen> {
                     label: expirado
                         ? 'Volver a pedir viaje'
                         : cancelado
-                            ? 'Volver al inicio'
-                            : 'Listo',
+                        ? 'Volver al inicio'
+                        : 'Listo',
                     icon: expirado
                         ? Icons.refresh_rounded
                         : cancelado
-                            ? Icons.arrow_back_rounded
-                            : Icons.check_rounded,
+                        ? Icons.arrow_back_rounded
+                        : Icons.check_rounded,
                     onPressed: () {
                       if (_popped) return; // Prevent double pop
                       _popped = true;
@@ -1072,8 +1179,8 @@ class _TripScreenState extends State<TripScreen> {
                       final result = expirado
                           ? 'retry'
                           : cancelado
-                              ? 'cancelled'
-                              : null;
+                          ? 'cancelled'
+                          : null;
                       Navigator.of(context).pop(result);
                     },
                   ),
@@ -1235,19 +1342,25 @@ class _TripScreenState extends State<TripScreen> {
                 width: 16,
                 height: 16,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Color(0xFFD93840)))
+                  strokeWidth: 2,
+                  color: Color(0xFFD93840),
+                ),
+              )
             : const Icon(Icons.close_rounded),
         label: Text(_cancelling ? 'Cancelando...' : 'Cancelar viaje'),
         style: FilledButton.styleFrom(
           backgroundColor: const Color(0xFFFBEAEA),
           foregroundColor: const Color(0xFFD93840),
           disabledBackgroundColor: const Color(0xFFFBEAEA),
-          disabledForegroundColor:
-              const Color(0xFFD93840).withValues(alpha: 0.5),
+          disabledForegroundColor: const Color(
+            0xFFD93840,
+          ).withValues(alpha: 0.5),
           elevation: 0,
           shape: const StadiumBorder(),
-          textStyle:
-              const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
+          textStyle: const TextStyle(
+            fontSize: 14.5,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );
@@ -1262,7 +1375,8 @@ class _TripScreenState extends State<TripScreen> {
     final scheme = Theme.of(context).colorScheme;
     final moneda = t.currency.isNotEmpty ? t.currency : 'CUP';
     final total = t.totalFare ?? t.precioEstimado;
-    String dinero(double? v) => v == null ? '—' : '${v.toStringAsFixed(2)} $moneda';
+    String dinero(double? v) =>
+        v == null ? '—' : '${v.toStringAsFixed(2)} $moneda';
 
     return Scaffold(
       appBar: AppBar(
@@ -1283,7 +1397,7 @@ class _TripScreenState extends State<TripScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Gracias por viajar con TaxiRapid',
+              'Gracias por viajar con RapiTaxi',
               textAlign: TextAlign.center,
               style: TextStyle(color: scheme.onSurfaceVariant),
             ),
@@ -1292,13 +1406,19 @@ class _TripScreenState extends State<TripScreen> {
               elevation: 0,
               color: scheme.primaryContainer,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18)),
+                borderRadius: BorderRadius.circular(18),
+              ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 20,
+                  horizontal: 18,
+                ),
                 child: Column(
                   children: [
-                    Text('Total pagado',
-                        style: TextStyle(color: scheme.onPrimaryContainer)),
+                    Text(
+                      'Total pagado',
+                      style: TextStyle(color: scheme.onPrimaryContainer),
+                    ),
                     const SizedBox(height: 6),
                     Text(
                       total == null ? '—' : total.toStringAsFixed(2),
@@ -1308,55 +1428,79 @@ class _TripScreenState extends State<TripScreen> {
                         color: scheme.onPrimaryContainer,
                       ),
                     ),
-                    Text(moneda,
-                        style: TextStyle(
-                            fontSize: 15, color: scheme.onPrimaryContainer)),
+                    Text(
+                      moneda,
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: scheme.onPrimaryContainer,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 22),
-            Text('Recibo',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
+            Text(
+              'Recibo',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
             const Divider(height: 18),
-            _row('Distancia recorrida',
-                t.distanciaKm == null ? '—' : '${t.distanciaKm!.toStringAsFixed(2)} km'),
+            _row(
+              'Distancia recorrida',
+              t.distanciaKm == null
+                  ? '—'
+                  : '${t.distanciaKm!.toStringAsFixed(2)} km',
+            ),
             _row('Tarifa base', dinero(t.baseFare)),
             _row('Por distancia', dinero(t.distanceFare)),
             _row('Por tiempo', dinero(t.timeFare)),
             if ((t.tip ?? 0) > 0) _row('Propina', dinero(t.tip)),
             if ((t.descuentoCliente ?? 0) > 0)
-              _row('Descuento promoción', '-${(t.descuentoCliente ?? 0).toStringAsFixed(2)} $moneda'),
-            if ((t.descuentoReferido ?? 0) > 0)
-              _row('Descuento referido', '-${(t.descuentoReferido ?? 0).toStringAsFixed(2)} $moneda'),
-            if ((t.descuentoPrimerViaje ?? 0) > 0)
-              _row('Descuento 1er Viaje', '-${(t.descuentoPrimerViaje ?? 0).toStringAsFixed(2)} $moneda'),
-            if ((t.recargoReintento ?? 0) > 0)
-              _row('Recargo reintento', '+${(t.recargoReintento ?? 0).toStringAsFixed(2)} $moneda'),
-            if ((t.recargoTransferencia ?? 0) > 0)
-              _row('Recargo transferencia', '+${(t.recargoTransferencia ?? 0).toStringAsFixed(2)} $moneda'),
-            if (t.campanaPromocional) ...[
-              _row('Saldo promocional usado',
-                  '-${(t.saldoPromocionalUsado ?? 0).toStringAsFixed(2)} $moneda'),
               _row(
-                  (t.paymentMethod ?? '')
-                          .toLowerCase()
-                          .contains('transferencia')
-                      ? 'Pagado por transferencia'
-                      : (t.paymentMethod ?? '')
-                              .toLowerCase()
-                              .contains('billetera')
-                          ? 'Pagado con Billetera'
-                          : 'Pagado en efectivo',
-                  '${(t.montoCobrado ?? 0).toStringAsFixed(2)} $moneda'),
+                'Descuento promoción',
+                '-${(t.descuentoCliente ?? 0).toStringAsFixed(2)} $moneda',
+              ),
+            if ((t.descuentoReferido ?? 0) > 0)
+              _row(
+                'Descuento referido',
+                '-${(t.descuentoReferido ?? 0).toStringAsFixed(2)} $moneda',
+              ),
+            if ((t.descuentoPrimerViaje ?? 0) > 0)
+              _row(
+                'Descuento 1er Viaje',
+                '-${(t.descuentoPrimerViaje ?? 0).toStringAsFixed(2)} $moneda',
+              ),
+            if ((t.recargoReintento ?? 0) > 0)
+              _row(
+                'Recargo reintento',
+                '+${(t.recargoReintento ?? 0).toStringAsFixed(2)} $moneda',
+              ),
+            if ((t.recargoTransferencia ?? 0) > 0)
+              _row(
+                'Recargo transferencia',
+                '+${(t.recargoTransferencia ?? 0).toStringAsFixed(2)} $moneda',
+              ),
+            if (t.campanaPromocional) ...[
+              _row(
+                'Saldo promocional usado',
+                '-${(t.saldoPromocionalUsado ?? 0).toStringAsFixed(2)} $moneda',
+              ),
+              _row(
+                (t.paymentMethod ?? '').toLowerCase().contains('transferencia')
+                    ? 'Pagado por transferencia'
+                    : (t.paymentMethod ?? '').toLowerCase().contains(
+                        'billetera',
+                      )
+                    ? 'Pagado con Billetera'
+                    : 'Pagado en efectivo',
+                '${(t.montoCobrado ?? 0).toStringAsFixed(2)} $moneda',
+              ),
             ],
             if (!t.campanaPromocional &&
                 (t.paymentMethod ?? '').toLowerCase().contains('billetera'))
-              _row('Debitado de tu billetera',
-                  dinero(t.montoCobrado ?? total)),
+              _row('Debitado de tu billetera', dinero(t.montoCobrado ?? total)),
             if ((t.paymentMethod ?? '').toLowerCase().contains('billetera') &&
                 (t.montoCobrado ?? total ?? 0) + 0.009 <
                     ((total ?? 0) - (t.saldoPromocionalUsado ?? 0)))
@@ -1370,11 +1514,12 @@ class _TripScreenState extends State<TripScreen> {
                 ),
               ),
             const SizedBox(height: 22),
-            Text('Conductor y vehículo',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
+            Text(
+              'Conductor y vehículo',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
             const Divider(height: 18),
             _row('Chofer', _nombreChofer(t)),
             _row('Vehículo', t.vehicleType.isEmpty ? '—' : t.vehicleType),
@@ -1401,13 +1546,16 @@ class _TripScreenState extends State<TripScreen> {
                       ? const SizedBox(
                           width: 14,
                           height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.block_rounded, size: 16),
                   label: const Text('Bloquear chófer'),
                   style: TextButton.styleFrom(
                     foregroundColor: AppColors.ambar,
                     textStyle: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                     minimumSize: const Size(0, 34),
                   ),
                 ),
@@ -1421,8 +1569,10 @@ class _TripScreenState extends State<TripScreen> {
               label: const Text('Finalizar'),
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(52),
-                textStyle:
-                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                textStyle: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -1449,27 +1599,29 @@ class _TripScreenState extends State<TripScreen> {
   /// salian del ancho (clipping "RecogidaPaseo de Martí...") y no se podian
   /// leer completas.
   Widget _row(String label, String value, {bool bold = false}) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label,
-                style: const TextStyle(
-                    fontWeight: FontWeight.w500, height: 1.25)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                value,
-                textAlign: TextAlign.end,
-                softWrap: true,
-                style: TextStyle(
-                    height: 1.25,
-                    fontWeight: bold ? FontWeight.bold : FontWeight.normal),
-              ),
-            ),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w500, height: 1.25),
         ),
-      );
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            softWrap: true,
+            style: TextStyle(
+              height: 1.25,
+              fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 
   /// URL absoluta de la foto de perfil del chofer (el backend la manda como
   /// ruta relativa `/trips/{id}/driver-photo`).
@@ -1560,8 +1712,11 @@ class _TripScreenState extends State<TripScreen> {
                   backgroundColor: AppColors.acentoSuave,
                   foregroundImage: foto == null ? null : NetworkImage(foto),
                   onForegroundImageError: foto == null ? null : (_, _) {},
-                  child: const Icon(Icons.person,
-                      size: 28, color: AppColors.ambar),
+                  child: const Icon(
+                    Icons.person,
+                    size: 28,
+                    color: AppColors.ambar,
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -1618,13 +1773,16 @@ class _TripScreenState extends State<TripScreen> {
                   ? const SizedBox(
                       width: 14,
                       height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.block_rounded, size: 16),
               label: const Text('Bloquear chófer'),
               style: TextButton.styleFrom(
                 foregroundColor: AppColors.ambar,
                 textStyle: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 30),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -1674,7 +1832,10 @@ class _TripScreenState extends State<TripScreen> {
                 'No volverás a recibir viajes de ${_nombreChofer(t)}. '
                 'Cuéntanos qué pasó.',
                 style: const TextStyle(
-                    fontSize: 13, color: AppColors.secundario, height: 1.35),
+                  fontSize: 13,
+                  color: AppColors.secundario,
+                  height: 1.35,
+                ),
               ),
               const SizedBox(height: 14),
               for (final m in _motivosBloqueo)
@@ -1688,7 +1849,9 @@ class _TripScreenState extends State<TripScreen> {
                       onTap: () => Navigator.of(ctx).pop(m),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 13),
+                          horizontal: 14,
+                          vertical: 13,
+                        ),
                         child: Row(
                           children: [
                             Expanded(
@@ -1701,8 +1864,11 @@ class _TripScreenState extends State<TripScreen> {
                                 ),
                               ),
                             ),
-                            const Icon(Icons.chevron_right_rounded,
-                                size: 20, color: AppColors.secundario),
+                            const Icon(
+                              Icons.chevron_right_rounded,
+                              size: 20,
+                              color: AppColors.secundario,
+                            ),
                           ],
                         ),
                       ),
@@ -1744,7 +1910,9 @@ class _TripScreenState extends State<TripScreen> {
   /// un texto generico.
   String _nombreChofer(ClientTrip t) {
     final nombre = t.driverName?.trim();
-    if (nombre != null && nombre.isNotEmpty && nombre != t.driverId) return nombre;
+    if (nombre != null && nombre.isNotEmpty && nombre != t.driverId) {
+      return nombre;
+    }
     return 'Chofer asignado';
   }
 
@@ -1763,11 +1931,9 @@ class _TripScreenState extends State<TripScreen> {
   /// Abre el dialer del telefono o el chat de WhatsApp con el chofer.
   void _comunicar(String telefono, {required bool whatsapp}) async {
     if (whatsapp) {
-      final uri = Uri.https(
-        'wa.me',
-        '/${_telefonoWa(telefono)}',
-        {'text': 'Hola, soy el cliente del viaje'},
-      );
+      final uri = Uri.https('wa.me', '/${_telefonoWa(telefono)}', {
+        'text': 'Hola, soy el cliente del viaje',
+      });
       try {
         final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
         if (!ok) throw Exception('WhatsApp no disponible');
@@ -1786,8 +1952,9 @@ class _TripScreenState extends State<TripScreen> {
   }
 
   void _aviso_(String mensaje) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(mensaje), behavior: SnackBarBehavior.floating));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensaje), behavior: SnackBarBehavior.floating),
+    );
   }
 
   /// Botones Llamar / WhatsApp en pildora, compartidos por el panel del viaje
@@ -1796,48 +1963,52 @@ class _TripScreenState extends State<TripScreen> {
   ///  * WhatsApp: verde palido con borde verde suave (accion preferida).
   ///  * Llamar: azul palido con borde azul suave.
   Widget _botonesContacto(String telefono) => Row(
-        children: [
-          Expanded(
-            child: FilledButton.icon(
-              onPressed: () => _comunicar(telefono, whatsapp: true),
-              icon: const Icon(Icons.chat_outlined, size: 18),
-              label: const Text('WhatsApp'),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFE9F6EE),
-                foregroundColor: const Color(0xFF1E7A3D),
-                disabledBackgroundColor: const Color(0xFFE9F6EE),
-                elevation: 0,
-                minimumSize: const Size(0, 44),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                shape: const StadiumBorder(
-                  side: BorderSide(color: Color(0xFFBFE3CD)),
-                ),
-                textStyle: const TextStyle(
-                    fontSize: 13.5, fontWeight: FontWeight.w700),
-              ),
+    children: [
+      Expanded(
+        child: FilledButton.icon(
+          onPressed: () => _comunicar(telefono, whatsapp: true),
+          icon: const Icon(Icons.chat_outlined, size: 18),
+          label: const Text('WhatsApp'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFE9F6EE),
+            foregroundColor: const Color(0xFF1E7A3D),
+            disabledBackgroundColor: const Color(0xFFE9F6EE),
+            elevation: 0,
+            minimumSize: const Size(0, 44),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            shape: const StadiumBorder(
+              side: BorderSide(color: Color(0xFFBFE3CD)),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: FilledButton.icon(
-              onPressed: () => _comunicar(telefono, whatsapp: false),
-              icon: const Icon(Icons.phone_rounded, size: 18),
-              label: const Text('Llamar'),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFEAF2FE),
-                foregroundColor: const Color(0xFF1A73E8),
-                disabledBackgroundColor: const Color(0xFFEAF2FE),
-                elevation: 0,
-                minimumSize: const Size(0, 44),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                shape: const StadiumBorder(
-                  side: BorderSide(color: Color(0xFFBBD3F5)),
-                ),
-                textStyle: const TextStyle(
-                    fontSize: 13.5, fontWeight: FontWeight.w700),
-              ),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: FilledButton.icon(
+          onPressed: () => _comunicar(telefono, whatsapp: false),
+          icon: const Icon(Icons.phone_rounded, size: 18),
+          label: const Text('Llamar'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFEAF2FE),
+            foregroundColor: const Color(0xFF1A73E8),
+            disabledBackgroundColor: const Color(0xFFEAF2FE),
+            elevation: 0,
+            minimumSize: const Size(0, 44),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            shape: const StadiumBorder(
+              side: BorderSide(color: Color(0xFFBBD3F5)),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
             ),
           ),
-        ],
-      );
+        ),
+      ),
+    ],
+  );
 }

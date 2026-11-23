@@ -367,11 +367,12 @@ los 4 APK a `static/`:
 
 ```powershell
 cd E:\Taxi_Rapid
+$env:MAPTILER_API_KEY = '<TU_CLAVE>'   # no se versiona
 powershell -ExecutionPolicy Bypass -File scripts\compilar_apks.ps1
 # o a mano, para una sola app:
 cd E:\Taxi_Rapid\frontend\taxi_client   # o taxi_driver
 flutter build apk --release --split-per-abi --no-pub `
-  --dart-define=MAPTILER_API_KEY=ZsGcg7EJ3Ml7wgFfXwAt
+  --dart-define=MAPTILER_API_KEY=$env:MAPTILER_API_KEY
 # -> build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
 

@@ -7,15 +7,20 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Credenciales de firma de release. El archivo keystore.properties y el .jks
-// estan en .gitignore: no se suben al repo. Para compilar release en otra
-// maquina hay que copiarlos a mano.
+// Credenciales de firma de release. Se aceptan dos nombres porque el proyecto
+// ya venia usando `app/keystore.properties` y la documentacion de Flutter/Play
+// habla de `key.properties`; cualquiera de los dos funciona. Ambos y el .jks
+// estan en .gitignore: no se suben al repo.
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("app/keystore.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(keystorePropertiesFile.inputStream())
+val archivoFirma = listOf(
+    rootProject.file("key.properties"),
+    rootProject.file("app/key.properties"),
+    rootProject.file("app/keystore.properties"),
+).firstOrNull { it.exists() }
+if (archivoFirma != null) {
+    keystoreProperties.load(archivoFirma.inputStream())
 }
-val tieneKeystore = keystorePropertiesFile.exists() && keystoreProperties.getProperty("storeFile") != null
+val tieneKeystore = archivoFirma != null && keystoreProperties.getProperty("storeFile") != null
 
 android {
     namespace = "com.taxirapid.taxi_driver"
@@ -39,7 +44,8 @@ android {
         // maplibre_gl exige API 21 como minimo. `flutter.minSdkVersion` baja de
         // ahi en versiones antiguas, asi que se fija a mano.
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // Play Store exige API 36 (Android 16) o superior para apps nuevas.
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         // El plugin de notificaciones y el de badge tambien traen multiples
@@ -68,13 +74,17 @@ android {
                 signingConfigs.getByName("debug")
             }
 
-            // El plugin de Flutter activa minify y el resource shrinker en
-            // release. El shrinker de AGP elimina `res/raw/spacebell.mp3`
-            // porque Dart lo referencia solo por nombre de cadena (no por
-            // `R.raw`), pese al `res/values/keep.xml`. Se apagan para que el
-            // sonido de la notificacion entre SIEMPRE al APK.
-            isMinifyEnabled = false
+            // R8 ofusca y elimina codigo no usado. El resource shrinker sigue
+            // apagado: elimina `res/raw/spacebell.mp3` porque Dart lo
+            // referencia solo por su nombre de cadena, pese al keep.xml (ver
+            // tambien `android.enableResourceOptimizations=false`). El sonido
+            // de la notificacion tiene que entrar SIEMPRE.
+            isMinifyEnabled = true
             isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

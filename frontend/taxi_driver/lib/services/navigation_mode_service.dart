@@ -8,8 +8,10 @@ import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
 import '../api_config.dart';
 import '../models/geo_fix.dart';
+import 'camara_libre.dart';
 import 'heading_filter.dart';
 import 'location_service.dart';
+import 'map_matching_service.dart';
 import 'traza_fichero.dart';
 
 /// Estado de la camara de navegacion.
@@ -39,14 +41,15 @@ enum ModoNavegacion {
 ///    servicio suelta la camara y espera al boton de recentrar.
 class NavigationModeService {
   NavigationModeService({required TickerProvider vsync})
-      : _ticker = vsync.createTicker(_callbackTic);
+    : _ticker = vsync.createTicker(_callbackTic);
 
   /// Adaptador para el [Ticker].
   ///
   /// Hace falta porque en un inicializador de campo no se puede referenciar
   /// `this`, asi que no se puede pasar `_alTic` directamente. Se declara despues
   /// del constructor a proposito: es un metodo, no un campo.
-  static void _callbackTic(Duration elapsed) => _instanciaActual?._alTic(elapsed);
+  static void _callbackTic(Duration elapsed) =>
+      _instanciaActual?._alTic(elapsed);
 
   /// Instancia viva, solo para que el callback estatico del ticker la alcance.
   ///
@@ -64,16 +67,15 @@ class NavigationModeService {
   /// la media movil de velocidad, y lo que se pasa como rumbo es un dato a pelo.
   final BufferCircularRumbo _buffer = BufferCircularRumbo();
 
-  /// Metros por grado de latitud. Suficiente para dead-reckoning a escala de
-  /// calle; no hace falta mas precision.
-  static const double _metrosPorGradoLat = 111320.0;
+  /// Encaje de la posición sobre la ruta. Corrige el "coche por los edificios"
+  /// del GPS urbano; el rumbo sigue siendo GPS + Kalman, no sale de aqui.
+  final MapMatchingService _mapMatching = MapMatchingService();
 
   /// Tope de extrapolacion entre fixes.
   ///
   /// 3 s. Pasado esto ya no se sabe donde esta el coche, y seguir proyectando
   /// lo saca de la calle.
   static const double _extrapolacionMaxima = 3.0;
-
 
   /// Cuanto se acerca la camara a su objetivo por frame (a 60 Hz).
   ///
@@ -112,6 +114,13 @@ class NavigationModeService {
   /// Ultimo fix recibido.
   GeoFix? _fix;
 
+  /// Encaje calculado para [fix]. Se recalcula SOLO cuando llega un fix nuevo:
+  /// `_recalcularObjetivo` corre en cada frame (~60 Hz) y si el map-matching se
+  /// llamara ahi, su histeresis de 3 muestras se cumpliria en 50 ms en vez de
+  /// 3 s. La extrapolacion si se recalcula por frame.
+  GeoFix? _fixAjustado;
+  PuntoRuta? _ajusteActual;
+
   /// Posicion actual, extrapolada entre fixes. Es la que se dibuja y la que
   /// sigue la camara.
   LatLng _pos = ApiConfig.defaultDriverLocation;
@@ -137,13 +146,17 @@ class NavigationModeService {
   double? _rumbo;
   double? get rumbo => _rumbo;
 
-  /// Ultimo rumbo que salio de la ruta, para no perder la orientacion.
+  /// Ultimo rumbo GPS valido, para no perder la orientacion.
   ///
-  /// Es el unico "ultimo rumbo valido" que existe: cuando la ruta deja de servir
-  /// (OSRM falla, el destino cambia, se acaba el trazado) el mapa se queda en el
-  /// ultimo rumbo conocido en vez de saltar al norte.
+  /// Cuando el coche se para o el GPS no junta dos fixes con desplazamiento
+  /// suficiente, el mapa se queda en el ultimo rumbo conocido en vez de saltar
+  /// al norte.
   double? _rumboRetenido;
   double? get rumboRetenido => _rumboRetenido;
+
+  /// Rumbo medido por el movimiento real del GPS y suavizado con Kalman 1D
+  /// circular. Es la UNICA fuente de orientacion durante el viaje.
+  final RumboMovimiento _rumboGps = RumboMovimiento();
 
   /// Momento del fix anterior, para medir cuantos segundos han pasado entre dos
   /// posiciones y descartar los saltos imposibles del GPS.
@@ -163,8 +176,9 @@ class NavigationModeService {
 
   /// Trazado que se esta siguiendo ahora mismo, en el orden del viaje.
   ///
-  /// Llega desde la pantalla con [informarRuta] y es la UNICA fuente de rumbo del
-  /// mapa: ver [_rumboDesdeRuta].
+  /// Llega desde la pantalla con [informarRuta] y se conserva solo para
+  /// diagnostico (cuantos puntos tiene la ruta viva). Ya NO orienta el mapa: el
+  /// rumbo sale del movimiento real del GPS, ver [_aplicarOrientacion].
   List<LatLng> _ruta = const [];
 
   /// `true` si hay un viaje al que orientar el mapa.
@@ -174,8 +188,10 @@ class NavigationModeService {
   bool get _hayViajeActivo => _fase != null;
   bool get hayViajeActivo => _hayViajeActivo;
 
-  // Dead reckoning
-  int? _ultimoMonotonoMs;
+  // Dead reckoning. Se guarda en el reloj MONOTONO del servicio (Stopwatch),
+  // no en el del fix: `_extrapolar` corre en cada frame del ticker y necesita
+  // comparar siempre contra la misma referencia.
+  int? _ultimoFixRelojServicioMs;
 
   // Camara interpolada: el objetivo es lo que se quiere, el actual es lo que se
   // va moviendo hacia el. Se guardan los dos para poder interpolar sin saltos.
@@ -212,7 +228,7 @@ class NavigationModeService {
   /// Se mueve con una rampa de [ApiConfig.rampaTiltGradosPorSegundo] y nunca
   /// de golpe: el objetivo sale de la velocidad, pero el camino se recorre
   /// despacio para que no se vea como un tirón al salir de un semaforo.
-double _tiltActual = ApiConfig.tiltDegradado;
+  double _tiltActual = ApiConfig.tiltDegradado;
 
   /// Tilt y zoom que impone el recentrar, o `null` cuando manda la velocidad.
   ///
@@ -240,14 +256,15 @@ double _tiltActual = ApiConfig.tiltDegradado;
 
     // Se pide el GPS a 1 Hz SIN sensor de rumbo.
     //
-    // El heading-up sale solo de la ruta (ver [_rumboDesdeRuta]), asi que la
-    // brujula no hace falta para nada. Se apago del todo y no solo de dejar de
-    // leerla: [LocationService.watchNavegacion] avisa al nativo con
+    // El heading-up sale del movimiento real del GPS + Kalman (ver
+    // [_aplicarOrientacion]), no de la brujula. Se apago del todo y no solo de
+    // dejar de leerla: [LocationService.watchNavegacion] avisa al nativo con
     // `sensor: false`, de modo que Android no registra el listener y no llegan
     // ~50 eventos por segundo por el canal. En un taxi durante un viaje son
     // unas 180.000 notificaciones que no se usan para nada.
-    _subFix = LocationService.watchNavegacion(usarSensor: false)
-        .listen(_alRecibirFix);
+    _subFix = LocationService.watchNavegacion(
+      usarSensor: false,
+    ).listen(_alRecibirFix);
   }
 
   void dispose() {
@@ -258,15 +275,24 @@ double _tiltActual = ApiConfig.tiltDegradado;
   }
 
   /// Activa el modo navegacion para la fase indicada.
-///
-/// Cambiar de fase reevalua el encuadre y dispara el unico momento en el que se
-/// toca el tilt (entrar o salir del modo). El tilt NUNCA se anima por tic: la
-/// perspectiva repinta la capa entera y hacerlo cada frame deja el mapa a 20
-/// fps.
-///
-/// Si la fase no cambia no hace nada: es el guardado contra reencuadrar en cada
-/// fix del GPS.
-void activar(String? status, {LatLng? posicionConocida}) {
+  ///
+  /// [rumboInicial] siembra el filtro de rumbo con el ultimo valor del modo
+  /// libre. Solo se aplica al arrancar un viaje (transicion de apagado a activo):
+  /// asi el mapa no salta al norte mientras el GPS junta dos fixes con
+  /// desplazamiento suficiente. El filtro lo corrige con cada muestra.
+  ///
+  /// Cambiar de fase reevalua el encuadre y dispara el unico momento en el que se
+  /// toca el tilt (entrar o salir del modo). El tilt NUNCA se anima por tic: la
+  /// perspectiva repinta la capa entera y hacerlo cada frame deja el mapa a 20
+  /// fps.
+  ///
+  /// Si la fase no cambia no hace nada: es el guardado contra reencuadrar en cada
+  /// fix del GPS.
+  void activar(
+    String? status, {
+    LatLng? posicionConocida,
+    double? rumboInicial,
+  }) {
     if (_fase == status && _modo != ModoNavegacion.apagado) return;
     final estabaApagado = _modo == ModoNavegacion.apagado;
     _fase = status;
@@ -274,6 +300,18 @@ void activar(String? status, {LatLng? posicionConocida}) {
     if (status == null) {
       apagar();
       return;
+    }
+
+    // Siembra el rumbo al arrancar el viaje, no en cada cambio de fase: el
+    // valor que llega es el ultimo del modo libre y solo sirve para el salto
+    // inicial. Despues manda el GPS.
+    if (estabaApagado && rumboInicial != null) {
+      _rumboGps.sembrar(rumboInicial);
+      // Orienta la camara YA, sin esperar al primer fix. [_recalcularObjetivo]
+      // vuelve antes de tocar nada si todavia no llego ningun GPS, y sin esto
+      // el mapa arrancaba mirando al norte para girar de golpe un segundo
+      // despues, justo el salto que quiere evitar la siembra.
+      _aplicarOrientacion();
     }
 
     // Siembra la posicion con la que ya se sabe, en vez de esperar al primer
@@ -314,6 +352,8 @@ void activar(String? status, {LatLng? posicionConocida}) {
     _fase = null;
     _rumbo = null;
     _ruta = const [];
+    _fixAjustado = null;
+    _ajusteActual = null;
     _quietoDesdeMs = null;
     _enMarchaDesdeMs = null;
     _centroObjetivo = null;
@@ -333,6 +373,8 @@ void activar(String? status, {LatLng? posicionConocida}) {
     _fase = null;
     _rumbo = null;
     _ruta = const [];
+    _fixAjustado = null;
+    _ajusteActual = null;
     _enMarchaDesdeMs = null;
     _quietoDesdeMs = null;
     _ticker.stop();
@@ -353,7 +395,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
     notificar();
   }
 
-/// El usuario ha pulsado "Recentrar": vuelve al modo seguimiento.
+  /// El usuario ha pulsado "Recentrar": vuelve al modo seguimiento.
   ///
   /// Recupera ademas el detalle de calle ([ApiConfig.zoomRecentrar]) y el angulo
   /// de ciudad ([ApiConfig.tiltRecentrar]). El zoom lo elige recentrar y no la
@@ -368,8 +410,8 @@ void activar(String? status, {LatLng? posicionConocida}) {
   /// recentrar debe recuperar el control, como durante un viaje.
   void recentrar() {
     // Sin viaje no hay modo navegacion al que volver: el mapa va en norte
-    // arriba y lo lleva [NavCamera]. Con viaje, el rumbo sale de la ruta y se
-    // recalcula en el siguiente tick.
+    // arriba y lo lleva [NavCamera]. Con viaje, el rumbo sale del GPS + Kalman y
+    // se conserva hasta el siguiente fix.
     if (!_hayViajeActivo) return;
     _modo = ModoNavegacion.siguiendo;
     _quietoDesdeMs = null;
@@ -420,8 +462,7 @@ void activar(String? status, {LatLng? posicionConocida}) {
   void Function(double objetivo)? _alCambiarTilt;
 
   /// Registra el callback que anima el tilt.
-  void alCambiarTilt(void Function(double objetivo)? fn) =>
-      _alCambiarTilt = fn;
+  void alCambiarTilt(void Function(double objetivo)? fn) => _alCambiarTilt = fn;
 
   void _notificarCambioTilt() => _alCambiarTilt?.call(tiltObjetivo);
 
@@ -472,21 +513,21 @@ void activar(String? status, {LatLng? posicionConocida}) {
 
   /// Pasa el trazado de la ruta que se esta siguiendo.
   ///
-  /// Sin esto el servicio no tiene forma de saber por donde se va a salir de un
-  /// cruce, que es justo lo que hace falta cuando se va despacio y ni el GPS ni
-  /// la brujula sirven. Lo llama la pantalla cada vez que cambia la ruta (la
-  /// inicial, la del recalculo por desvio y la de recogida).
-  void informarRuta(List<LatLng> ruta) {
-    if (ruta.length == _ruta.length &&
-        ruta.isNotEmpty &&
-        _ruta.isNotEmpty &&
-        ruta.first.latitude == _ruta.first.latitude &&
-        ruta.first.longitude == _ruta.first.longitude &&
-        ruta.last.latitude == _ruta.last.latitude &&
-        ruta.last.longitude == _ruta.last.longitude) {
-      return;
-    }
+  /// [ruta] es la geometria que se DIBUJA (puede caer a la recta de respaldo).
+  /// [rutaParaMatching] es la polilinea real de calles, la misma que usa la
+  /// pantalla para encajar la posicion. Si no se entrega, se usa [ruta].
+  ///
+  /// La orientacion de la camara sigue saliendo del rumbo GPS + Kalman; la
+  /// geometria solo corrige DONDE esta el coche. Antes este metodo guardaba la
+  /// ruta unicamente para diagnostico y el `_mapMatching` de este servicio se
+  /// quedaba sin ruta: el marcador seguia yendo por los edificios aunque la
+  /// pantalla ya publicara la posicion encajada al pasajero.
+  void informarRuta(List<LatLng> ruta, {List<LatLng>? rutaParaMatching}) {
     _ruta = List<LatLng>.unmodifiable(ruta);
+    _mapMatching.actualizarRuta(rutaParaMatching ?? ruta);
+    // La geometria cambio: el encaje guardado pertenece a la ruta vieja. Se
+    // fuerza recalcularlo con el proximo fix (o con el actual, en el proximo frame).
+    _fixAjustado = null;
   }
 
   // ---------------- datos ----------------
@@ -505,38 +546,48 @@ void activar(String? status, {LatLng? posicionConocida}) {
     // Solo se marca: la posicion es real aunque el salto no lo sea, y lo que
     // decide el rumbo es la ruta, no este fix.
     final anterior = _fixAnterior;
+    var salto = false;
     if (anterior != null) {
       final d = LocationService.distanceBetween(anterior, fix.position);
       final dt = _ultimoFixMs == null
           ? null
           : (_ahoraMs - _ultimoFixMs!) / 1000.0;
-      final velocidadImplicita =
-          (dt == null || dt <= 0.2) ? null : d / dt;
+      final velocidadImplicita = (dt == null || dt <= 0.2) ? null : d / dt;
       if (velocidadImplicita != null &&
           velocidadImplicita > ApiConfig.velocidadMaximaGps) {
         _fixConSalto = true;
+        salto = true;
       }
     }
     _fixAnterior = fix.position;
     _ultimoFixMs = _ahoraMs;
 
-    // El buffer se sigue alimentando SOLO para poder leer la velocidad
-    // suavizada (que decide el zoom y el indicador). Su campo de rumbo no se
-    // consulta en ningun sitio: el heading-up sale de la ruta.
-    //
-    // Lo que se pasa como rumbo es un datoplaceholder, no una fuente de nada.
+    // Rumbo por movimiento GPS + Kalman. Se ignora un fix con salto imposible:
+    // su direccion es ruido y meteria un giro de 180 grados en el mapa.
+    if (!salto) {
+      _rumboGps.actualizar(
+        posicion: fix.position,
+        velocidadKmh: fix.velocidadKmh,
+        ahoraMs: _ahoraMs,
+      );
+    }
+
+    // El buffer se sigue alimentando para leer la velocidad suavizada (la que
+    // decide el zoom y el indicador). El rumbo ya no se toma de aqui: la
+    // orientacion sale de [_rumboGps].
     final speedMps = fix.speedMps ?? 0.0;
     _buffer.add(
-      rumbo: _rumbo ?? 0.0,
+      rumbo: _rumboGps.rumbo ?? 0.0,
       velocidadMps: speedMps,
       tiempoMs: _ahoraMs,
     );
 
-    // El fix real es el punto de partida de la extrapolacion.
-    // Aqui si se guarda el reloj del propio fix (`elapsedRealtimeMs`), porque
-    // la extrapolacion compara siempre fix contra fix y las dos referencias
-    // tienen que ser del mismo reloj.
-    _ultimoMonotonoMs = fix.elapsedRealtimeMs ?? _ultimoMonotonoMs;
+    // Instante del ultimo fix en el reloj del servicio. La extrapolacion se
+    // recalcula en cada frame, asi que mide el tiempo desde AQUI con el mismo
+    // reloj monotono. Antes se guardaba el `elapsedRealtimeMs` del propio fix y
+    // se comparaba contra ese mismo valor: el delta daba siempre 0 y la flecha
+    // nunca avanzaba entre fixes.
+    _ultimoFixRelojServicioMs = _ahoraMs;
 
     if (_modo == ModoNavegacion.siguiendo) {
       _recalcularObjetivo();
@@ -590,7 +641,8 @@ void activar(String? status, {LatLng? posicionConocida}) {
       // conduciendo.
       if (_modo == ModoNavegacion.explorando &&
           v >= ApiConfig.velocidadReactivarFollow &&
-          _desde(_enMarchaDesdeMs) >= ApiConfig.antiguedadReactivar.inMilliseconds) {
+          _desde(_enMarchaDesdeMs) >=
+              ApiConfig.antiguedadReactivar.inMilliseconds) {
         _modo = ModoNavegacion.siguiendo;
         _centroObjetivo = null;
         _iniciarTicker();
@@ -609,14 +661,30 @@ void activar(String? status, {LatLng? posicionConocida}) {
     final fix = _fix;
     if (fix == null) return;
 
-    _pos = _extrapolar(fix.position, fix);
-
-final v = _buffer.velocidadFiltrada();
+    final v = _buffer.velocidadFiltrada();
     _velocidadKmh = v * 3.6;
+
+    // Posición dibujada: SIEMPRE encajada sobre la geometría de la calle, aunque
+    // el GPS haya rebotado contra un edificio. El crudo viaja aparte en
+    // `posicionCruda` y es el que sigue mirando el detector de desvíos.
+    // El encaje se calcula una vez por fix; la extrapolación se refresca en
+    // cada frame con el mismo punto ya encajado.
+    if (!identical(fix, _fixAjustado)) {
+      _ajusteActual = _mapMatching.ajustar(
+        fix.position,
+        rumbo: _rumbo,
+        velocidadKmh: _velocidadKmh,
+      );
+      _fixAjustado = fix;
+    }
+    final ajuste = _ajusteActual;
+    if (ajuste == null) return;
+    _pos = _extrapolar(ajuste, fix);
 
     // El recentrar solo impone tilt y zoom mientras el vehiculo siga parado.
     // En cuanto arranca, manda la velocidad y la vista vuelve a ser adaptativa;
-    // si no, el forzado se congelaria en 18 y 55 grados para siempre.
+    // si no, el forzado se congelaria para siempre (zoom 19, el mismo de la
+    // navegacion).
     if (v >= ApiConfig.velocidadMinimaTilt &&
         (_tiltForzado != null || _zoomForzado != null)) {
       _tiltForzado = null;
@@ -624,21 +692,19 @@ final v = _buffer.velocidadFiltrada();
       _notificarCambioTilt();
     }
 
-    // Rumbo. Sale SOLO de la ruta.
+    // Rumbo. Sale del movimiento real del GPS suavizado con Kalman 1D circular
+    // (ver [RumboMovimiento]), igual que en el modo libre.
     //
-    // Se elimino el uso de la brujula y del rumbo del GPS. Los dos se peleaban
-    // entre si y los dos fallaban: la brujula daba el mismo valor en 48.121
-    // muestras seguidas (2 grados de recorrido total, o sea clavada) y el rumbo
-    // deducido del GPS a 1 Hz pegaba saltos de hasta 158 grados, ademas de no
-    // servir por debajo de 20 km/h porque el error de posicion es mayor que el
-    // desplazamiento. La ruta no falla en ninguno de los dos casos: es el plan
-    // del viaje, no una medicion.
+    // Se elimino el uso de la brujula (clavada en muchas muestras) y tambien la
+    // geometria de la ruta: OSRM da la direccion del trazado, no la direccion en
+    // la que apunta el coche, y en un cruce o parado en un semaforo orientaba el
+    // mapa hacia una calle por la que aun no se va.
     //
-    // Sin viaje no hay destino, y sin destino no hay rumbo que valga: se queda
-    // en norte arriba.
+    // El filtro conserva el ultimo rumbo valido por debajo de 5 km/h y descarta
+    // saltos imposibles del GPS, asi que no hay giros bruscos ni vuelco al norte.
     _aplicarOrientacion();
 
-// Zoom de la fase. Al ir a 30 km/h o mas se ALEJA un nivel (zoom out),
+    // Zoom de la fase. Al ir a 30 km/h o mas se ALEJA un nivel (zoom out),
     // filosofia tipo Google Maps/Waze: con velocidad el conductor necesita
     // horizonte, no el detalle de calle. Parado o lento se mantiene la fase.
     var z = ApiConfig.zoomParaFase(status: _fase);
@@ -650,26 +716,29 @@ final v = _buffer.velocidadFiltrada();
     if (zoomForzado != null && v < ApiConfig.velocidadMinimaTilt) {
       z = zoomForzado;
     }
-    // Suelo 14 (no bajar de ahi al acelerar) y techo 17 (maximo de la tabla).
+    // Suelo y techo a 20: zoom de calle siempre, tambien al acelerar. La resta
+    // por velocidad queda neutralizada por el clamp y se conserva solo para no
+    // perder el gancho si algun dia se vuelve a permitir alejar la vista.
     _zoomObjetivo = z.clamp(
       ApiConfig.zoomSueloNavegacion,
       ApiConfig.zoomTechoNavegacion,
     );
 
-    // La rotacion sale de [_aplicarOrientacion]. Con viaje es el rumbo de la ruta;
-    // sin viaje es 0 (norte arriba).
+    // La rotacion sale de [_aplicarOrientacion]. Con viaje es el rumbo del GPS +
+    // Kalman; sin viaje es 0 (norte arriba).
     //
     // Con el vehiculo parado el mapa CONGELA la ultima orientacion estable en
     // vez de apagarse: en un semaforo el chofer quiere seguir viendo hacia donde
-    // avanza, no que el mapa le salte al norte. Como ahora el unico dato es la
-    // ruta, esa congelacion sale sola: la ruta no cambia de direccion mientras el
-    // coche esta quieto en un semaforo.
+    // avanza, no que el mapa le salte al norte. El filtro de rumbo ya hace esa
+    // congelacion (por debajo de 5 km/h no actualiza) y [_rumboRetenido] cubre
+    // el arranque.
     _centroObjetivo = _pos;
 
     // Traza de la camara: una linea cada vez que el objetivo cambia de verdad.
     // Es lo que dice si el heading-up tiene datos con los que trabajar o si se
     // queda clavado en el norte porque nunca llega un rumbo.
-    final clave = '${_rotacionObjetivo?.toStringAsFixed(0)}|'
+    final clave =
+        '${_rotacionObjetivo?.toStringAsFixed(0)}|'
         '${_rotacionActual?.toStringAsFixed(0)}|'
         '${_rumboRetenido?.toStringAsFixed(0)}|'
         '$_contadorTics|${_ticker.isActive}|'
@@ -677,16 +746,17 @@ final v = _buffer.velocidadFiltrada();
     if (clave != _trazaCamara) {
       _trazaCamara = clave;
       TrazaFichero.instancia.escribir(
-          '[NAV] rotacion=${_rotacionObjetivo?.toStringAsFixed(0)} '
-          'actual=${_rotacionActual?.toStringAsFixed(0)} '
-          'ruta=${_ruta.length} '
-          'viaje=$_hayViajeActivo '
-          'fuente=${_rumbo != null ? "RUTA" : "FALLBACK"} '
-          'retenido=${_rumboRetenido?.toStringAsFixed(0)} '
-          'tics=$_contadorTics act=${_ticker.isActive} '
-          'salto=$_fixConSalto '
-          'v=${v.toStringAsFixed(1)} tilt=${_tiltActual.toStringAsFixed(0)} '
-          'zoom=$z');
+        '[NAV] rotacion=${_rotacionObjetivo?.toStringAsFixed(0)} '
+        'actual=${_rotacionActual?.toStringAsFixed(0)} '
+        'ruta=${_ruta.length} '
+        'viaje=$_hayViajeActivo '
+        'fuente=${_rumbo != null ? "GPS" : "FALLBACK"} '
+        'retenido=${_rumboRetenido?.toStringAsFixed(0)} '
+        'tics=$_contadorTics act=${_ticker.isActive} '
+        'salto=$_fixConSalto '
+        'v=${v.toStringAsFixed(1)} tilt=${_tiltActual.toStringAsFixed(0)} '
+        'zoom=${_zoomObjetivo ?? z}',
+      );
     }
   }
 
@@ -723,105 +793,38 @@ final v = _buffer.velocidadFiltrada();
     _tiltActual += delta.clamp(-maximo, maximo);
   }
 
-  /// Proyecta la posicion entre fixes para que el mapa no se congele.
+  /// Avanza la posicion entre fixes para que el mapa no se congele.
   ///
-  /// Usa el rumbo y la velocidad con el reloj monotono del ultimo fix. Si se
-  /// pasa de [_extrapolacionMaxima] deja de proyectar, porque a partir de ahi la
-  /// posicion es una suposicion y ya no un dato.
-  LatLng _extrapolar(LatLng base, GeoFix fix) {
-    final r = _buffer.retenido ?? _rumbo;
+  /// Antes se avanzaba en LINEA RECTA con el rumbo: al girar, la flecha apuntaba
+  /// bien pero el punto salia de la calle y se metia en el edificio hasta el
+  /// siguiente fix. Ahora el avance se hace SOBRE LA POLILINEA, así que el coche
+  /// pasa por el vertice de la esquina. El rumbo sigue siendo GPS + Kalman y no
+  /// interviene aqui: solo mueve el punto por la calle.
+  LatLng _extrapolar(PuntoRuta ajuste, GeoFix fix) {
     final v = fix.speedMps ?? 0.0;
-    if (r == null || v <= 0.5) return base;
+    if (v <= 0.5) return ajuste.posicion;
 
-    final ahora = fix.elapsedRealtimeMs ?? _ahoraMs;
-    final dtReal = _ultimoMonotonoMs == null
-        ? 0.0
-        : (ahora - _ultimoMonotonoMs!) / 1000.0;
-    if (dtReal <= 0 || dtReal > _extrapolacionMaxima) return base;
-
-    final rad = r * math.pi / 180.0;
-    final distancia = v * dtReal;
-    final dLat = (distancia * math.sin(rad)) / _metrosPorGradoLat;
-    final dLng = (distancia * math.cos(rad)) /
-        (_metrosPorGradoLat * math.cos(base.latitude * math.pi / 180.0));
-
-    return LatLng(
-      (base.latitude + dLat).clamp(-90.0, 90.0),
-      (base.longitude + dLng).clamp(-180.0, 180.0),
-    );
-  }
-
-  // ---------------- rumbo por la ruta ----------------
-
-  /// Rumbo con el que debe orientarse el mapa ahora mismo.
-  ///
-  /// Con viaje activo sale del segmento de ruta mas cercano, y solo de ahi.
-  /// Sin viaje devuelve `null`, y el mapa queda en norte arriba.
-  double? _rumboDesdeRuta() {
-    if (!_hayViajeActivo) return null;
-    if (_ruta.length < 2) return null;
-
-    // Tramo de la ruta mas cercano a la posicion actual.
-    final segmento = _buscarSegmentoCercano(_pos, _ruta);
-    if (segmento == null) return null;
-
-    // Direccion del segmento hacia el destino. Un tramo de menos de un metro se
-    // descarta: es el punto repetido que devuelve OSRM en el origen, y su
-    // direccion es ruido.
-    if (LocationService.distanceBetween(segmento.inicio, segmento.fin) <
-        ApiConfig.rumboRutaTramoMinimoM) {
-      return null;
+    final desde = _ultimoFixRelojServicioMs;
+    if (desde == null) return ajuste.posicion;
+    final dtReal = (_ahoraMs - desde) / 1000.0;
+    if (dtReal <= 0 || dtReal > _extrapolacionMaxima) {
+      return ajuste.posicion;
     }
-    return LocationService.bearingBetween(segmento.inicio, segmento.fin);
+
+    return _mapMatching.avanzar(ajuste, v * dtReal);
   }
 
-  /// Tramo de la ruta mas cercano a la posicion.
-  ///
-  /// Proyecta la posicion sobre cada tramo y se queda con el de menor distancia
-  /// perpendicular, que es el correcto y NO el vertice mas cercano: en un tramo
-  /// recto de 200 m el vertice mas proximo esta a hasta 100 m del coche, y medir
-  /// el rumbo desde ahi daria una direccion que no es la de la calle por la que
-  /// se va.
-  SegmentoRuta? _buscarSegmentoCercano(
-    LatLng posicion,
-    List<LatLng> ruta,
-  ) {
-    if (ruta.length < 2) return null;
+  // ---------------- rumbo por movimiento GPS ----------------
 
-    SegmentoRuta? mejor;
-    for (var i = 0; i < ruta.length - 1; i++) {
-      final proyeccion = _proyectarSobreSegmento(
-        posicion,
-        ruta[i],
-        ruta[i + 1],
-      );
-      if (proyeccion == null) continue;
-      if (mejor != null && proyeccion.distancia >= mejor.distancia) continue;
-
-      mejor = SegmentoRuta(
-        inicio: ruta[i],
-        fin: ruta[i + 1],
-        proyeccion: LatLng(
-          ruta[i].latitude +
-              (ruta[i + 1].latitude - ruta[i].latitude) * proyeccion.t,
-          ruta[i].longitude +
-              (ruta[i + 1].longitude - ruta[i].longitude) * proyeccion.t,
-        ),
-        distancia: proyeccion.distancia,
-      );
-    }
-    return mejor;
-  }
-
-  /// Aplica la orientacion: fija el rumbo objetivo del mapa.
+  /// Aplica la orientacion del mapa con el rumbo del GPS + Kalman.
   ///
-  /// Sin viaje, rumbo 0: norte arriba y sin inclinacion (el tilt lo pone
-  /// [tiltObjetivo], que devuelve [ApiConfig.tiltDegradado] con el modo apagado).
+  /// Es la misma fuente que el modo libre: [RumboMovimiento] mide el bearing
+  /// entre la posicion anterior y la actual y lo suaviza con un Kalman 1D
+  /// circular. La geometria de la ruta (OSRM) ya no orienta la camara.
   ///
-  /// Con viaje pero sin ruta utilizable, se conserva el ultimo rumbo valido en
-  /// vez de saltar al norte: mientras OSRM responde, ese caso no se ve, pero si
-  /// la ruta llega vacia o se agota el trazado el mapa no debe dar un tiron de
-  /// 180 grados.
+  /// Sin viaje, norte arriba. Con viaje pero sin dos fixes con desplazamiento
+  /// suficiente (parado, tunel o primer fix), se conserva el ultimo rumbo
+  /// valido en vez de saltar al norte.
   void _aplicarOrientacion() {
     if (!_hayViajeActivo) {
       _rumbo = null;
@@ -829,51 +832,23 @@ final v = _buffer.velocidadFiltrada();
       return;
     }
 
-    final desdeRuta = _rumboDesdeRuta();
-    if (desdeRuta != null) {
-      _rumboRetenido = desdeRuta;
-      _rumbo = desdeRuta;
-      _rotacionObjetivo = normalizarGrados(desdeRuta);
+    final medido = _rumboGps.rumbo;
+    if (medido != null) {
+      _rumboRetenido = medido;
+      _rumbo = medido;
+      _rotacionObjetivo = normalizarGrados(medido);
       return;
     }
 
     _rumbo = null;
-    _rotacionObjetivo =
-        normalizarGrados(_rumboRetenido ?? _rotacionActual ?? 0.0);
+    _rotacionObjetivo = normalizarGrados(
+      _rumboRetenido ?? _rotacionActual ?? 0.0,
+    );
   }
 
-  /// Visible para las pruebas: la fuente de rumbo ya no depende de la velocidad,
-  /// asi que se puede comprobar sin alimentar el GPS entero.
+  /// Visible para las pruebas: rumbo suavizado que orienta el mapa.
   @visibleForTesting
-  double? rumboDesdeRuta() => _rumboDesdeRuta();
-
-  /// Proyeccion de [p] sobre el segmento [a]-[b] en metros.
-  ///
-  /// Devuelve el parametro `t` en `[0, 1]` y la distancia perpendicular. Se
-  /// trabaja en un plano local en metros porque a escala de calle la latitud y
-  /// la longitud se pueden tratar como cartesianas; solo se corrige la longitud
-  /// por el coseno de la latitud para que un grado de longitud no cuente igual
-  /// que un grado de latitud.
-  ({double t, double distancia})? _proyectarSobreSegmento(
-    LatLng p,
-    LatLng a,
-    LatLng b,
-  ) {
-    final factor = math.cos(a.latitude * math.pi / 180.0);
-    final mx = (b.longitude - a.longitude) * _metrosPorGradoLat * factor;
-    final my = (b.latitude - a.latitude) * _metrosPorGradoLat;
-    final px = (p.longitude - a.longitude) * _metrosPorGradoLat * factor;
-    final py = (p.latitude - a.latitude) * _metrosPorGradoLat;
-
-    final largoCuadrado = mx * mx + my * my;
-    // Tramo degenerado (dos vertices identicos): no hay direccion que deducir.
-    if (largoCuadrado < 1e-6) return null;
-
-    final t = ((px * mx + py * my) / largoCuadrado).clamp(0.0, 1.0);
-    final dx = px - mx * t;
-    final dy = py - my * t;
-    return (t: t, distancia: math.sqrt(dx * dx + dy * dy));
-  }
+  double? get rumboGps => _rumboGps.rumbo;
 
   // ---------------- bucle de render ----------------
 
@@ -1030,6 +1005,14 @@ final v = _buffer.velocidadFiltrada();
     _evaluarFps();
   }
 
+  /// Inyecta un fix del GPS como si llegara del canal nativo.
+  ///
+  /// Permite probar el rumbo GPS + Kalman sin depender del plugin de ubicacion
+  /// ni del canal de plataforma. El servicio usa su reloj monotono igual que en
+  /// produccion; lo que el test controla es la posicion y la velocidad.
+  @visibleForTesting
+  void informarFix(GeoFix fix) => _alRecibirFix(fix);
+
   // ---------------- estado para el widget ----------------
 
   void Function()? _alCambiar;
@@ -1064,33 +1047,4 @@ final v = _buffer.velocidadFiltrada();
   /// El nativo se pausa solo tras 10 s parado, pero el servicio lo refleja para
   /// el indicador de la interfaz.
   bool get gpsPausado => _velocidadKmh < 1.0;
-}
-
-/// Tramo de la ruta al que pertenece una posicion, ya proyectada.
-///
-/// Se usa en [_rumboDesdeRuta] a traves de [_buscarSegmentoCercano].
-///
-/// Guarda los dos extremos y el punto de proyeccion porque hacen falta los tres:
-/// el rumbo se mide DESDE la direccion del tramo ([inicio] a [fin]), y la
-/// [proyeccion] y la [distancia] son las que dicen que tramo es el que tiene el
-/// coche encima.
-class SegmentoRuta {
-  /// Primer vertice del tramo.
-  final LatLng inicio;
-
-  /// Segundo vertice del tramo.
-  final LatLng fin;
-
-  /// Punto de la polilinea donde cae realmente la posicion.
-  final LatLng proyeccion;
-
-  /// Distancia perpendicular de la posicion al tramo, en metros.
-  final double distancia;
-
-  const SegmentoRuta({
-    required this.inicio,
-    required this.fin,
-    required this.proyeccion,
-    required this.distancia,
-  });
 }

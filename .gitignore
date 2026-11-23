@@ -85,6 +85,7 @@ frontend/*/android/app/debug/
 frontend/*/android/app/release/
 *.jks
 *.keystore
+key.properties
 keystore.properties
 
 # IDE
@@ -113,3 +114,7 @@ tok.txt
 
 # Checkpoint del backfill de saldos (estado local de una ejecucion).
 scripts/.backfill_saldo.json
+
+# AAB de entrega para Play Console: artefactos de build, no codigo.
+dist_play/
+*.aab

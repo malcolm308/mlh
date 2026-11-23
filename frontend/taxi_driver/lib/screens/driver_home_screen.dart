@@ -17,6 +17,7 @@ import '../services/address_service.dart';
 import '../services/nav_camera.dart';
 import '../services/vehicle_types_service.dart';
 import '../services/location_service.dart';
+import '../services/map_matching_service.dart';
 import '../services/navigation_mode_service.dart';
 import '../services/osrm_service.dart';
 import '../models/geo_fix.dart';
@@ -133,6 +134,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return [_driverPos, destino];
   }
 
+  /// Ruta usada SOLO para el map-matching de la posición.
+  ///
+  /// `_rutaVisible` se cae a una recta de dos puntos cuando OSRM falla. Encajar
+  /// contra esa recta sacaría el marcador de la calle de verdad, así que aqui
+  /// solo se entrega una polilínea calculada por calles.
+  List<LatLng> get _rutaParaMatching {
+    if (_activeTrip == null) return const [];
+    if (_tripPhase) return _route.length >= 2 ? _route : const [];
+    return _routeToPickup.length >= 2 ? _routeToPickup : const [];
+  }
+
   /// Camara de navegacion: sigue al vehiculo, rota con su rumbo y aplica el
   /// tilt. Necesita el `TickerProvider` del State, asi que no se puede
   /// inicializar en la declaracion (aun no existe `this`): se crea en
@@ -165,7 +177,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   /// Bandera para no encadenar SnackBars mientras dura una peticion.
   bool _avisandoRecalculo = false;
-
 
   LatLng _driverPos = ApiConfig.defaultDriverLocation;
   bool _online = false;
@@ -247,6 +258,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// antes de dibujar, de avisar al asistente y de publicar la posicion.
   final FiltroGps _filtroGps = FiltroGps();
 
+  /// Encaje de la posición que se publica al pasajero sobre la ruta real.
+  ///
+  /// El detector de desvíos sigue usando la posición sin encajar, para que un
+  /// desvío de verdad no quede disfrazado de "siempre sobre la ruta".
+  final MapMatchingService _mapMatching = MapMatchingService();
+
   // ---------------- CAMARA LIBRE (SOLO SIN VIAJE) ----------------
 
   /// Rumbo por movimiento GPS + Kalman. Solo se alimenta cuando
@@ -318,6 +335,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// Se limpia al cambiar de viaje o de fase, que es cuando la ruta original
   /// vuelve a ser la buena.
   bool _rutaEsRecalculada = false;
+
   /// `true` si `_routeToPickup` viene de un recalculo de desvio.
   ///
   /// Es la gemela de [_rutaEsRecalculada] para la fase de recogida. Hace falta
@@ -331,7 +349,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   double? _toPickupMin;
   double? _tripKm;
   double? _tripMin;
-int _routeReq = 0;
+  int _routeReq = 0;
   double _todayEarnings = 0;
 
   /// Fase del viaje usada en el ultimo encuadre de camara, para no repetir
@@ -342,44 +360,20 @@ int _routeReq = 0;
   /// Si no cambia, no se vuelve a mover la camara.
   String? _trayectoEncuadre;
 
-/// Rumbo con el que se dibuja la flecha de ubicacion.
-///
-/// Con el mapa en heading-up tiene que ser SIEMPRE el mismo que usa la camara,
-/// o la flecha y el mapa apuntan en direcciones distintas y el conjunto parece
-/// invertido. La camara gira con el sensor, asi que la flecha sale de ahi.
-///
-/// Que antes, con el vehiculo parado, mandara el primer tramo de la ruta era
-/// un error de partida: el mapa seguia orientado por el sensor y la flecha por
-/// la ruta, con lo que en un semaforo la flecha senalaba una calle en la que
-/// no se va a entrar mientras el mapa estaba en otro sitio. Parado el sensor
-/// no da un rumbo fiable, pero hay que ser coherente con la camara: eso es lo
-/// que se pide, mapa y flecha en la misma direccion.
-///
-/// Fuera del modo navegacion (mapa norte-arriba, sin seguimiento) la camara no
-/// manda y si tiene sentido la ruta.
-double? _rumboParaFlecha() {
-  // El rumbo de la camara manda siempre que haya uno: [_nav.rumbo] sale de la
-  // ruta (ver [NavigationModeService]), asi que tomarlo aqui mantiene flecha y
-  // mapa en la misma fuente y no solo en el mismo valor.
-  final camara = _nav.rotacionActual ?? _nav.rumbo;
-  if (_nav.debeSeguir && camara != null) return camara;
-
-  final trazados = _tripPhase ? _route : _routeToPickup;
-  if (trazados.length < 2) return null;
-
-  // Primer tramo con dos puntos de verdad consecutivos: la ruta puede venir
-  // con puntos repetidos en el origen.
-  for (var i = 0; i < trazados.length - 1; i++) {
-    final a = trazados[i];
-    final b = trazados[i + 1];
-    if (a.latitude == b.latitude && a.longitude == b.longitude) continue;
-    return NavigationMapView.bearingEntre(
-      _nav.debeSeguir ? _nav.posicion : _driverPos,
-      b,
-    );
+  /// Rumbo con el que se dibuja la flecha de ubicacion.
+  ///
+  /// Con el mapa en heading-up tiene que ser SIEMPRE el mismo que usa la camara,
+  /// o la flecha y el mapa apuntan en direcciones distintas y el conjunto parece
+  /// invertido.
+  ///
+  /// La fuente unica es el movimiento real del GPS + Kalman: [_nav.rumbo] con
+  /// viaje y [_bearingLibre] sin viaje. La geometria de la ruta (OSRM) ya no
+  /// interviene, ni siquiera parado: en un semaforo la ruta puede doblar en la
+  /// esquina mientras el coche sigue apuntando a la calle actual.
+  double? _rumboParaFlecha() {
+    if (_nav.hayViajeActivo) return _nav.rumbo ?? _bearingLibre;
+    return _bearingLibre;
   }
-  return null;
-}
 
   /// Estado del viaje en castellano, para el titulo del panel.
   ///
@@ -387,15 +381,15 @@ double? _rumboParaFlecha() {
   /// base de datos en ingles dentro de una interfaz que es toda en espanol.
   /// Un estado desconocido cae al propio valor para no dejar el titulo vacio.
   static String estadoViaje(String status) => switch (status) {
-        'accepted' => 'ACEPTADO',
-        'driver_on_the_way' => 'EN CAMINO',
-        'driver_arrived' => 'EN EL PUNTO',
-        'in_progress' => 'EN CURSO',
-        'completed' => 'COMPLETADO',
-        'cancelled' => 'CANCELADO',
-        'expired' => 'EXPIRADO',
-        _ => status.toUpperCase(),
-      };
+    'accepted' => 'ACEPTADO',
+    'driver_on_the_way' => 'EN CAMINO',
+    'driver_arrived' => 'EN EL PUNTO',
+    'in_progress' => 'EN CURSO',
+    'completed' => 'COMPLETADO',
+    'cancelled' => 'CANCELADO',
+    'expired' => 'EXPIRADO',
+    _ => status.toUpperCase(),
+  };
 
   /// Fase de recogida: el chofer aún va hacia el punto de recogida.
   bool get _pickupPhase =>
@@ -445,7 +439,9 @@ double? _rumboParaFlecha() {
     // seguia mostrando el valor viejo.
     _earningsTimer?.cancel();
     _earningsTimer = Timer.periodic(
-        const Duration(seconds: 60), (_) => _loadTodayEarnings());
+      const Duration(seconds: 60),
+      (_) => _loadTodayEarnings(),
+    );
     _initGps();
     _initNotificaciones();
     // Flag para el servicio en segundo plano: con la app visible no debe
@@ -519,18 +515,18 @@ double? _rumboParaFlecha() {
   /// fallarian al pulsarlos, pero el layout es el real, con la misma ruta,
   /// direcciones y precios que un viaje de verdad.
   TripOffer _viajeDemo() => TripOffer(
-        tripId: 'demo',
-        pickup: LatLng(23.1385, -82.3806),
-        dropoff: LatLng(23.1410, -82.3560),
-        precioEstimado: 450,
-        totalFare: 450,
-        distanceKm: 3.4,
-        status: 'accepted',
-        clientName: 'Cliente demo',
-        clientPhone: '5355555555',
-        requestAddress: 'Calle 23 e I, Vedado',
-        dropoffAddress: 'Paseo del Prado, Centro Habana',
-      );
+    tripId: 'demo',
+    pickup: LatLng(23.1385, -82.3806),
+    dropoff: LatLng(23.1410, -82.3560),
+    precioEstimado: 450,
+    totalFare: 450,
+    distanceKm: 3.4,
+    status: 'accepted',
+    clientName: 'Cliente demo',
+    clientPhone: '5355555555',
+    requestAddress: 'Calle 23 e I, Vedado',
+    dropoffAddress: 'Paseo del Prado, Centro Habana',
+  );
 
   /// El servicio ha recalculado la camara: repinta la pantalla.
   ///
@@ -571,7 +567,10 @@ double? _rumboParaFlecha() {
       return;
     }
     if (!_nav.debeSeguir) return;
-    _recalc.informarPosicion(_nav.posicion, _nav.velocidadMps);
+    // El detector mide DESVÍOS: necesita la posición sin encajar. Si le diéramos
+    // la ya proyectada sobre la ruta, la distancia perpendicular sería siempre
+    // cero y dejaría de pedir recálculos.
+    _recalc.informarPosicion(_nav.posicionReal, _nav.velocidadMps);
   }
 
   /// Mueve la camara cuando el chofer circula libre, sin viaje activo.
@@ -648,11 +647,13 @@ double? _rumboParaFlecha() {
         _avisandoRecalculo = true;
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
-          ..showSnackBar(const SnackBar(
-            content: Text('Recalculando ruta…'),
-            duration: Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ));
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Recalculando ruta…'),
+              duration: Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
 
       case RouteRecalcState.error:
       case RouteRecalcState.agotado:
@@ -661,13 +662,17 @@ double? _rumboParaFlecha() {
         final agotado = estado == RouteRecalcState.agotado;
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(
-            content: Text(agotado
-                ? 'Sin conexión. Se mantiene la ruta anterior.'
-                : 'Sin conexión, ruta no actualizada. Reintentando…'),
-            duration: const Duration(seconds: 4),
-            behavior: SnackBarBehavior.floating,
-          ));
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                agotado
+                    ? 'Sin conexión. Se mantiene la ruta anterior.'
+                    : 'Sin conexión, ruta no actualizada. Reintentando…',
+              ),
+              duration: const Duration(seconds: 4),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
 
       case RouteRecalcState.idle:
       case RouteRecalcState.success:
@@ -742,11 +747,13 @@ double? _rumboParaFlecha() {
     if (!degradado) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(
-        content: Text('Vista 3D desactivada para ahorrar batería'),
-        duration: Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-      ));
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Vista 3D desactivada para ahorrar batería'),
+          duration: Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   Future<void> _loadTodayEarnings() async {
@@ -799,10 +806,10 @@ double? _rumboParaFlecha() {
     WidgetsBinding.instance.removeObserver(this);
     _offerTimer?.cancel();
     _esperaTimer?.cancel();
-      _lostTimer?.cancel();
-      _subNotif?.cancel();
-      _notif.dispose();
-      _nav.dispose();
+    _lostTimer?.cancel();
+    _subNotif?.cancel();
+    _notif.dispose();
+    _nav.dispose();
 
     _tiposVehiculo.dispose();
     _subRecalc?.cancel();
@@ -854,8 +861,10 @@ double? _rumboParaFlecha() {
         }
         if (activo == null) {
           if (mounted) {
-            _showError('Esperando aprobación de vehículo. Añade uno en '
-                '"Mi Garaje" o espera la revisión del administrador.');
+            _showError(
+              'Esperando aprobación de vehículo. Añade uno en '
+              '"Mi Garaje" o espera la revisión del administrador.',
+            );
           }
           return;
         }
@@ -864,7 +873,10 @@ double? _rumboParaFlecha() {
 
         await widget.api.setDriverStatus(widget.driverId, 'available');
         await widget.api.setDriverLocation(
-            widget.driverId, _driverPos.latitude, _driverPos.longitude);
+          widget.driverId,
+          _driverPos.latitude,
+          _driverPos.longitude,
+        );
         if (!mounted) return;
         // Lista limpia antes de pedir las ofertas nuevas: sin esto quedaban en
         // pantalla tarjetas y avisos de la sesion anterior, que ya no
@@ -888,10 +900,7 @@ double? _rumboParaFlecha() {
           tipoVehiculo: _tipoVehiculoActivo,
         );
         // WebSocket: posicion + ofertas empujadas.
-        _ws.iniciar(
-          driverId: widget.driverId,
-          token: widget.api.token ?? '',
-        );
+        _ws.iniciar(driverId: widget.driverId, token: widget.api.token ?? '');
         OfertasBackgroundService.guardarTipo(_tipoVehiculoActivo);
         _startTicker();
         await _tick();
@@ -1012,7 +1021,8 @@ double? _rumboParaFlecha() {
       if (!mounted) return;
       if (viaje == null) {
         _mostrarAviso(
-            'No se pudo abrir el viaje asignado. Revisa tu conexión.');
+          'No se pudo abrir el viaje asignado. Revisa tu conexión.',
+        );
         return;
       }
       // Entre el evento y la consulta el viaje pudo cancelarse o completarse.
@@ -1076,12 +1086,14 @@ double? _rumboParaFlecha() {
     await _guardarMarcadorViaje(viaje);
     _startTripPoller();
     _cancelacion.cargar(driverId: widget.driverId);
-    unawaited(_asistente.iniciar(
-      tripId: viaje.tripId,
-      fase: 'recogida',
-      origen: _driverPos,
-      destino: viaje.pickup ?? viaje.dropoff ?? _driverPos,
-    ));
+    unawaited(
+      _asistente.iniciar(
+        tripId: viaje.tripId,
+        fase: 'recogida',
+        origen: _driverPos,
+        destino: viaje.pickup ?? viaje.dropoff ?? _driverPos,
+      ),
+    );
     _refreshRoutes();
     _mostrarAviso('Viaje asignado por el administrador');
   }
@@ -1302,8 +1314,9 @@ double? _rumboParaFlecha() {
         if (_avisoSinTipoMostrado != widget.profile.id) {
           _avisoSinTipoMostrado = widget.profile.id;
           _mostrarAviso(
-              'No tienes un vehículo activo en Mi Garaje, por eso no te llegan '
-              'ofertas. Añade uno o espera la aprobación del administrador.');
+            'No tienes un vehículo activo en Mi Garaje, por eso no te llegan '
+            'ofertas. Añade uno o espera la aprobación del administrador.',
+          );
         }
         return;
       }
@@ -1328,9 +1341,11 @@ double? _rumboParaFlecha() {
           .where((o) => !_mismoTipo(o.vehicleType, tipoChofer))
           .toList();
       if (deOtroTipo.isNotEmpty) {
-        debugPrint('[OFERTA] DESCARTADAS por tipo: '
-            '${deOtroTipo.map((o) => "${o.tripId}:${o.vehicleType}").join(", ")} '
-            '(el chofer es $tipoChofer)');
+        debugPrint(
+          '[OFERTA] DESCARTADAS por tipo: '
+          '${deOtroTipo.map((o) => "${o.tripId}:${o.vehicleType}").join(", ")} '
+          '(el chofer es $tipoChofer)',
+        );
       }
 
       final propias = list
@@ -1339,15 +1354,19 @@ double? _rumboParaFlecha() {
 
       for (final o in propias) {
         final dl = _offerDeadlineRaw(o);
-        debugPrint('[OFERTA] trip=${o.tripId} tipo=${o.vehicleType} '
-            'pickup=${o.pickup} '
-            'deadline=${dl?.toIso8601String()} ahora=${now.toIso8601String()} '
-            'vence=${dl == null ? "sin-plazo" : dl.isAfter(now)}');
+        debugPrint(
+          '[OFERTA] trip=${o.tripId} tipo=${o.vehicleType} '
+          'pickup=${o.pickup} '
+          'deadline=${dl?.toIso8601String()} ahora=${now.toIso8601String()} '
+          'vence=${dl == null ? "sin-plazo" : dl.isAfter(now)}',
+        );
       }
-      debugPrint('[OFERTA] recibidas=${list.length} propias=${propias.length} '
-          'online=$_online '
-          'activeTrip=${_activeTrip?.tripId} lost=${_lostOffer?.tripId} '
-          'selected=${_selectedOffer?.tripId}');
+      debugPrint(
+        '[OFERTA] recibidas=${list.length} propias=${propias.length} '
+        'online=$_online '
+        'activeTrip=${_activeTrip?.tripId} lost=${_lostOffer?.tripId} '
+        'selected=${_selectedOffer?.tripId}',
+      );
       final offers = propias.where((o) {
         if (o.pickup == null) return false;
         if (_declinedTripIds.contains(o.tripId)) return false;
@@ -1363,8 +1382,10 @@ double? _rumboParaFlecha() {
         final deadline = _offerDeadlineRaw(o);
         return deadline == null || deadline.isAfter(now);
       }).toList();
-      debugPrint('[OFERTA] filtradas=${offers.length} '
-          'ids=${offers.map((o) => o.tripId).toList()}');
+      debugPrint(
+        '[OFERTA] filtradas=${offers.length} '
+        'ids=${offers.map((o) => o.tripId).toList()}',
+      );
 
       // Una oferta que el backend ya no devuelve puede estar tomada por otro
       // conductor, cancelada o simplemente vencida. El sondeo no dice cual, y
@@ -1373,9 +1394,11 @@ double? _rumboParaFlecha() {
       // Las rechazadas por el propio chofer se excluyen: ya se sabe por que
       // desaparecieron y no deben producir ningun aviso.
       final desaparecidas = _ofertaCache.keys
-          .where((id) =>
-              !offers.any((o) => o.tripId == id) &&
-              !_declinedTripIds.contains(id))
+          .where(
+            (id) =>
+                !offers.any((o) => o.tripId == id) &&
+                !_declinedTripIds.contains(id),
+          )
           .toList();
       final desenlaces = <String, _FinOferta>{};
       for (final id in desaparecidas) {
@@ -1394,8 +1417,7 @@ double? _rumboParaFlecha() {
         final fin = desenlaces[selected.tripId];
         if (fin == _FinOferta.tomadaPorOtro) {
           _markOfferLost(selected);
-        } else if (fin == _FinOferta.expirada ||
-            fin == _FinOferta.cancelada) {
+        } else if (fin == _FinOferta.expirada || fin == _FinOferta.cancelada) {
           setState(() => _selectedOffer = null);
         }
         // `esMia` (aceptacion en vuelo) y `desconocida` (fallo de red) se
@@ -1424,31 +1446,60 @@ double? _rumboParaFlecha() {
   }
 
   void _setDriverPos(LatLng p, {double? rumbo, double? velocidadKmh}) {
-    // Suaviza el GPS antes de dibujar, avisar al asistente y publicar: quita
-    // los saltos sin retrasar la camara (media movil ponderada de 4 fixes).
+    // El filtro sigue dando la VELOCIDAD (y con ella el zoom), pero ya no se
+    // usa para la posicion: una media movil de 4 fixes corta la esquina y deja
+    // el punto dentro de la manzana justo al girar.
     final suave = _filtroGps.filtrar(p);
     final velocidad = velocidadKmh ?? _filtroGps.velocidadKmh;
 
-    setState(() => _driverPos = suave);
+    // Se encaja el GPS CRUDO sobre la polilinea de calles. `posicion` siempre
+    // cae en la ruta, asi que nunca se pinta un edificio; `confiable` solo mide
+    // cuánto se corrigió y no impide dibujar. Sin viaje no hay ruta de calles y
+    // se conserva el GPS suave de siempre.
+    final ajuste = _activeTrip == null
+        ? null
+        : _mapMatching.ajustar(
+            p,
+            rumbo: rumbo ?? _nav.rumbo,
+            velocidadKmh: velocidad,
+          );
+    final publicada = ajuste?.posicion ?? suave;
+
+    setState(() => _driverPos = publicada);
     // Con el chofer libre la camara sigue este punto filtrado; se guarda aqui
     // para que el primer pintado ya salga centrado sin esperar al fix de 1 Hz.
     if (_activeTrip == null && !_manualPos) _centroLibre = suave;
     _publicarRuta();
     // Ultima posicion que conoce el servicio en primer plano: si tiene que
     // relevar el sondeo (app cerrada), usa este punto.
-    unawaited(OfertasBackgroundService.guardarUltimaPosicion(suave.latitude, suave.longitude));
+    unawaited(
+      OfertasBackgroundService.guardarUltimaPosicion(
+        publicada.latitude,
+        publicada.longitude,
+      ),
+    );
     // El asistente aprende la posicion y avanza pasos por radio de 30 m.
-    _asistente.conPosicion(suave, velocidadKmh: velocidad);
+    _asistente.conPosicion(publicada, velocidadKmh: velocidad);
     // Y via WebSocket (push) al pasajero del viaje activo.
-    _ws.posicion(suave.latitude, suave.longitude, rumbo, speed: velocidad);
+    _ws.posicion(
+      publicada.latitude,
+      publicada.longitude,
+      rumbo,
+      speed: velocidad,
+    );
     if (_online) {
       // El rumbo viaja con la posicion: el cliente lo usa para orientar la
       // camara 3D hacia adelante, como la vista del chofer. Solo con rumbo
       // DE VERDAD (sensor o GPS con bandera),nunca un 0 inventado. La
       // velocidad decide el zoom dinamico del cliente.
       widget.api
-          .setDriverLocation(widget.driverId, suave.latitude, suave.longitude,
-              bearing: rumbo, speed: velocidad)
+          .setDriverLocation(
+            widget.driverId,
+            publicada.latitude,
+            publicada.longitude,
+            bearing: rumbo,
+            speed: velocidad,
+          )
           .catchError((_) {});
     }
 
@@ -1514,11 +1565,11 @@ double? _rumboParaFlecha() {
     final first = await LocationService.current();
     if (first != null && mounted) {
       setState(() => _gpsState = LocationPermissionState.granted);
-        _setDriverPos(first);
-        _activarCamaraDeFase();
-      } else if (mounted) {
-        setState(() => _gpsState = LocationPermissionState.granted);
-      }
+      _setDriverPos(first);
+      _activarCamaraDeFase();
+    } else if (mounted) {
+      setState(() => _gpsState = LocationPermissionState.granted);
+    }
 
     _gpsSub?.cancel();
 
@@ -1543,13 +1594,14 @@ double? _rumboParaFlecha() {
       final rumbo = (fix.velocidadKmh > 3.0 && fix.rumbo != null)
           ? fix.rumbo
           : null;
-      // RUMBO BASADO EN LA RUTA (geometria del asistente snap→siguiente), por
-      // encima del CourseOfGround del GPS: es el mismo bearing que consume el
-      // cliente (WS y /drivers/location) para que ambos mapas apunten igual.
-      final rumboRuta = _asistente.rumboDesdeRuta(fix.position);
+      // El rumbo que se publica al cliente (WS y /drivers/location) es el
+      // mismo que orienta el mapa: GPS + Kalman. Con viaje lo mantiene
+      // [_nav]; sin viaje, [_bearingLibre]. Ya no se usa la geometria de la
+      // ruta: en un cruce el trazado puede apuntar a otra calle.
+      final rumboFiltrado = _activeTrip != null ? _nav.rumbo : _bearingLibre;
       _setDriverPos(
         fix.position,
-        rumbo: rumboRuta ?? rumbo,
+        rumbo: rumboFiltrado ?? rumbo,
         velocidadKmh: fix.velocidadKmh,
       );
     });
@@ -1557,9 +1609,8 @@ double? _rumboParaFlecha() {
 
   /// Pone la camara en el modo que toca segun la fase del viaje.
   ///
-  /// Sin viaje: norte arriba, sin tilt, sin heading-up. Se apaga siempre, sin
-  /// excepciones por desplazamiento: el heading-up sale de la ruta y sin viaje no
-  /// hay ruta, asi que no hay nada que orientar aunque el coche se mueva.
+  /// Sin viaje: norte arriba, sin tilt, sin heading-up. La camara libre la lleva
+  /// [_aplicarCamaraLibre] y se apaga el servicio de navegacion.
   void _activarCamaraDeFase() {
     final fase = _faseCamara;
     if (fase == null) {
@@ -1572,7 +1623,14 @@ double? _rumboParaFlecha() {
     // Se pasa la posicion real del GPS: el servicio la usa como punto de partida
     // en vez del punto fijo por defecto, que hacia que el mapa y la flecha
     // aparecieran en el centro de La Habana al arrancar un viaje.
-    _nav.activar(fase, posicionConocida: _driverPos);
+    //
+    // `rumboInicial` siembra el filtro con el ultimo rumbo libre para que el
+    // mapa no salte al norte mientras llegan dos fixes con desplazamiento.
+    _nav.activar(
+      fase,
+      posicionConocida: _driverPos,
+      rumboInicial: _bearingLibre,
+    );
   }
 
   /// Vuelve a pedir el permiso y recentra el mapa en la posicion real.
@@ -1594,7 +1652,7 @@ double? _rumboParaFlecha() {
         _setDriverPos(p);
         // Si hay viaje, el modo navegacion recupera el control de la camara.
         if (_faseCamara != null) {
-          // `recentrar` ademas fija zoom 18 y tilt 55 mientras siga parado, que
+          // `recentrar` ademas fija zoom 19 y tilt 55 mientras siga parado, que
           // es lo que quiere quien pulsa esto: ver la calle de cerca, inclinada.
           _nav.recentrar();
         }
@@ -1633,8 +1691,8 @@ double? _rumboParaFlecha() {
       _manualPos = false;
       _gpsState = LocationPermissionState.granted;
       if (p != null) {
-      _driverPos = p;
-    }
+        _driverPos = p;
+      }
     });
     if (p == null) {
       return;
@@ -1668,7 +1726,6 @@ double? _rumboParaFlecha() {
   /// que el boton no cambie el aspecto de la vista.
   double get _tiltAlRecentrar => ApiConfig.tiltEntradaNavegacion;
 
-
   /// Calcula con OSRM la ruta por carretera conductor->recogida y
   /// recogida->destino, tanto para la oferta seleccionada como para el
   /// viaje activo.
@@ -1693,7 +1750,7 @@ double? _rumboParaFlecha() {
       if (!mounted || req != _routeReq) return;
       setState(() {
         _routeToPickup = const [];
-          _toPickupKm = null;
+        _toPickupKm = null;
         _toPickupMin = null;
         _tripKm = null;
         _tripMin = null;
@@ -1702,12 +1759,12 @@ double? _rumboParaFlecha() {
       return;
     }
 
-// Con una oferta seleccionada se calculan las dos rutas (resumen del
+    // Con una oferta seleccionada se calculan las dos rutas (resumen del
     // modal); durante la carrera activa solo la correspondiente al tramo en
     // curso:
     //   - fase de recogida ('accepted'/'driver_arrived') ? ruta de recogida.
     //   - fase de traslado ('in_progress') ? ruta hacia el destino.
-final inTripPhase = active != null && active.status == 'in_progress';
+    final inTripPhase = active != null && active.status == 'in_progress';
 
     // Si la ruta buena es una recalculada por un desvio, no se pregunta nada.
     //
@@ -1725,8 +1782,10 @@ final inTripPhase = active != null && active.status == 'in_progress';
     if (inTripPhase ? _rutaEsRecalculada : _rutaRecogidaEsRecalculada) {
       _vecesRutaProtegida++;
       if (_vecesRutaProtegida == 1 || _vecesRutaProtegida % 60 == 0) {
-        TrazaFichero.instancia.escribir('[RUTA] recalculada vigente: no se '
-            'pregunta a OSRM ($_vecesRutaProtegida veces)');
+        TrazaFichero.instancia.escribir(
+          '[RUTA] recalculada vigente: no se '
+          'pregunta a OSRM ($_vecesRutaProtegida veces)',
+        );
       }
       _encuadrarTrayecto(pickup: pickup, dropoff: inTripPhase ? dropoff : null);
       _arrancarRecalc(inTripPhase ? dropoff : pickup, inTripPhase);
@@ -1790,15 +1849,21 @@ final inTripPhase = active != null && active.status == 'in_progress';
 
   /// Le pasa al servicio de navegacion el trazado que se esta siguiendo.
   ///
-  /// El servicio lo necesita para orientar el mapa con la DIRECCION DE LA RUTA
-  /// cuando se va despacio: por debajo de 20 km/h ni el GPS sirve (su error de
-  /// posicion es mayor que el desplazamiento) ni la brújula (que en este movil va
-  /// clavada), y la ruta si dice por donde se sale del cruce.
+  /// El trazado se conserva para la traza de diagnostico y para dibujar la
+  /// polilinea, ya NO para orientar el mapa: la camara gira con el rumbo GPS +
+  /// Kalman. La ruta dice por donde se va, no hacia donde apunta el coche.
   ///
   /// Se llama cuando cambia la ruta o la posicion, no en cada repintado: el
   /// servicio ya recibe la posicion viva por su propio canal, de [_rutaVisible]
   /// solo le interesa el trazado.
-  void _publicarRuta() => _nav.informarRuta(_rutaVisible);
+  void _publicarRuta() {
+    // Al servicio le van DOS rutas: la que se dibuja (con recta de respaldo) y
+    // la de calles reales, que es la que debe encajar su propia posición. Sin
+    // el segundo parametro su map-matching se quedaba vacio y el marcador del
+    // chofer seguia yendo por los edificios.
+    _nav.informarRuta(_rutaVisible, rutaParaMatching: _rutaParaMatching);
+    _mapMatching.actualizarRuta(_rutaParaMatching);
+  }
 
   /// Arranca (o reinicia) la deteccion de desvio para el tramo en curso.
   void _arrancarRecalc(LatLng? destino, bool enTraslado) {
@@ -1845,8 +1910,13 @@ final inTripPhase = active != null && active.status == 'in_progress';
         return;
       }
       // Cambio de fase: el servicio de navegacion toma el relevo. Se le pasa la
-      // posicion real por el mismo motivo que en [_activarCamaraDeFase].
-      _nav.activar(fase, posicionConocida: _driverPos);
+      // posicion real por el mismo motivo que en [_activarCamaraDeFase] y el
+      // ultimo rumbo libre para sembrar el filtro sin salto al norte.
+      _nav.activar(
+        fase,
+        posicionConocida: _driverPos,
+        rumboInicial: _bearingLibre,
+      );
     }
     final objetivo = dropoff ?? pickup;
     if (objetivo == null) return;
@@ -1865,9 +1935,10 @@ final inTripPhase = active != null && active.status == 'in_progress';
     if (trazado.isNotEmpty) puntos.addAll(trazado);
     if (puntos.length < 2) return;
 
-    final firma = '${objetivo.latitude.toStringAsFixed(5)},'
+    final firma =
+        '${objetivo.latitude.toStringAsFixed(5)},'
         '${objetivo.longitude.toStringAsFixed(5)}|$fase|${trazado.length}';
-    if (firma == _trayectoEncuadre) return;   // nada nuevo que encuadrar
+    if (firma == _trayectoEncuadre) return; // nada nuevo que encuadrar
     _trayectoEncuadre = firma;
 
     // Mientras la camara sigue al vehiculo no se reencuadra: si se hiciera, el
@@ -1889,18 +1960,15 @@ final inTripPhase = active != null && active.status == 'in_progress';
     _lostTimer?.cancel();
     final now = DateTime.now().toUtc();
     final maxSecs = offer.offerExpiresInSecs ?? _offerLimitSecs;
-    final deadline = _offerDeadlineRaw(offer) ??
-        now.add(Duration(seconds: maxSecs));
+    final deadline =
+        _offerDeadlineRaw(offer) ?? now.add(Duration(seconds: maxSecs));
     setState(() {
       _selectedOffer = offer;
       _error = null;
       _lostOffer = null;
       _lostCountdown = 0;
       _offerDeadlineAt = deadline;
-      _offerCountdown = deadline
-          .difference(now)
-          .inSeconds
-          .clamp(0, maxSecs);
+      _offerCountdown = deadline.difference(now).inSeconds.clamp(0, maxSecs);
     });
     _startOfferCountdown();
     _refreshRoutes();
@@ -1922,8 +1990,14 @@ final inTripPhase = active != null && active.status == 'in_progress';
     final utc = (raw.endsWith('Z') || raw.contains('+'))
         ? d.toUtc()
         : DateTime.utc(
-            d.year, d.month, d.day, d.hour, d.minute, d.second,
-            d.millisecond);
+            d.year,
+            d.month,
+            d.day,
+            d.hour,
+            d.minute,
+            d.second,
+            d.millisecond,
+          );
     return utc.add(const Duration(seconds: _offerLimitSecs));
   }
 
@@ -2029,7 +2103,8 @@ final inTripPhase = active != null && active.status == 'in_progress';
       // El historial puede venir sin orden garantizado: el vivo que importa
       // es el más reciente.
       vivos.sort(
-          (a, b) => (b.requestedAt ?? '').compareTo(a.requestedAt ?? ''));
+        (a, b) => (b.requestedAt ?? '').compareTo(a.requestedAt ?? ''),
+      );
       final viaje = await widget.api.getTrip(vivos.first.tripId);
       if (!mounted || _activeTrip != null) return;
       // Entre consultas el viaje pudo terminar: si ya no está vivo, no se
@@ -2055,9 +2130,11 @@ final inTripPhase = active != null && active.status == 'in_progress';
         }
         await _limpiarMarcadorViaje();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Viaje anterior liberado por inactividad'),
-          ));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Viaje anterior liberado por inactividad'),
+            ),
+          );
         }
         return;
       }
@@ -2086,8 +2163,7 @@ final inTripPhase = active != null && active.status == 'in_progress';
   Future<void> _guardarMarcadorViaje(TripOffer viaje) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefViajeTrip, viaje.tripId);
-    await prefs.setString(
-        _prefViajeTs, widget.api.ahoraUtc.toIso8601String());
+    await prefs.setString(_prefViajeTs, widget.api.ahoraUtc.toIso8601String());
   }
 
   Future<void> _limpiarMarcadorViaje() async {
@@ -2108,8 +2184,9 @@ final inTripPhase = active != null && active.status == 'in_progress';
     final ahora = widget.api.ahoraUtc;
     DateTime? base = _parseTimestampUtc(viaje.requestedAt);
     if (base == null) {
-      final ts =
-          (await SharedPreferences.getInstance()).getString(_prefViajeTs);
+      final ts = (await SharedPreferences.getInstance()).getString(
+        _prefViajeTs,
+      );
       base = ts == null ? null : DateTime.tryParse(ts);
     }
     if (base == null) return false;
@@ -2128,8 +2205,16 @@ final inTripPhase = active != null && active.status == 'in_progress';
     final t = DateTime.tryParse(s);
     if (t == null) return null;
     if (s.endsWith('Z') || s.contains('+')) return t.toUtc();
-    return DateTime.utc(t.year, t.month, t.day, t.hour, t.minute, t.second,
-        t.millisecond, t.microsecond);
+    return DateTime.utc(
+      t.year,
+      t.month,
+      t.day,
+      t.hour,
+      t.minute,
+      t.second,
+      t.millisecond,
+      t.microsecond,
+    );
   }
 
   /// Un chofer con el fondo en rojo no acepta viajes. El bloqueo de verdad está
@@ -2198,12 +2283,14 @@ final inTripPhase = active != null && active.status == 'in_progress';
       // desde el primer segundo.
       _cancelacion.cargar(driverId: widget.driverId);
       // Asistente de ruta paso a paso: PRIMERA fase = ir por la RECOGIDA.
-      unawaited(_asistente.iniciar(
-        tripId: trip.tripId,
-        fase: 'recogida',
-        origen: _driverPos,
-        destino: trip.pickup ?? trip.dropoff ?? _driverPos,
-      ));
+      unawaited(
+        _asistente.iniciar(
+          tripId: trip.tripId,
+          fase: 'recogida',
+          origen: _driverPos,
+          destino: trip.pickup ?? trip.dropoff ?? _driverPos,
+        ),
+      );
       _refreshRoutes();
     } catch (e) {
       _aceptandoTripId = null;
@@ -2211,7 +2298,8 @@ final inTripPhase = active != null && active.status == 'in_progress';
       // 409 = otro chofer gano la carrera: aqui SI corresponde la tarjeta
       // roja. 410 = la oferta vencio antes del toque: mensaje suave y cierre.
       final motivo = e is ApiException ? e.message.toLowerCase() : '';
-      final esOtraToma = e is ApiException &&
+      final esOtraToma =
+          e is ApiException &&
           e.statusCode == 409 &&
           !motivo.contains('cancelada') &&
           !motivo.contains('completado');
@@ -2289,8 +2377,11 @@ final inTripPhase = active != null && active.status == 'in_progress';
         case 'accepted':
           // Confirma el viaje y marca la ubicación real de recogida: desde
           // aquí se cuentan los kilómetros. El viaje queda en `driver_on_the_way`.
-          await widget.api.setPickup(trip.tripId, _driverPos.latitude,
-              _driverPos.longitude);
+          await widget.api.setPickup(
+            trip.tripId,
+            _driverPos.latitude,
+            _driverPos.longitude,
+          );
           await widget.api.updateTripStatus(trip.tripId, 'driver_on_the_way');
         case 'driver_on_the_way':
           await widget.api.updateTripStatus(trip.tripId, 'driver_arrived');
@@ -2299,16 +2390,16 @@ final inTripPhase = active != null && active.status == 'in_progress';
         default:
           break;
       }
-final updated = await widget.api.getTrip(trip.tripId);
+      final updated = await widget.api.getTrip(trip.tripId);
       if (!mounted) return;
       setState(() {
         _activeTrip = updated;
         _loading = false;
         if (updated.pickup != null) {
-        // el chofer acaba de aceptar: encuadra el trayecto con el zoom de
-        // esta fase en vez de un zoom fijo
-        _encuadrarTrayecto(pickup: updated.pickup);
-      }
+          // el chofer acaba de aceptar: encuadra el trayecto con el zoom de
+          // esta fase en vez de un zoom fijo
+          _encuadrarTrayecto(pickup: updated.pickup);
+        }
       });
       _mantenerRelojEspera(updated);
       // Al pasar a 'in_progress' la ruta de recogida se borra al instante y
@@ -2316,12 +2407,14 @@ final updated = await widget.api.getTrip(trip.tripId);
       // completo de pasos + nueva ruta hacia el destino final (si no,
       // seguiria dando indicaciones de la ruta de recogida).
       if (updated.status == 'in_progress') {
-        unawaited(_asistente.iniciar(
-          tripId: updated.tripId,
-          fase: 'destino',
-          origen: _driverPos,
-          destino: updated.dropoff ?? _driverPos,
-        ));
+        unawaited(
+          _asistente.iniciar(
+            tripId: updated.tripId,
+            fase: 'destino',
+            origen: _driverPos,
+            destino: updated.dropoff ?? _driverPos,
+          ),
+        );
       }
       await _refreshRoutes();
     } catch (e) {
@@ -2346,16 +2439,20 @@ final updated = await widget.api.getTrip(trip.tripId);
 
     if (status == 'completed') {
       final recibo = datos['recibo'];
-      await _mostrarReciboDeViaje(tripId,
-          recibo: recibo is Map ? Map<String, dynamic>.from(recibo) : null);
+      await _mostrarReciboDeViaje(
+        tripId,
+        recibo: recibo is Map ? Map<String, dynamic>.from(recibo) : null,
+      );
       return;
     }
 
     if (status == 'cancelled' || status == 'expired') {
       if (_activeTrip?.tripId == tripId) {
-        await _alPerderElViaje(status == 'cancelled'
-            ? 'El operador canceló el viaje'
-            : 'El viaje expiró');
+        await _alPerderElViaje(
+          status == 'cancelled'
+              ? 'El operador canceló el viaje'
+              : 'El viaje expiró',
+        );
       }
       return;
     }
@@ -2371,12 +2468,14 @@ final updated = await widget.api.getTrip(trip.tripId);
       setState(() => _activeTrip = actual);
       _mantenerRelojEspera(actual);
       if (actual.status == 'in_progress') {
-        unawaited(_asistente.iniciar(
-          tripId: actual.tripId,
-          fase: 'destino',
-          origen: _driverPos,
-          destino: actual.dropoff ?? _driverPos,
-        ));
+        unawaited(
+          _asistente.iniciar(
+            tripId: actual.tripId,
+            fase: 'destino',
+            origen: _driverPos,
+            destino: actual.dropoff ?? _driverPos,
+          ),
+        );
       }
       await _refreshRoutes();
     } catch (_) {
@@ -2389,9 +2488,15 @@ final updated = await widget.api.getTrip(trip.tripId);
   /// El recibo llega en el evento (`recibo`) con el mismo desglose que devuelve
   /// el cierre normal. Si el socket venía caído, se pide a
   /// `/trips/{id}/receipt` para que el chófer nunca se quede sin su vale.
+  /// Unico punto de entrada al recibo del chofer.
+  ///
+  /// Lo llaman el cierre local, el evento WS `completed` y el sondeo del viaje.
+  /// Los tres pueden llegar en el mismo segundo: la guardia `_recibosMostrados`
+  /// evita que se abra el dialogo dos veces (que se leia como doble cobro).
   Future<void> _mostrarReciboDeViaje(
     String tripId, {
     Map<String, dynamic>? recibo,
+    CompletedTrip? reciboListo,
   }) async {
     if (!_recibosMostrados.add(tripId)) return;
 
@@ -2401,8 +2506,8 @@ final updated = await widget.api.getTrip(trip.tripId);
       await _alPerderElViaje('', mostrarAviso: false);
     }
 
-    CompletedTrip? done;
-    if (recibo != null) {
+    CompletedTrip? done = reciboListo;
+    if (done == null && recibo != null) {
       try {
         done = CompletedTrip.fromJson(recibo);
       } catch (_) {
@@ -2439,7 +2544,10 @@ final updated = await widget.api.getTrip(trip.tripId);
   ///
   /// [mostrarAviso] pinta un SnackBar con el motivo. Se puede pasar null para
   /// no molestar, como en la completacion normal.
-  Future<void> _alPerderElViaje(String motivo, {bool mostrarAviso = true}) async {
+  Future<void> _alPerderElViaje(
+    String motivo, {
+    bool mostrarAviso = true,
+  }) async {
     if (_activeTrip == null) return;
 
     _aceptandoTripId = null;
@@ -2509,11 +2617,13 @@ final updated = await widget.api.getTrip(trip.tripId);
     if (mostrarAviso && mounted) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(
-          content: Text(motivo),
-          duration: const Duration(seconds: 4),
-          behavior: SnackBarBehavior.floating,
-        ));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(motivo),
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
     }
   }
 
@@ -2532,7 +2642,10 @@ final updated = await widget.api.getTrip(trip.tripId);
       );
       await widget.api.setDriverStatus(widget.driverId, 'available');
       await widget.api.setDriverLocation(
-          widget.driverId, _driverPos.latitude, _driverPos.longitude);
+        widget.driverId,
+        _driverPos.latitude,
+        _driverPos.longitude,
+      );
 
       // La limpieza pasa por [_alPerderElViaje], el mismo camino que usa la
       // cancelacion. Que sea uno solo evita que a uno se le olvide una pieza y el
@@ -2543,7 +2656,10 @@ final updated = await widget.api.getTrip(trip.tripId);
       _declinedTripIds.add(trip.tripId);
       _ofertaCache.remove(trip.tripId);
       if (!mounted) return;
-      await _showCompleted(done);
+      // Unico camino al recibo: [_mostrarReciboDeViaje] tiene la guardia
+      // `_recibosMostrados`. Antes se abria aqui en directo y, al llegar casi
+      // al mismo tiempo el evento WS y el sondeo, aparecia el recibo dos veces.
+      await _mostrarReciboDeViaje(trip.tripId, reciboListo: done);
       await _tick();
       await _refreshRoutes();
       // Esperar un momento para que la BD confirme el cambio
@@ -2557,10 +2673,12 @@ final updated = await widget.api.getTrip(trip.tripId);
     }
   }
 
-void _startTripPoller() {
+  void _startTripPoller() {
     _tripPoller?.cancel();
     _tripPoller = Timer.periodic(
-        const Duration(seconds: 4), (_) => _pollActiveTrip());
+      const Duration(seconds: 4),
+      (_) => _pollActiveTrip(),
+    );
   }
 
   // ---------------- COMUNICACI?N CON EL PASAJERO ----------------
@@ -2613,7 +2731,10 @@ void _startTripPoller() {
     try {
       // Reporta la posición al backend (que la reenvía a Traccar) mientras el viaje está activo.
       await widget.api.setDriverLocation(
-          widget.driverId, _driverPos.latitude, _driverPos.longitude);
+        widget.driverId,
+        _driverPos.latitude,
+        _driverPos.longitude,
+      );
 
       // Antes de tocar la ruta se consulta el estado del viaje. El sondeo cada
       // 4 s es lo que hace que cuando el PASAJERO cancela desde su app, el
@@ -2632,7 +2753,7 @@ void _startTripPoller() {
         }
         final canceladoPorPasajero =
             actual.status == 'cancelled' &&
-                (trip.clientId?.isNotEmpty ?? false);
+            (trip.clientId?.isNotEmpty ?? false);
         await _alPerderElViaje(
           actual.status == 'cancelled'
               ? 'El pasajero canceló el viaje'
@@ -2644,7 +2765,7 @@ void _startTripPoller() {
         return;
       }
 
-final pts = await widget.api.getTripRoute(trip.tripId);
+      final pts = await widget.api.getTripRoute(trip.tripId);
       if (!mounted) return;
       // Esta es la ruta que el backend tiene GUARDADA para el viaje: la original
       // de la recogida al destino, no la que el conductor lleva deambulando. Es
@@ -2687,9 +2808,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
               controller: motivoCtrl,
               maxLines: 1,
               maxLength: 120,
-              decoration: const InputDecoration(
-                hintText: 'Motivo (opcional)',
-              ),
+              decoration: const InputDecoration(hintText: 'Motivo (opcional)'),
             ),
           ],
         ),
@@ -2717,10 +2836,12 @@ final pts = await widget.api.getTripRoute(trip.tripId);
         motivo: motivo,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        behavior: SnackBarBehavior.floating,
-        content: Text('Pasajero bloqueado'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Pasajero bloqueado'),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       _showError('$e');
@@ -2729,17 +2850,18 @@ final pts = await widget.api.getTripRoute(trip.tripId);
 
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Theme.of(context).colorScheme.error),
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: Theme.of(context).colorScheme.error,
+      ),
     );
   }
 
   Future<void> _showCompleted(CompletedTrip t) {
-    final metodoExc = t.metodoPagoExcedente ??
-        (t.paymentMethod == 'Transferencia' ? 'Transferencia' : 'Efectivo');
-    final abono = t.montoBilleteraChofer > 0 ? t.montoBilleteraChofer : t.abonoBilletera;
+    final metodoExc = t.metodoPagoExcedente ?? t.paymentMethod;
     final excedente = t.montoExcedente > 0 ? t.montoExcedente : t.montoCobrado;
     final bono = t.bonoChoferCampana;
-    final usoPromo = t.saldoPromocionalUsado > 0 || t.campanaPromocional;
+    final usoPromo = t.saldoPromocionalUsado > 0;
 
     return showDialog<void>(
       context: context,
@@ -2753,45 +2875,62 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             _row('Duración', _fmtDuration(t.durationSecs)),
             _row('Pago', t.paymentMethod),
             _row('Base', '${t.baseFare.toStringAsFixed(2)} ${t.currency}'),
-            _row('Distancia', '${t.distanceFare.toStringAsFixed(2)} ${t.currency}'),
+            _row(
+              'Distancia',
+              '${t.distanceFare.toStringAsFixed(2)} ${t.currency}',
+            ),
             if (t.coeficienteAplicado != null &&
                 t.coeficienteAplicado != 1.0 &&
                 t.distanceFareSinCoeficiente != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: _row(
-                    '  (x${t.coeficienteAplicado!.toStringAsFixed(2)}, sin coeficiente '
-                    '${t.distanceFareSinCoeficiente!.toStringAsFixed(2)})',
-                    ''),
+                  '  (x${t.coeficienteAplicado!.toStringAsFixed(2)}, sin coeficiente '
+                      '${t.distanceFareSinCoeficiente!.toStringAsFixed(2)})',
+                  '',
+                ),
               ),
             _row('Tiempo', '${t.timeFare.toStringAsFixed(2)} ${t.currency}'),
             if (t.tip > 0)
               _row('Propina', '${t.tip.toStringAsFixed(2)} ${t.currency}'),
             if (t.descuentoCliente > 0)
-              _row('Descuento promoción',
-                  '-${t.descuentoCliente.toStringAsFixed(2)} ${t.currency}'),
+              _row(
+                'Descuento promoción',
+                '-${t.descuentoCliente.toStringAsFixed(2)} ${t.currency}',
+              ),
             if (t.descuentoReferido > 0)
-              _row('Descuento referido',
-                  '-${t.descuentoReferido.toStringAsFixed(2)} ${t.currency}'),
+              _row(
+                'Descuento referido',
+                '-${t.descuentoReferido.toStringAsFixed(2)} ${t.currency}',
+              ),
             if (t.descuentoPrimerViaje > 0)
-              _row('Descuento 1er Viaje',
-                  '-${t.descuentoPrimerViaje.toStringAsFixed(2)} ${t.currency}'),
+              _row(
+                'Descuento 1er Viaje',
+                '-${t.descuentoPrimerViaje.toStringAsFixed(2)} ${t.currency}',
+              ),
             if (t.recargoReintento > 0)
-              _row('Recargo reintento',
-                  '+${t.recargoReintento.toStringAsFixed(2)} ${t.currency}'),
+              _row(
+                'Recargo reintento',
+                '+${t.recargoReintento.toStringAsFixed(2)} ${t.currency}',
+              ),
             if (t.recargoTransferencia > 0)
-              _row('Recargo transferencia',
-                  '+${t.recargoTransferencia.toStringAsFixed(2)} ${t.currency}'),
+              _row(
+                'Recargo transferencia',
+                '+${t.recargoTransferencia.toStringAsFixed(2)} ${t.currency}',
+              ),
             if ((t.esperaSegs ?? 0) > 0)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: _row(
-                    'Esperó ${_fmtDuration(t.esperaSegs!)}'
-                    '${(t.excedenteEsperaSegs ?? 0) > 0 ? ', ${_fmtDuration(t.excedenteEsperaSegs!)} facturables' : ', sin costo para el pasajero'}',
-                    ''),
+                  'Esperó ${_fmtDuration(t.esperaSegs!)}'
+                      '${(t.excedenteEsperaSegs ?? 0) > 0 ? ', ${_fmtDuration(t.excedenteEsperaSegs!)} facturables' : ', sin costo para el pasajero'}',
+                  '',
+                ),
               ),
-            _row('Comisión ${t.commissionLabel}',
-                '-${t.commission.toStringAsFixed(2)} ${t.currency}'),
+            _row(
+              'Comisión ${t.commissionLabel}',
+              '-${t.commission.toStringAsFixed(2)} ${t.currency}',
+            ),
             if (t.commissionDiscount)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
@@ -2801,16 +2940,20 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                 ),
               ),
             const Divider(),
-            _row('Total del viaje',
-                '${t.totalFare.toStringAsFixed(2)} ${t.currency}',
-                bold: true),
+            _row(
+              'Total del viaje',
+              '${t.totalFare.toStringAsFixed(2)} ${t.currency}',
+              bold: true,
+            ),
             if (usoPromo && bono > 0)
               Padding(
                 padding: const EdgeInsets.only(top: 6, bottom: 2),
                 child: Container(
                   width: double.infinity,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 7,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFF3CD),
                     borderRadius: BorderRadius.circular(10),
@@ -2827,22 +2970,22 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                 ),
               ),
             const SizedBox(height: 4),
-            if (abono > 0)
-              _row('👛 Abonado a tu billetera',
-                  '${abono.toStringAsFixed(2)} ${t.currency}',
-                  bold: true),
-            if (excedente > 0 &&
-                (metodoExc == 'Efectivo' ||
-                    metodoExc.toString().toLowerCase() == 'efectivo'))
-              _row('💵 Cobras en efectivo',
+            // Solo hay desglose si el viaje fue mixto (promo + resto). Con un
+            // unico metodo, arriba ya se leyo "Pago: <metodo>" y no hace falta
+            // repetir importes ni etiquetas que se puedan pegar.
+            if (usoPromo) ...[
+              _row(
+                'Saldo Promocional aplicado',
+                '${t.saldoPromocionalUsado.toStringAsFixed(2)} ${t.currency}',
+                bold: true,
+              ),
+              if (excedente > 0)
+                _row(
+                  'A cobrar por $metodoExc',
                   '${excedente.toStringAsFixed(2)} ${t.currency}',
-                  bold: true),
-            if (excedente > 0 &&
-                (metodoExc == 'Transferencia' ||
-                    metodoExc.toString().toLowerCase() == 'transferencia'))
-              _row('💳 Recibes por Transferencia',
-                  '${excedente.toStringAsFixed(2)} ${t.currency}',
-                  bold: true),
+                  bold: true,
+                ),
+            ],
             if (t.appliedRule != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -2904,17 +3047,71 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   }
 
   Widget _row(String label, String value, {bool bold = false}) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
-            Text(value,
-                style: TextStyle(
-                    fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
         ),
-      );
+        const SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  /// Fila de desglose de pago con separacion fija entre etiqueta e importe.
+  ///
+  /// Antes eran dos `Text` en un `Row` con `spaceBetween`: en pantallas
+  /// estrechas la etiqueta y el importe se tocaban y se leia "billetera360.27".
+  /// La etiqueta va en `Expanded` (puede partirse en dos lineas) y el importe
+  /// queda siempre separado y alineado a la derecha.
+  Widget _filaPago(
+    String etiqueta,
+    String importe, {
+    Color color = const Color(0xFF1F2937),
+    bool bold = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              etiqueta,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF1F2937),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            importe,
+            textAlign: TextAlign.end,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: bold ? FontWeight.w800 : FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   // ---------------- UI ----------------
 
@@ -2931,164 +3128,183 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     // La camara libre solo corre si ademas no hay oferta en pantalla ni pin
     // movido a mano: en esos casos el mapa lo encuadra `_encuadrarTrayecto`.
     final libreActiva = libre && _selectedOffer == null && !_manualPos;
-    return Scaffold(
-      key: _scaffoldKey,
-      drawer: _buildDrawer(),
-      // Casi transparente: el vidrio del menu ya difumina el mapa, el resto
-      // de la pantalla debe seguir viendose como en el diseno de referencia.
-      drawerScrimColor: Colors.transparent,
-      body: Stack(
-        children: [
-          // El mapa ocupa todo el hueco del Stack. La inclinacion y la rotacion las
-          // pone `NavigationMapView` con el `tilt` y el `bearing` nativos de
-          // MapLibre: no hay `Transform` ni `Matrix4` por en medio, asi que el
-          // layout es el natural y la UI no se inclina.
-          //
-          // Toda la UI flotante de este Stack (menu, GPS, banners, panel
-          // inferior) queda como hermana FUERA del mapa.
-          Positioned.fill(
-            child: NavigationMapView(
-              // Sin viaje: pitch fijo 45, bearing por movimiento y zoom
-              // dinamico. Los props son informativos porque el widget no
-              // aplica su `moveCamera` en este modo: la animacion la lanza
-              // [_aplicarCamaraLibre] con `animateCamera`.
-              tilt: libre ? CamaraLibre.pitch : _nav.tiltActual,
-              bearing:
-                  libre ? (_bearingLibre ?? 0.0) : (_nav.rotacionActual ?? 0.0),
-              center: libre
-                  ? _centroLibre
-                  : (_nav.centroActual ?? _driverPos),
-              zoom: libre
-                  ? _zoomLibre
-                  : (_nav.zoomActual ?? ApiConfig.defaultZoom),
-              // Con viaje, exactamente lo de siempre: posicion proyectada del
-              // servicio y rumbo de la ruta/sensor.
-              posicionVehiculo: libre
-                  ? (_nav.tieneFix ? _nav.posicionReal : _driverPos)
-                  : (_nav.debeSeguir ? _nav.posicion : _driverPos),
-              rumboVehiculo: libreActiva
-                  ? (_bearingLibre ?? _rumboParaFlecha())
-                  : _rumboParaFlecha(),
-              camaraLibre: libre,
-              ruta: _rutaVisible,
-              onControlador: (c) => _controlador = c,
-            ),
-          ),
-          // El asistente de ruta paso a paso (Fase 3): arriba y centrado,
-          // con SafeArea. Aparece solo con viaje activo y pasos vigentes.
-          if (_asistente.activo)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: ListenableBuilder(
-                listenable: _asistente,
-                builder: (context, _) =>
-                    AsistenteRutaWidget(estado: _asistente.estado()),
+    // Sin viaje el back sale como siempre. Con viaje vivo se intercepta y se
+    // cancela por el camino normal; si se dejara pasar, la app se cerraba y el
+    // viaje quedaba colgado en el backend.
+    final viajeVivo = !libre && estadosViajeVivos.contains(_activeTrip!.status);
+    return PopScope(
+      canPop: !viajeVivo,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        unawaited(_salirDelViajeChofer());
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: _buildDrawer(),
+        // Casi transparente: el vidrio del menu ya difumina el mapa, el resto
+        // de la pantalla debe seguir viendose como en el diseno de referencia.
+        drawerScrimColor: Colors.transparent,
+        body: Stack(
+          children: [
+            // El mapa ocupa todo el hueco del Stack. La inclinacion y la rotacion las
+            // pone `NavigationMapView` con el `tilt` y el `bearing` nativos de
+            // MapLibre: no hay `Transform` ni `Matrix4` por en medio, asi que el
+            // layout es el natural y la UI no se inclina.
+            //
+            // Toda la UI flotante de este Stack (menu, GPS, banners, panel
+            // inferior) queda como hermana FUERA del mapa.
+            Positioned.fill(
+              child: NavigationMapView(
+                // Sin viaje: pitch fijo 45, bearing por movimiento y zoom
+                // dinamico. Los props son informativos porque el widget no
+                // aplica su `moveCamera` en este modo: la animacion la lanza
+                // [_aplicarCamaraLibre] con `animateCamera`.
+                tilt: libre ? CamaraLibre.pitch : _nav.tiltActual,
+                bearing: libre
+                    ? (_bearingLibre ?? 0.0)
+                    : (_nav.rotacionActual ?? 0.0),
+                center: libre
+                    ? _centroLibre
+                    : (_nav.centroActual ?? _driverPos),
+                zoom: libre
+                    ? _zoomLibre
+                    : (_nav.zoomActual ?? ApiConfig.defaultZoom),
+                // Con viaje, exactamente lo de siempre: posicion proyectada del
+                // servicio y rumbo de la ruta/sensor.
+                posicionVehiculo: libre
+                    ? (_nav.tieneFix ? _nav.posicionReal : _driverPos)
+                    : (_nav.debeSeguir ? _nav.posicion : _driverPos),
+                rumboVehiculo: libreActiva
+                    ? (_bearingLibre ?? _rumboParaFlecha())
+                    : _rumboParaFlecha(),
+                camaraLibre: libre,
+                ruta: _rutaVisible,
+                onControlador: (c) => _controlador = c,
               ),
             ),
-          if (_error != null)
-            Positioned(
-              top: 64,
-              left: 8,
-              right: 8,
-              child: Material(
-                color: Theme.of(context).colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(8),
-                child: InkWell(
-                  onTap: () => setState(() => _error = null),
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.error_outline, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(_error!,
-                              maxLines: 2, overflow: TextOverflow.ellipsis),
+            // El asistente de ruta paso a paso (Fase 3): arriba y centrado,
+            // con SafeArea. Aparece solo con viaje activo y pasos vigentes.
+            if (_asistente.activo)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: ListenableBuilder(
+                  listenable: _asistente,
+                  builder: (context, _) =>
+                      AsistenteRutaWidget(estado: _asistente.estado()),
+                ),
+              ),
+            if (_error != null)
+              Positioned(
+                top: 64,
+                left: 8,
+                right: 8,
+                child: Material(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                  child: InkWell(
+                    onTap: () => setState(() => _error = null),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            // Menu hamburguesa SOLO cuando el chofer no tiene viaje activo:
+            // during navegacion estorban la vista (mismo criterio que la
+            // campana a la derecha). El busque de GPS si queda: funcional.
+            if (_activeTrip == null)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 8,
+                left: 8,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(left: 16),
+                      child: Text(
+                        'CN',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1,
+                          shadows: [
+                            Shadow(color: Colors.black45, blurRadius: 4),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-              ),
-            ),
-          // Menu hamburguesa SOLO cuando el chofer no tiene viaje activo:
-          // during navegacion estorban la vista (mismo criterio que la
-          // campana a la derecha). El busque de GPS si queda: funcional.
-          if (_activeTrip == null)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
-              left: 8,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.only(left: 16),
-                  child: Text(
-                    'CN',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1,
-                      shadows: [
-                        Shadow(color: Colors.black45, blurRadius: 4),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                _circularButton(
-                  Icons.menu,
-                  tooltip: 'Menú',
-                  onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                ),
-              ],
-            ),
-          ),
-          // Campana SOLO con el chofer libre; el GPS queda visible porque es
-          // funcional en el viaje. Aparecen si `_alPerderElViaje` borra
-          // `_activeTrip` y desaparecen en el `setState` al aceptar.
-          if (_activeTrip == null)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 24,
-              right: 8,
-              child: Column(
-                children: [
-                  if (_activeTrip == null) ...[
+                    const SizedBox(height: 4),
                     _circularButton(
-                      Icons.notifications_none,
-                      tooltip: 'Notificaciones',
-                      onTap: _showNotifications,
+                      Icons.menu,
+                      tooltip: 'Menú',
+                      onTap: () => _scaffoldKey.currentState?.openDrawer(),
                     ),
-                    const SizedBox(height: 8),
                   ],
-                  // GPS SIEMPRE visible: funcional (recetar) durante el viaje.
-                  _circularButton(
-                    _gpsState == LocationPermissionState.granted
-                        ? (Icons.gps_fixed)
-                        : (Icons.gps_off),
-                    tooltip: _gpsState == LocationPermissionState.granted
-                        ? 'Recentrar en mi posición'
-                        : 'Activar GPS',
-                    onTap: _gpsState == LocationPermissionState.granted
-                        ? _followGpsAgain
-                        : _enableGps,
-                  ),
-                ],
+                ),
               ),
-            ),
-          if (_selectedOffer != null || _lostOffer != null)
-            _buildOfferOverlay(),
-          if (_selectedOffer == null && _lostOffer == null) _buildPanelInferior(),
-        ],
+            // Campana SOLO con el chofer libre; el GPS queda visible porque es
+            // funcional en el viaje. Aparecen si `_alPerderElViaje` borra
+            // `_activeTrip` y desaparecen en el `setState` al aceptar.
+            if (_activeTrip == null)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 24,
+                right: 8,
+                child: Column(
+                  children: [
+                    if (_activeTrip == null) ...[
+                      _circularButton(
+                        Icons.notifications_none,
+                        tooltip: 'Notificaciones',
+                        onTap: _showNotifications,
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    // GPS SIEMPRE visible: funcional (recetar) durante el viaje.
+                    _circularButton(
+                      _gpsState == LocationPermissionState.granted
+                          ? (Icons.gps_fixed)
+                          : (Icons.gps_off),
+                      tooltip: _gpsState == LocationPermissionState.granted
+                          ? 'Recentrar en mi posición'
+                          : 'Activar GPS',
+                      onTap: _gpsState == LocationPermissionState.granted
+                          ? _followGpsAgain
+                          : _enableGps,
+                    ),
+                  ],
+                ),
+              ),
+            if (_selectedOffer != null || _lostOffer != null)
+              _buildOfferOverlay(),
+            if (_selectedOffer == null && _lostOffer == null)
+              _buildPanelInferior(),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _circularButton(IconData icon,
-      {required VoidCallback onTap, String? tooltip}) {
+  Widget _circularButton(
+    IconData icon, {
+    required VoidCallback onTap,
+    String? tooltip,
+  }) {
     return Material(
       color: Colors.white,
       shape: const CircleBorder(),
@@ -3112,10 +3328,12 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   void _showNotifications() {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(
-        content: Text('No tienes notificaciones por el momento'),
-        behavior: SnackBarBehavior.floating,
-      ));
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('No tienes notificaciones por el momento'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   Widget _buildOfferOverlay() {
@@ -3126,9 +3344,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _lostOffer != null ? _dismissOffer : () {},
-              child: ColoredBox(
-                color: Colors.black.withValues(alpha: 0.35),
-              ),
+              child: ColoredBox(color: Colors.black.withValues(alpha: 0.35)),
             ),
           ),
           Center(
@@ -3171,7 +3387,7 @@ final pts = await widget.api.getTripRoute(trip.tripId);
     final toPickupKm = _toPickupKm ?? o.distanciaChoferKm;
     final toPickupTxt = toPickupKm != null
         ? '${toPickupKm.toStringAsFixed(1)} km'
-            '${_toPickupMin != null ? ' · ${_toPickupMin!.ceil()} min' : ''}'
+              '${_toPickupMin != null ? ' · ${_toPickupMin!.ceil()} min' : ''}'
         : '-';
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -3189,105 +3405,130 @@ final pts = await widget.api.getTripRoute(trip.tripId);
               children: [
                 const Text(
                   'Solicitud de viaje',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-              color: text, fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 4),
-        Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-            decoration: BoxDecoration(
-              color: AppColors.ambar.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.timer_outlined,
-                    size: 14, color: AppColors.ambar),
-                const SizedBox(width: 4),
-                Text(
-                  'Acepta en: $_offerCountdown s',
-                  style: const TextStyle(
-                      color: AppColors.ambar,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: text,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: cardBg,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _vehicleTypeLabel(o.vehicleType).toUpperCase(),
-                    style: const TextStyle(
+                const SizedBox(height: 4),
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.ambar.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.timer_outlined,
+                          size: 14,
+                          color: AppColors.ambar,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Acepta en: $_offerCountdown s',
+                          style: const TextStyle(
+                            color: AppColors.ambar,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: cardBg,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _vehicleTypeLabel(o.vehicleType).toUpperCase(),
+                            style: const TextStyle(
+                              color: text,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          _chipPago(o.paymentMethod),
+                        ],
+                      ),
+                      const Spacer(),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          const Text(
+                            'PRECIO ESTIMADO',
+                            style: TextStyle(color: muted, fontSize: 10),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${o.precioEstimado?.toStringAsFixed(0) ?? '-'} CUP',
+                            style: const TextStyle(
+                              color: text,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (o.tieneCampana) ...[
+                  _buildCampanaOferta(o),
+                  const SizedBox(height: 12),
+                ],
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _metricCard(
+                      'Distancia',
+                      km != null ? '${km.toStringAsFixed(1)} km' : '-',
+                    ),
+                    _metricCard(
+                      'Tiempo',
+                      min != null ? '${min.toStringAsFixed(1)} min' : '-',
+                    ),
+                    _metricCard('Pasajeros', '${o.numPasajes}'),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Al cliente',
+                      style: TextStyle(
                         color: text,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  _chipPago(o.paymentMethod),
-                ],
-              ),
-              const Spacer(),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  const Text('PRECIO ESTIMADO',
-                      style: TextStyle(color: muted, fontSize: 10)),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${o.precioEstimado?.toStringAsFixed(0) ?? '-'} CUP',
-                    style: const TextStyle(
-                        color: text, fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (o.tieneCampana) ...[
-          _buildCampanaOferta(o),
-          const SizedBox(height: 12),
-        ],
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _metricCard('Distancia',
-                km != null ? '${km.toStringAsFixed(1)} km' : '-'),
-            _metricCard('Tiempo',
-                min != null ? '${min.toStringAsFixed(1)} min' : '-'),
-            _metricCard('Pasajeros', '${o.numPasajes}'),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text('Al cliente',
-                style: TextStyle(
-                    color: text, fontSize: 14, fontWeight: FontWeight.w600)),
-            Text(
-              toPickupTxt,
-              style: const TextStyle(color: muted, fontSize: 13),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        _buildRouteCard(o),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      toPickupTxt,
+                      style: const TextStyle(color: muted, fontSize: 13),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _buildRouteCard(o),
               ],
             ),
           ),
@@ -3304,7 +3545,8 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                   foregroundColor: const Color(0xFF1F2937),
                   side: const BorderSide(color: Color(0xFFF3F4F6)),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
                 icon: const Icon(Icons.close),
                 label: const Text('Rechazar'),
@@ -3324,7 +3566,8 @@ final pts = await widget.api.getTripRoute(trip.tripId);
                   foregroundColor: Colors.white,
                   disabledBackgroundColor: const Color(0xFF9CA3AF),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
                 icon: _isAccepting
                     ? const SizedBox(
@@ -3353,17 +3596,21 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             ),
             child: Row(
               children: [
-                const Icon(Icons.account_balance_wallet_outlined,
-                    color: Color(0xFF991B1B), size: 20),
+                const Icon(
+                  Icons.account_balance_wallet_outlined,
+                  color: Color(0xFF991B1B),
+                  size: 20,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     'Tienes el saldo en rojo. Recarga tu fondo en "Fondo y '
                     'transferencias" antes de aceptar viajes.',
                     style: const TextStyle(
-                        color: Color(0xFF991B1B),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600),
+                      color: Color(0xFF991B1B),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
@@ -3374,48 +3621,72 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   }
 
   /// Desglose de pago en la tarjeta del viaje activo.
+  ///
+  /// Regla de presentacion:
+  ///  * Un solo metodo (sin promo): solo `Pago: <metodo>`, sin desgloses.
+  ///  * Mixto (promo + resto): promo aplicada y `A cobrar por <metodo>`.
+  /// El backend ya manda `saldo_promocional_usado` y `monto_excedente`
+  /// calculados con el metodo real, asi que aqui no se recalcula nada.
   Widget _buildDesglosePagoActivo(TripOffer trip) {
     const muted = Color(0xFF6B7280);
     const text = Color(0xFF1F2937);
+    const verde = Color(0xFF047857);
     final filas = <Widget>[];
+    final promo = trip.saldoPromocionalUsado;
+    final excedente = trip.montoExcedente;
 
-    if (trip.montoBilleteraChofer > 0) {
-      filas.add(Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          const Text('Abonado a tu billetera',
-              style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
-          Text('${trip.montoBilleteraChofer.toStringAsFixed(2)} CUP',
-              style: const TextStyle(
-                  color: Color(0xFF047857), fontSize: 14, fontWeight: FontWeight.w800)),
-        ],
-      ));
-    }
-    if (trip.montoExcedente > 0) {
-      final metodoExc = trip.metodoPagoExcedente ??
-          (trip.paymentMethod == 'Transferencia' ? 'Transferencia' : 'Efectivo');
-      if (filas.isNotEmpty) filas.add(const SizedBox(height: 6));
-      filas.add(Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text('Cobrar por $metodoExc',
-              style: const TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
-          Text('${trip.montoExcedente.toStringAsFixed(2)} CUP',
-              style: const TextStyle(color: text, fontSize: 14, fontWeight: FontWeight.w800)),
-        ],
-      ));
+    // El precio va DENTRO del unico bloque de pago. Antes habia otro bloque
+    // "Precio estimado" justo debajo y el chofer veia dos paneles de
+    // facturacion para el mismo viaje (y lo leia como doble cobro).
+    filas.add(
+      _filaPago(
+        'Precio estimado',
+        '${trip.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
+        color: text,
+        bold: true,
+      ),
+    );
+
+    if (promo > 0) {
+      filas.add(
+        _filaPago(
+          'Saldo Promocional aplicado',
+          '${promo.toStringAsFixed(2)} CUP',
+          color: verde,
+        ),
+      );
+      if (excedente > 0) {
+        final metodo = trip.metodoPagoExcedente ?? trip.paymentMethod;
+        filas.add(
+          _filaPago(
+            'A cobrar por $metodo',
+            '${excedente.toStringAsFixed(2)} CUP',
+            color: text,
+            bold: true,
+          ),
+        );
+      }
     }
 
-    if (filas.isEmpty) {
-      // Fallback: etiqueta simple del metodo de pago.
-      return Row(
-        children: [
-          const Icon(Icons.payments_outlined, size: 14, color: muted),
-          const SizedBox(width: 6),
-          const Text('Pago', style: TextStyle(fontSize: 11, color: muted)),
-          const Spacer(),
-          _chipPago(trip.paymentMethod),
-        ],
+    if (promo <= 0) {
+      // Un unico metodo: el chofer solo necesita saber como le pagan.
+      filas.add(
+        Row(
+          children: [
+            const Icon(Icons.payments_outlined, size: 14, color: muted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Pago: ${trip.paymentMethod}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: text,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
@@ -3439,11 +3710,6 @@ final pts = await widget.api.getTripRoute(trip.tripId);
   Widget _buildCampanaOferta(TripOffer o) {
     const text = Color(0xFF1F2937);
     const muted = Color(0xFF6B7280);
-    final cobro = o.paymentMethod == 'Transferencia'
-        ? 'Cobrar por transferencia'
-        : o.paymentMethod == 'Billetera'
-            ? 'Cobrar de su billetera'
-            : 'Cobrar en efectivo';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -3454,43 +3720,22 @@ final pts = await widget.api.getTripRoute(trip.tripId);
       ),
       child: Column(
         children: [
-          // Solo se pinta lo que de verdad cobra o se le abona: si la bolsa
-          // promocional cubre el viaje completo, no hay fila de cobro; si no
-          // hubo promo, no hay abono. Asi el chofer no ve ceros que confunden.
+          // La promo y el resto van separados, con el metodo real del viaje.
+          // Si la bolsa cubre todo, no hay fila de cobro. Nunca se pegan
+          // etiqueta e importe: `_filaPago` mete 12 px fijos entre ambos.
+          if (o.saldoPromocionalUsado > 0)
+            _filaPago(
+              'Saldo Promocional aplicado',
+              '${o.saldoPromocionalUsado.toStringAsFixed(2)} CUP',
+              color: const Color(0xFF047857),
+            ),
           if (o.montoRestante > 0)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(cobro,
-                    style: const TextStyle(
-                        color: text,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
-                Text('${o.montoRestante.toStringAsFixed(2)} CUP',
-                    style: const TextStyle(
-                        color: text,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800)),
-              ],
+            _filaPago(
+              'A cobrar por ${o.metodoPagoExcedente ?? o.paymentMethod}',
+              '${o.montoRestante.toStringAsFixed(2)} CUP',
+              color: text,
+              bold: true,
             ),
-          if (o.abonoBilletera > 0) ...[
-            if (o.montoRestante > 0) const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Abonado a tu billetera',
-                    style: TextStyle(
-                        color: text,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
-                Text('${o.abonoBilletera.toStringAsFixed(2)} CUP',
-                    style: const TextStyle(
-                        color: Color(0xFF047857),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800)),
-              ],
-            ),
-          ],
           if (o.bonoChoferCampana > 0) ...[
             const SizedBox(height: 8),
             Container(
@@ -3545,21 +3790,23 @@ final pts = await widget.api.getTripRoute(trip.tripId);
             Text(
               value,
               style: const TextStyle(
-                  color: Color(0xFF1F2937),
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold),
+                color: Color(0xFF1F2937),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 2),
-            Text(label,
-                style: const TextStyle(
-                    color: Color(0xFF6B7280), fontSize: 11)),
+            Text(
+              label,
+              style: const TextStyle(color: Color(0xFF6B7280), fontSize: 11),
+            ),
           ],
         ),
       ),
     );
   }
 
-Widget _buildRouteCard(TripOffer o) {
+  Widget _buildRouteCard(TripOffer o) {
     const muted = Color(0xFF6B7280);
     return Container(
       padding: const EdgeInsets.all(16),
@@ -3574,18 +3821,18 @@ Widget _buildRouteCard(TripOffer o) {
             SizedBox(
               width: 24,
               child: Column(
-children: [
-                  const Icon(Icons.person,
-                      size: 18, color: AppColors.ambar),
+                children: [
+                  const Icon(Icons.person, size: 18, color: AppColors.ambar),
                   Expanded(
-                    child: Container(
-                        width: 2, color: const Color(0xFFD1D5DB)),
+                    child: Container(width: 2, color: const Color(0xFFD1D5DB)),
                   ),
                   const SizedBox(
                     width: 18,
                     height: 18,
                     child: CheckeredFlag(
-                        color: Colors.black, checks: Colors.white),
+                      color: Colors.black,
+                      checks: Colors.white,
+                    ),
                   ),
                 ],
               ),
@@ -3595,16 +3842,20 @@ children: [
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-if (o.pickup != null) ...[
-                    const Text('Recogida',
-                        style: TextStyle(color: muted, fontSize: 11)),
+                  if (o.pickup != null) ...[
+                    const Text(
+                      'Recogida',
+                      style: TextStyle(color: muted, fontSize: 11),
+                    ),
                     const SizedBox(height: 2),
                     _addressLine(o, pickup: true),
                   ],
                   const SizedBox(height: 12),
                   if (o.dropoff != null) ...[
-                    const Text('Destino',
-                        style: TextStyle(color: muted, fontSize: 11)),
+                    const Text(
+                      'Destino',
+                      style: TextStyle(color: muted, fontSize: 11),
+                    ),
                     const SizedBox(height: 2),
                     _addressLine(o, pickup: false),
                   ],
@@ -3687,9 +3938,10 @@ if (o.pickup != null) ...[
                     const Text(
                       'Aceptado por otro chofer',
                       style: TextStyle(
-                          color: alert,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold),
+                        color: alert,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -3712,17 +3964,25 @@ if (o.pickup != null) ...[
                 Text(
                   _vehicleTypeLabel(o.vehicleType).toUpperCase(),
                   style: const TextStyle(
-                      color: text, fontSize: 14, fontWeight: FontWeight.bold),
+                    color: text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(height: 2),
-                Text('${o.numPasajes} pasajero(s) · ${o.paymentMethod}',
-                    style: const TextStyle(color: muted, fontSize: 12)),
+                Text(
+                  '${o.numPasajes} pasajero(s) · ${o.paymentMethod}',
+                  style: const TextStyle(color: muted, fontSize: 12),
+                ),
               ],
             ),
             Text(
               '${o.precioEstimado?.toStringAsFixed(0) ?? '-'} cup',
               style: const TextStyle(
-                  color: text, fontSize: 16, fontWeight: FontWeight.bold),
+                color: text,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ],
         ),
@@ -3738,7 +3998,8 @@ if (o.pickup != null) ...[
                   foregroundColor: const Color(0xFF1F2937),
                   side: const BorderSide(color: Color(0xFFF3F4F6)),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
                 icon: const Icon(Icons.close),
                 label: const Text('Cerrar'),
@@ -3753,7 +4014,8 @@ if (o.pickup != null) ...[
                   backgroundColor: const Color(0xFFE5E7EB),
                   foregroundColor: const Color(0xFF9CA3AF),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
                 icon: const Icon(Icons.check),
                 label: const Text('Aceptar'),
@@ -3790,8 +4052,7 @@ if (o.pickup != null) ...[
       // pasajero, Llamar/WhatsApp y el deslizable. Al deslizar en
       // `driver_on_the_way` pasa a `driver_arrived` y vuelve el panel de viaje
       // de siempre.
-      if (trip.status == 'accepted' ||
-          trip.status == 'driver_on_the_way') {
+      if (trip.status == 'accepted' || trip.status == 'driver_on_the_way') {
         return _buildRecogidaCard(trip);
       }
       // Panel del viaje en curso: una hoja arrastrable que se abre COLAPSADA
@@ -3852,9 +4113,10 @@ if (o.pickup != null) ...[
                         ? 'Confirma el viaje'
                         : 'Vas a buscar al cliente',
                     style: const TextStyle(
-                        color: AppColors.tinta,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800),
+                      color: AppColors.tinta,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
                 // Llamar: si no hay numero, el toque avisa igual.
@@ -3882,8 +4144,11 @@ if (o.pickup != null) ...[
                     color: AppColors.acentoSuave,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.person_rounded,
-                      color: AppColors.tinta, size: 22),
+                  child: const Icon(
+                    Icons.person_rounded,
+                    color: AppColors.tinta,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -3891,15 +4156,14 @@ if (o.pickup != null) ...[
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        (nombre == null || nombre.isEmpty)
-                            ? 'Cliente'
-                            : nombre,
+                        (nombre == null || nombre.isEmpty) ? 'Cliente' : nombre,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            color: AppColors.tinta,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800),
+                          color: AppColors.tinta,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -3949,15 +4213,38 @@ if (o.pickup != null) ...[
               ),
               icon: const Icon(Icons.cancel_outlined, size: 16),
               label: Text(
-                  confirmando
-                      ? 'Cancelar viaje'
-                      : 'Cancelar viaje (cliente no aparece)',
-                  style: const TextStyle(fontSize: 12)),
+                confirmando
+                    ? 'Cancelar viaje'
+                    : 'Cancelar viaje (cliente no aparece)',
+                style: const TextStyle(fontSize: 12),
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// Boton atras del sistema durante un viaje.
+  ///
+  /// Antes no habia `PopScope`: el back burbujeaba y minimizaba la app sin
+  /// avisar al backend. El viaje seguia `accepted`/`in_progress`, el pasajero
+  /// lo veia activo y al reabrir se recuperaba como viaje colgado. Ahora el
+  /// back pasa por EXACTAMENTE los mismos dialogos y llamadas que los botones
+  /// de cancelar de la UI: no se inventa una cancelacion nueva.
+  Future<void> _salirDelViajeChofer() async {
+    final trip = _activeTrip;
+    if (trip == null || !estadosViajeVivos.contains(trip.status)) return;
+
+    final recogida =
+        trip.status == 'accepted' || trip.status == 'driver_on_the_way';
+    if (recogida) {
+      await _cancelarRecogida(trip);
+      return;
+    }
+    // `driver_arrived` y `in_progress`: confirmacion + motivo + una de las
+    // 3 cancelaciones diarias, igual que el boton rojo del panel.
+    await _cancelarViaje(trip);
   }
 
   Future<void> _cancelarRecogida(TripOffer trip) async {
@@ -4023,8 +4310,10 @@ if (o.pickup != null) ...[
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Destino',
-                  style: TextStyle(fontSize: 10, color: muted)),
+              const Text(
+                'Destino',
+                style: TextStyle(fontSize: 10, color: muted),
+              ),
               _addressLine(t, pickup: false),
             ],
           ),
@@ -4034,12 +4323,14 @@ if (o.pickup != null) ...[
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            const Text('Precio',
-                style: TextStyle(fontSize: 10, color: muted)),
+            const Text('Precio', style: TextStyle(fontSize: 10, color: muted)),
             Text(
               '${t.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
               style: const TextStyle(
-                  color: text, fontSize: 15, fontWeight: FontWeight.bold),
+                color: text,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 2),
             Row(
@@ -4047,8 +4338,10 @@ if (o.pickup != null) ...[
               children: [
                 Icon(_iconoPago(t.paymentMethod), size: 11, color: muted),
                 const SizedBox(width: 3),
-                Text(t.paymentMethod,
-                    style: const TextStyle(fontSize: 10, color: muted)),
+                Text(
+                  t.paymentMethod,
+                  style: const TextStyle(fontSize: 10, color: muted),
+                ),
               ],
             ),
           ],
@@ -4061,8 +4354,9 @@ if (o.pickup != null) ...[
     // Todo sale del vehiculo ACTIVO del garaje, no del perfil con el que se
     // inicio sesion: cambiar de coche en "Mi Garaje" tiene que cambiar aqui
     // en el acto, sin reiniciar la app.
-    final tipoLabel =
-        _vehicleTypeLabel(_tipoVehiculoActivo ?? widget.profile.vehicleType);
+    final tipoLabel = _vehicleTypeLabel(
+      _tipoVehiculoActivo ?? widget.profile.vehicleType,
+    );
     final nombreActivo = (_nombreVehiculoActivo ?? '').trim();
     final vehicleLabel = nombreActivo.isNotEmpty ? nombreActivo : tipoLabel;
     return _PanelCard(
@@ -4252,8 +4546,9 @@ if (o.pickup != null) ...[
     final excede = restante <= 0;
     final gratuito = trip.cortesiaTotalSegs;
     final excedente = trip.excedenteVivo(ahora);
-    final colorTexto =
-        excede ? const Color(0xFFB91C1C) : const Color(0xFF92400E);
+    final colorTexto = excede
+        ? const Color(0xFFB91C1C)
+        : const Color(0xFF92400E);
 
     return Padding(
       padding: const EdgeInsets.only(top: 6),
@@ -4268,8 +4563,7 @@ if (o.pickup != null) ...[
           children: [
             Padding(
               padding: const EdgeInsets.only(top: 1),
-              child: Icon(Icons.hourglass_top,
-                  size: 16, color: colorTexto),
+              child: Icon(Icons.hourglass_top, size: 16, color: colorTexto),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -4288,10 +4582,10 @@ if (o.pickup != null) ...[
                   Text(
                     excede
                         ? 'Esperando al cliente ${_mmss(espera)}. '
-                            'Cortesía agotada: se cobran '
-                            '${(excedente / 60).ceil()} min de espera.'
+                              'Cortesía agotada: se cobran '
+                              '${(excedente / 60).ceil()} min de espera.'
                         : 'Esperando al cliente ${_mmss(espera)}. '
-                            'Los primeros ${trip.cortesiaMin ?? 4} min de espera son gratis.',
+                              'Los primeros ${trip.cortesiaMin ?? 4} min de espera son gratis.',
                     style: TextStyle(fontSize: 11, color: colorTexto),
                   ),
                   const SizedBox(height: 2),
@@ -4329,16 +4623,16 @@ if (o.pickup != null) ...[
       'in_progress' => 'Completar viaje',
       _ => null,
     };
-    final enRecogida = trip.status == 'accepted' ||
-        trip.status == 'driver_on_the_way';
+    final enRecogida =
+        trip.status == 'accepted' || trip.status == 'driver_on_the_way';
     final enViaje = trip.status == 'in_progress';
     final km = enRecogida ? _toPickupKm : (enViaje ? _tripKm : null);
     final min = enRecogida ? _toPickupMin : (enViaje ? _tripMin : null);
     final etapa = enRecogida
         ? 'A recogida'
         : enViaje
-            ? 'Al destino'
-            : 'En el punto';
+        ? 'Al destino'
+        : 'En el punto';
     const muted = Color(0xFF6B7280);
     const text = Color(0xFF1F2937);
     final accionColor = enViaje ? AppColors.exito : AppColors.acento;
@@ -4362,8 +4656,11 @@ if (o.pickup != null) ...[
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.route_rounded,
-                      size: 14, color: AppColors.ambar),
+                  const Icon(
+                    Icons.route_rounded,
+                    size: 14,
+                    color: AppColors.ambar,
+                  ),
                   const SizedBox(width: 5),
                   Text(
                     estadoViaje(trip.status),
@@ -4379,8 +4676,10 @@ if (o.pickup != null) ...[
             const Spacer(),
             if (km != null || min != null)
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.campo,
                   borderRadius: BorderRadius.circular(20),
@@ -4391,25 +4690,32 @@ if (o.pickup != null) ...[
                     Text(
                       etapa,
                       style: const TextStyle(
-                          fontSize: 11,
-                          color: muted,
-                          fontWeight: FontWeight.w600),
+                        fontSize: 11,
+                        color: muted,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (km != null) ...[
                       const SizedBox(width: 6),
-                      Text('${km.toStringAsFixed(1)} km',
-                          style: const TextStyle(
-                              fontSize: 11,
-                              color: text,
-                              fontWeight: FontWeight.w700)),
+                      Text(
+                        '${km.toStringAsFixed(1)} km',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: text,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ],
                     if (min != null) ...[
                       const SizedBox(width: 4),
-                      Text('· ${min.ceil()} min',
-                          style: const TextStyle(
-                              fontSize: 11,
-                              color: text,
-                              fontWeight: FontWeight.w700)),
+                      Text(
+                        '· ${min.ceil()} min',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: text,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -4438,8 +4744,11 @@ if (o.pickup != null) ...[
                       color: AppColors.acentoSuave,
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.person_rounded,
-                        size: 19, color: AppColors.ambar),
+                    child: const Icon(
+                      Icons.person_rounded,
+                      size: 19,
+                      color: AppColors.ambar,
+                    ),
                   ),
                   const SizedBox(width: 9),
                   Expanded(
@@ -4517,8 +4826,10 @@ if (o.pickup != null) ...[
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Recogida',
-                        style: TextStyle(fontSize: 10, color: muted)),
+                    const Text(
+                      'Recogida',
+                      style: TextStyle(fontSize: 10, color: muted),
+                    ),
                     _addressLine(trip, pickup: true),
                   ],
                 ),
@@ -4532,16 +4843,21 @@ if (o.pickup != null) ...[
             children: [
               const Padding(
                 padding: EdgeInsets.only(top: 3),
-                child: Icon(Icons.flag_rounded,
-                    size: 12, color: AppColors.error),
+                child: Icon(
+                  Icons.flag_rounded,
+                  size: 12,
+                  color: AppColors.error,
+                ),
               ),
               const SizedBox(width: 6),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Destino',
-                        style: TextStyle(fontSize: 10, color: muted)),
+                    const Text(
+                      'Destino',
+                      style: TextStyle(fontSize: 10, color: muted),
+                    ),
                     _addressLine(trip, pickup: false),
                   ],
                 ),
@@ -4552,26 +4868,8 @@ if (o.pickup != null) ...[
         _lineaEspera(trip),
         const SizedBox(height: 10),
 
-        // ---- Desglose de pago (dinamico) ----
+        // ---- Unico bloque de pago: precio + desglose o metodo ----
         _buildDesglosePagoActivo(trip),
-        const SizedBox(height: 10),
-
-        // ---- Precio ----
-        Row(
-          children: [
-            const Text('Precio estimado',
-                style: TextStyle(fontSize: 11, color: muted)),
-            const Spacer(),
-            Text(
-              '${trip.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-                color: AppColors.tinta,
-              ),
-            ),
-          ],
-        ),
         const SizedBox(height: 10),
         if (nextStep != null)
           SlideToConfirm(
@@ -4579,8 +4877,8 @@ if (o.pickup != null) ...[
             icon: enViaje
                 ? Icons.done_all_rounded
                 : (enRecogida
-                    ? Icons.location_on_rounded
-                    : Icons.play_arrow_rounded),
+                      ? Icons.location_on_rounded
+                      : Icons.play_arrow_rounded),
             color: accionColor,
             foregroundColor: accionTexto,
             loading: _loading,
@@ -4628,18 +4926,18 @@ if (o.pickup != null) ...[
 
   /// Icono del metodo con el que el pasajero paga el viaje.
   IconData _iconoPago(String metodo) => switch (metodo) {
-        'Billetera' => Icons.account_balance_wallet_outlined,
-        'Transferencia' => Icons.swap_horiz_rounded,
-        _ => Icons.payments_outlined,
-      };
+    'Billetera' => Icons.account_balance_wallet_outlined,
+    'Transferencia' => Icons.swap_horiz_rounded,
+    _ => Icons.payments_outlined,
+  };
 
   /// Color del metodo de pago. El ambar se reserva para efectivo, que es el
   /// caso normal; billetera y transferencia se distinguen de un vistazo.
   Color _colorPago(String metodo) => switch (metodo) {
-        'Billetera' => const Color(0xFF1A73E8),
-        'Transferencia' => const Color(0xFF7B1FA2),
-        _ => AppColors.ambar,
-      };
+    'Billetera' => const Color(0xFF1A73E8),
+    'Transferencia' => const Color(0xFF7B1FA2),
+    _ => AppColors.ambar,
+  };
 
   /// Chip compacto con el metodo de pago, para la oferta y el panel del viaje.
   Widget _chipPago(String metodo) {
@@ -4736,17 +5034,13 @@ if (o.pickup != null) ...[
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.info_outline,
-            size: 16, color: Theme.of(context).hintColor),
+        Icon(Icons.info_outline, size: 16, color: Theme.of(context).hintColor),
         const SizedBox(width: 6),
         Flexible(
           child: Text(
             'No puedes cancelar: límite diario alcanzado '
             '(${CancellationService.maximoPorDia}/${CancellationService.maximoPorDia})',
-            style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).hintColor,
-            ),
+            style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
           ),
         ),
       ],
@@ -4781,19 +5075,21 @@ if (o.pickup != null) ...[
         // terminado: ruta, modo navegacion y disponibilidad.
         _alPerderElViaje('Viaje cancelado');
       case ResultadoCancelacion.limiteAlcanzado:
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Llegaste al límite de 3 cancelaciones de hoy'),
-        ));
-      case ResultadoCancelacion.viajeNoCancelable:
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Ese viaje ya no se puede cancelar'),
-        ));
-      case ResultadoCancelacion.error:
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-            _cancelacion.motivoDelError ?? 'No se pudo cancelar',
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Llegaste al límite de 3 cancelaciones de hoy'),
           ),
-        ));
+        );
+      case ResultadoCancelacion.viajeNoCancelable:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ese viaje ya no se puede cancelar')),
+        );
+      case ResultadoCancelacion.error:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_cancelacion.motivoDelError ?? 'No se pudo cancelar'),
+          ),
+        );
     }
   }
 
@@ -4812,13 +5108,16 @@ if (o.pickup != null) ...[
     }
     if (!mounted) return;
     if (codigo == null || codigo.isEmpty) {
-      _showError('No se pudo obtener tu código de invitación. Inténtalo de nuevo.');
+      _showError(
+        'No se pudo obtener tu código de invitación. Inténtalo de nuevo.',
+      );
       return;
     }
     // Mismo formato que el cliente: enlace de 64 bits como principal y el de
     // 32 bits para telefonos antiguos que rechazan el APK de 64 bits. Se
     // reparte la app del CHOFER, no la del pasajero.
-    final mensaje = '¡Descarga RapiTaxi aquí! 👉 '
+    final mensaje =
+        '¡Descarga RapiTaxi aquí! 👉 '
         '${ApiConfig.driverDownloadUrl}. '
         "Si tu teléfono es un modelo antiguo (como Samsung A02) y te da error "
         "de 'paquete no válido', usa este otro enlace: "
@@ -4841,44 +5140,56 @@ if (o.pickup != null) ...[
       calificacion: widget.profile.raiting,
       onPerfil: () {
         Navigator.of(context).pop();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => DriverProfileScreen(
-            api: widget.api,
-            driverId: widget.driverId,
-            initialProfile: widget.profile,
-          ),
-        )).then((_) {
-          // El perfil pudo cambiar el Fondo o el estado: la tarjeta de
-          // ganancias se refresca al volver.
-          if (mounted) _loadTodayEarnings();
-        });
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                builder: (_) => DriverProfileScreen(
+                  api: widget.api,
+                  driverId: widget.driverId,
+                  initialProfile: widget.profile,
+                ),
+              ),
+            )
+            .then((_) {
+              // El perfil pudo cambiar el Fondo o el estado: la tarjeta de
+              // ganancias se refresca al volver.
+              if (mounted) _loadTodayEarnings();
+            });
       },
       onHistorial: () {
         Navigator.of(context).pop();
         // El conductor va a ver sus solicitudes: lo que hubiera sin revisar
         // ya lo tiene delante, asi que la insignia puede quedar en cero.
         _notif.resetBadge();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => HistoryScreen(
-            api: widget.api,
-            driverId: widget.driverId,
-            fullName: widget.profile.fullName,
-          ),
-        )).then((_) {
-          if (mounted) _loadTodayEarnings();
-        });
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                builder: (_) => HistoryScreen(
+                  api: widget.api,
+                  driverId: widget.driverId,
+                  fullName: widget.profile.fullName,
+                ),
+              ),
+            )
+            .then((_) {
+              if (mounted) _loadTodayEarnings();
+            });
       },
       onFondo: () {
         Navigator.of(context).pop();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => DriverFondoScreen(
-            api: widget.api,
-            driverId: widget.driverId,
-            fullName: widget.profile.fullName,
-          ),
-        )).then((_) {
-          if (mounted) _loadTodayEarnings();
-        });
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                builder: (_) => DriverFondoScreen(
+                  api: widget.api,
+                  driverId: widget.driverId,
+                  fullName: widget.profile.fullName,
+                ),
+              ),
+            )
+            .then((_) {
+              if (mounted) _loadTodayEarnings();
+            });
       },
       onConfiguracion: () async {
         Navigator.of(context).pop();
@@ -4908,8 +5219,10 @@ if (o.pickup != null) ...[
         // Un vehiculo distinto activado cambia el tipo que pide el sondeo:
         // se actualiza en caliente, sin reiniciar la app.
         if (seleccion != null && mounted) {
-          final cambioTipo =
-              !_mismoTipo(_tipoVehiculoActivo, seleccion.tipoVehiculo);
+          final cambioTipo = !_mismoTipo(
+            _tipoVehiculoActivo,
+            seleccion.tipoVehiculo,
+          );
           setState(() {
             _tipoVehiculoActivo = seleccion.tipoVehiculo;
             _nombreVehiculoActivo = _nombreDeVehiculo(seleccion);
@@ -4922,28 +5235,33 @@ if (o.pickup != null) ...[
               _ofertaCache.clear();
             }
           });
-          unawaited(OfertasBackgroundService
-              .guardarTipo(seleccion.tipoVehiculo));
+          unawaited(
+            OfertasBackgroundService.guardarTipo(seleccion.tipoVehiculo),
+          );
           unawaited(_tick());
         }
       },
       onSoporte: () {
         Navigator.of(context).pop();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => const SupportScreen(),
-        ));
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const SupportScreen()));
       },
       onBloqueados: () {
         Navigator.of(context).pop();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => BlockedPassengersScreen(api: widget.api),
-        ));
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => BlockedPassengersScreen(api: widget.api),
+          ),
+        );
       },
       onBonificaciones: () {
         Navigator.of(context).pop();
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => BonificacionesScreen(api: widget.api),
-        ));
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => BonificacionesScreen(api: widget.api),
+          ),
+        );
       },
       onCompartir: _shareApp,
       onLogout: _logout,
@@ -4982,7 +5300,7 @@ class _CheckeredFlagPainter extends CustomPainter {
   final Color color;
   final Color checks;
 
-@override
+  @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
@@ -4995,17 +5313,11 @@ class _CheckeredFlagPainter extends CustomPainter {
       ..color = color
       ..strokeWidth = w * 0.08
       ..strokeCap = StrokeCap.round;
-    canvas.drawLine(
-        Offset(poleX, h * 0.06), Offset(poleX, h * 0.96), pole);
+    canvas.drawLine(Offset(poleX, h * 0.06), Offset(poleX, h * 0.96), pole);
     for (var r = 0; r < 3; r++) {
       for (var c = 0; c < 4; c++) {
         final black = (r + c).isEven;
-        final rect = Rect.fromLTWH(
-          left + c * cell,
-          top + r * cell,
-          cell,
-          cell,
-        );
+        final rect = Rect.fromLTWH(left + c * cell, top + r * cell, cell, cell);
         canvas.drawRect(rect, Paint()..color = black ? checks : color);
       }
     }

@@ -6,8 +6,10 @@ import 'location_service.dart';
 
 /// Rumbo calculado SOLO con el movimiento real del GPS.
 ///
-/// Se usa exclusivamente cuando el chófer está libre (`_activeTrip == null`).
-/// Durante un viaje el rumbo sigue saliendo de la ruta de OSRM, como siempre.
+/// Es la ÚNICA fuente de orientación del mapa, tanto cuando el chófer circula
+/// libre (`_activeTrip == null`) como durante un viaje (`accepted`,
+/// `driver_arrived` e `in_progress`). La geometría de la ruta de OSRM ya no
+/// orienta la cámara ni el rumbo que se publica al pasajero.
 ///
 /// Reglas:
 ///
@@ -54,6 +56,17 @@ class RumboMovimiento {
     _varianza = _ruidoMedicion;
     _ancla = null;
     _anclaMs = null;
+  }
+
+  /// Siembra el filtro con el último rumbo conocido.
+  ///
+  /// Se usa al aceptar un viaje: el chófer venía circulando en modo libre y el
+  /// mapa no debe saltar al norte mientras el GPS junta dos fixes con
+  /// desplazamiento suficiente. El filtro lo sigue corrigiendo con cada muestra.
+  void sembrar(double? grados) {
+    if (grados == null) return;
+    _rumbo = _normalizar360(grados);
+    _varianza = _ruidoMedicion;
   }
 
   /// Procesa un fix y devuelve el rumbo suavizado vigente.
@@ -145,19 +158,11 @@ class CamaraLibre {
   /// llegar antes del siguiente fix y el movimiento se vea continuo.
   static const Duration animacion = Duration(milliseconds: 900);
 
-  /// Zoom dinámico según la velocidad.
+  /// Zoom de la cámara libre: 19, el mismo que con viaje.
   ///
-  /// Parado o lento se ve la zona (zoom 16, el de las ofertas); al circular se
-  /// abre el horizonte hasta 14,5. Nunca baja del suelo de navegación.
-  static double zoomParaVelocidad(double velocidadKmh) {
-    if (velocidadKmh <= RumboMovimiento.velocidadMinimaKmh) {
-      return ApiConfig.zoomIdle;
-    }
-    final t = ((velocidadKmh - RumboMovimiento.velocidadMinimaKmh) / 55.0)
-        .clamp(0.0, 1.0);
-    return (ApiConfig.zoomIdle - 1.5 * t).clamp(
-      ApiConfig.zoomSueloNavegacion,
-      ApiConfig.zoomIdle,
-    );
-  }
+  /// Antes la velocidad alejaba la vista (16 parado, 14,5 circulando). El
+  /// requisito de publicación pide vista de calle también sin viaje, así que la
+  /// tabla por velocidad desaparece. Se conserva el parámetro por compatibilidad
+  /// con los llamadores y con futuros ajustes.
+  static double zoomParaVelocidad(double velocidadKmh) => ApiConfig.zoomIdle;
 }

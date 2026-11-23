@@ -276,31 +276,6 @@ class AsistenteRutaService extends ChangeNotifier {
   /// encima de 50 km/h, interpolado en medio.
   double _umbralAvance() => radioAvancePara(_velocidadKmh);
 
-  /// Rumbo del VEHICULO calculado analiticamente desdee la ruta (no la
-  /// brujula del telefono): punto snap -> punto 2-3 posiciones adelante.
-  ///
-  /// Es el bearing que viaja forward: al cliente (WS y `/drivers/location`)
-  /// para que ambos mapas apunten igual, y como respaldo para el modo
-  /// navegacion del chofer cuando el GPS.CourseOfGround no vale.
-  ///
-  /// Devuelve null si el snap es muy cerca del final (no queda adelante) o
-  /// si la velocidad no lo avala (la capa llamante ya resolvera conservar
-  /// el ultimo rumbo conocido).
-  double? rumboDesdeRuta(LatLng p) {
-    if (_polyline.length < 3) return null;
-    final idx = _snap(p).$1;
-    final desde = _polyline[idx];
-    final hasta = _polyline[math.min(_polyline.length - 1, idx + 2)];
-    const M = 111000.0;
-    final dLat = (hasta.latitude - desde.latitude) * M;
-    final dLng = (hasta.longitude - desde.longitude) *
-        M *
-        math.cos(desde.latitude);
-    if (dLat.abs() < 1e-9 && dLng.abs() < 1e-9) return null;
-    var deg = math.atan2(dLng, dLat) * 180 / math.pi;
-    return (deg + 360) % 360;
-  }
-
   /// Al recalcular por desvio, se regeneran pasos desde el punto actual.
   Future<void> recalcularDesde(LatLng p) async {
     _origen = p;
@@ -417,34 +392,6 @@ class AsistenteRutaService extends ChangeNotifier {
       arco += _distancia(_polyline[i], _polyline[i + 1]);
     }
     return arco;
-  }
-
-  /// Indice del punto de la ruta mas cercano, buscando cerca de [_snapIndex].
-  /// Devuelve `(indice, distanciaMetros)`.
-  (int, double) _snap(LatLng p) {
-    if (_polyline.isEmpty) return (0, 0);
-    final desde = math.max(0, _snapIndex - snapVentana ~/ 4);
-    final hasta = math.min(_polyline.length - 1, _snapIndex + snapVentana);
-    var mejorIdx = _snapIndex;
-    var mejor = double.infinity;
-    for (var i = desde; i <= hasta; i++) {
-      final d = _distancia(p, _polyline[i]);
-      if (d < mejor) {
-        mejor = d;
-        mejorIdx = i;
-      }
-    }
-    if (mejor > 150) {
-      // Desvio: buscar global y con esto el proximo refresco re-pide pasos.
-      for (var i = 0; i < _polyline.length; i++) {
-        final d = _distancia(p, _polyline[i]);
-        if (d < mejor) {
-          mejor = d;
-          mejorIdx = i;
-        }
-      }
-    }
-    return (mejorIdx, mejor);
   }
 
   Future<void> _pedirRuta() async {

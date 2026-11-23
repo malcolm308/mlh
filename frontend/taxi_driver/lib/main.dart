@@ -9,6 +9,7 @@ import 'package:flutter_patcher/flutter_patcher.dart';
 // cierra la app en pleno turno.
 import 'package:maplibre_gl/maplibre_gl.dart' show MapLibreMap;
 
+import 'api_config.dart';
 import 'services/ofertas_background_service.dart';
 import 'services/api_client.dart';
 import 'screens/login_screen.dart';
@@ -39,9 +40,14 @@ Future<void> main() async {
   // OTA: instala el cargador del parche ANTES de crear la app. Si no hay
   // parche (o no es Android) es una operacion nula. Cualquier fallo aqui no
   // puede impedir abrir la app ni el servicio de ofertas.
-  try {
-    await FlutterPatcher.init();
-  } catch (_) {}
+  //
+  // En el build de Google Play no se instala el cargador: Play prohibe
+  // descargar codigo ejecutable para autoactualizarse.
+  if (!ApiConfig.playStoreBuild) {
+    try {
+      await FlutterPatcher.init();
+    } catch (_) {}
+  }
 
   MapLibreMap.useHybridComposition = true;
   // Red de seguridad: si la sesion caduca en una pantalla que no sea el home,

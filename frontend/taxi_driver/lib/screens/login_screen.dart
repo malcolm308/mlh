@@ -114,8 +114,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _restore() async {
     final prefs = await SharedPreferences.getInstance();
-    // Access y refresh viven en el almacenamiento seguro; el access se
-    // conserva ademas en SharedPreferences para el servicio de ofertas.
+    // Access y refresh viven SOLO en flutter_secure_storage. Aqui no se toca
+    // SharedPreferences para tokens: el servicio de ofertas tambien los lee
+    // con TokenStore.leerAccess().
     final token = await TokenStore.instance.leerAccess();
     final id = prefs.getString('driver_id');
     if (token == null || id == null) return;

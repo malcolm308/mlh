@@ -7,16 +7,25 @@
 # parche pierden el estilo de MapTiler.
 #
 # Uso:
+#   $env:MAPTILER_API_KEY = '<TU_CLAVE>'
 #   powershell -ExecutionPolicy Bypass -File scripts\compilar_apks.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\compilar_apks.ps1 -MaptilerKey OTRA_CLAVE
+#
+# La clave NO se escribe en este archivo: se lee de la variable de entorno
+# MAPTILER_API_KEY. Tambien se puede pasar con -MaptilerKey para una corrida
+# puntual, pero nunca se versiona.
 #
 # Despues hay que publicar los manifiestos con scripts\publicar_ota.py y
 # generar los parches (ver README).
 param(
-    [string]$MaptilerKey = 'ZsGcg7EJ3Ml7wgFfXwAt'
+    [string]$MaptilerKey = $env:MAPTILER_API_KEY
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($MaptilerKey)) {
+    throw ('Falta MAPTILER_API_KEY. Define la variable de entorno ' +
+        '$env:MAPTILER_API_KEY o pasa -MaptilerKey. No la escribas en el repo.')
+}
 $raiz = Split-Path -Parent $PSScriptRoot
 
 $apps = @(

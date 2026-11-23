@@ -7,7 +7,7 @@ import 'token_store.dart';
 
 export 'api_client.dart' show ApiException;
 
-/// Cliente HTTP de alto nivel para el backend FastAPI de TaxiRapid.
+/// Cliente HTTP de alto nivel para el backend FastAPI de RapiTaxi.
 ///
 /// Todo el transporte lo hace [ApiClient]: timeout de 15 s, reintentos de
 /// fallos de red con backoff, headers y descodificación JSON.

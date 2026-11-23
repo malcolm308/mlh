@@ -73,7 +73,7 @@
 
 | # | Secreto | Estado | Evidencia |
 |---|---------|--------|-----------|
-| 4.1 | Clave MapTiler | **[F] crítico** | Hardcodeada: `scripts/compilar_apks.ps1:16` → `'ZsGcg7EJ3Ml7wgFfXwAt'`. Está en el historial de git ⇒ **hay que rotarla**, no solo borrarla. |
+| 4.1 | Clave MapTiler | **[F] crítico** | Estaba hardcodeada en `scripts/compilar_apks.ps1` y en el README. Ya se lee de `$env:MAPTILER_API_KEY` y los textos usan un placeholder. Sigue en el historial de git y dentro de los APK publicados ⇒ **hay que rotarla**, no solo borrarla. |
 | 4.2 | Secreto JWT | **[F] crítico** | `db/tokens.py:31` (fallback). |
 | 4.3 | Telegram / Cloudinary / Mongo / Postgres | **[T]** | Leídos de `os.getenv`. |
 | 4.4 | QvaPay / Supabase | **[T]** | No hay claves de QvaPay en el repo; Supabase entra por `POSTGRES_URL`. |

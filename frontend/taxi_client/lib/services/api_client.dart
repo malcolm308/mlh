@@ -19,7 +19,7 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-/// Capa de transporte única de la app contra el backend de TaxiRapid.
+/// Capa de transporte única de la app contra el backend de RapiTaxi.
 ///
 /// - Timeout de 15 s por petición.
 /// - Reintenta SOLO los fallos de red (sin conexión, timeout, cierre de

@@ -52,6 +52,16 @@ class ApiConfig {
   /// usa el estilo propio de Martin, que no necesita clave.
   static const String mapTilerApiKey = String.fromEnvironment('MAPTILER_API_KEY');
 
+  /// Build destinado a Google Play (`--dart-define=PLAY_STORE_BUILD=true`).
+  ///
+  /// Play prohibe que una app descargue codigo ejecutable para actualizarse o
+  /// que dirija al usuario a instalar APKs externos (politica de Device and
+  /// Network Abuse). Con este flag se apaga el OTA propio y las
+  /// actualizaciones llegan solo por Play. El APK de Render sigue usando el
+  /// OTA de siempre porque el valor por defecto es `false`.
+  static const bool playStoreBuild =
+      bool.fromEnvironment('PLAY_STORE_BUILD', defaultValue: false);
+
   /// URL de estilo explicita (`--dart-define=MAP_STYLE_URL=...`).
   ///
   /// Tiene prioridad sobre todo lo demas: sirve para apuntar a un Martin
@@ -113,7 +123,8 @@ class ApiConfig {
   /// Posicion inicial/por defecto del chofer (Centro de La Habana).
   static const LatLng defaultDriverLocation = LatLng(23.1136, -82.3666);
 
-  static const double defaultZoom = 14;
+  /// Zoom de arranque del mapa del chofer: 19 (vista de calle).
+  static const double defaultZoom = 19;
   /// Zoom minimo que se le pide a la camara.
   ///
   /// 10 es lo que habia antes, pero el MBTiles se genero desde z8 (asi lo
@@ -122,57 +133,51 @@ class ApiConfig {
   /// existen igual y sirven de relleno mientras se aleja.
   static const int minZoom = 10;
 
-  /// Zoom maximo del mapa y de la navegacion: 18.
+  /// Zoom maximo permitido por el mapa: 22.
   ///
-  /// Las teselas del servidor de tiles llegan a z16: en z17 (solo la fase de
-  /// traslado parada/lenta) MapLibre estira las de z16 ~15 %, un overzoom
-  /// aceptable en urbano. Antes el tope era 16 y no dejaba llegar a la tabla
-  /// de zooms de navegacion; con 18 las teselas salian muy pixeladas.
+  /// El zoom de trabajo del chofer es 19 (vista de calle). Las teselas del
+  /// servidor llegan a z16, asi que z19 es un overzoom de tres niveles: mas
+  /// cerca y algo mas blando, que es el compromiso aceptado para la conduccion.
+  /// El tope 22 deja margen para el gesto de pinza del usuario sin que MapLibre
+  /// recorte el valor.
   static const int maxZoom = 22;
 
-  /// Zooms del "modo navegacion": cada fase del viaje acerca el mapa lo justo
-  /// para que el chofer vea la calle por la que va sin perder el contexto.
+  /// Zooms del "modo navegacion": cada fase del viaje usa el mismo encuadre.
   ///
-  /// - [idle] sin viaje: vista general para ver las ofertas de la zona.
-  /// - [recogida] yendo al pasajero: hay que buscar la puerta, se acerca.
-  /// - [esperando] ya en el punto: la calle esta justo debajo.
-  /// - [traslado] con pasajero a bordo: maximo detalle de calle.
+  /// - [idle] sin viaje: vista de calle a zoom 19, igual que con viaje. El
+  ///   chofer pide ver la calle por la que circula tambien cuando esta libre.
+  /// - [recogida], [esperando] y [traslado]: vista de calle a zoom 19. Se
+  ///   mantiene igual en las tres fases para que el mapa no cambie de escala al
+  ///   subir al pasajero.
   ///
-  /// Estaban en 15/16/16/17 y se veia el vehiculo muy alejado: a z15 el mapa
-  /// abarca casi un kilometro y el chofer conduce mirando un plano general. Se
-  /// sube un nivel toda la escala menos la fase de traslado, que ya estaba en el
-  /// maximo util.
-  ///
-  /// El techo real es 17: el origen de teselas declara `maxzoom: 16`, asi que z17
-  /// ya es un estiramiento de 2x y z18 seria de 4x, que se ve borroso. No se
-  /// sube mas aunque [maxZoom] lo permita.
-  static const double zoomIdle = 16;
-  static const double zoomRecogida = 17;
-  static const double zoomEsperando = 17;
-  static const double zoomTraslado = 17;
+  /// z19 es un overzoom sobre las teselas de z16: se ve mas cerca y algo mas
+  /// blando, que es el compromiso aceptado para la vista de conduccion.
+  /// [maxZoom] sigue en 22 para que MapLibre no recorte el valor.
+  static const double zoomIdle = 19;
+  static const double zoomRecogida = 19;
+  static const double zoomEsperando = 19;
+  static const double zoomTraslado = 19;
 
-  /// Suelo de zoom del modo navegacion: 14.
+  /// Suelo de zoom del modo navegacion: 19.
   ///
-  /// Al pasar de 30 km/h el mapa se ALEJA un nivel (filosofia tipo Google
-  /// Maps/Waze: con velocidad hace falta horizonte, no detalle de calle). Este
-  /// es el limite de esa salida: ningun zoom de navegacion baja de 14.
-  static const double zoomSueloNavegacion = 14;
+  /// Ni la velocidad ni la distancia alejan la vista del chofer. La antigua
+  /// salida por velocidad se queda sin efecto porque el suelo y el techo valen
+  /// lo mismo; se conserva el codigo adaptativo por si en el futuro se permite
+  /// alejarse.
+  static const double zoomSueloNavegacion = 19;
 
-  /// Techo de zoom del modo navegacion: 17.
+  /// Techo de zoom del modo navegacion: 19.
   ///
-  /// Lo fija la fase de traslado parada/lenta ([zoomTraslado]). Por encima las
-  /// teselas de z16 (maximo real del servidor de tiles) se estirarian
-  /// demasiado. Coincide con [maxZoom], el tope de la camara del mapa.
-  static const double zoomTechoNavegacion = 17.0;
+  /// Es el zoom de calle de todas las fases, con y sin viaje. [maxZoom] sigue
+  /// mas alto para que MapLibre no recorte el valor pedido.
+  static const double zoomTechoNavegacion = 19.0;
 
-  /// Zoom al que recentra el boton de GPS.
+  /// Zoom al que recentra el boton de GPS: 19 con viaje.
   ///
-  /// 18, por encima del techo del modo navegacion (17): recentrar debe acercar
-  /// mas que la tabla de fases. Es lo que se ve realmente alrededor del
-  /// vehiculo, justo para lo que sirve recentrar: situarse ahi. Sin esto el
-  /// boton reutiliza el zoom de la fase (15 sin viaje, 16 yendo a recoger) y
-  /// el vehiculo queda pequeno en un mapa demasiado abierto.
-  static const double zoomRecentrar = 18.0;
+  /// Recentrar durante una carrera debe devolver la misma vista de calle que
+  /// el seguimiento normal. Sin viaje no se usa: la camara libre tiene su
+  /// propia tabla por velocidad y el boton conserva el zoom actual.
+  static const double zoomRecentrar = 19.0;
 
   /// Tilt que se aplica al recentrar, en grados.
   ///
@@ -443,16 +448,10 @@ class ApiConfig {
 
   /// Zoom segun la distancia al objetivo.
   ///
-  /// El cliente no rota el mapa, asi que su unica referencia para decidir cuanto
-  /// acercar es lo lejos que esta el vehiculo. Tabla unica, compartida por las
-  /// dos apps para que el pasajero y el chofer vean el mismo encuadre.
-  static double zoomPorDistancia(double metros) {
-    if (metros <= 300) return 17;
-    if (metros <= 800) return 16;
-    if (metros <= 2000) return 15;
-    if (metros <= 5000) return 14;
-    return 13;
-  }
+  /// Siempre 19 en el chofer: la distancia ya no aleja el mapa. La tabla
+  /// antigua (17 cerca, 13 lejos) se sustituye por el zoom de calle pedido para
+  /// la app del chofer a cualquier distancia.
+  static double zoomPorDistancia(double metros) => 19;
 
   /// Zoom de la fase actual del viaje, para establecer el modo navegación.
   ///

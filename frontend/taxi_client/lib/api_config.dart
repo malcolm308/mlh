@@ -52,6 +52,16 @@ class ApiConfig {
   /// usa el estilo propio de Martin, que no necesita clave.
   static const String mapTilerApiKey = String.fromEnvironment('MAPTILER_API_KEY');
 
+  /// Build destinado a Google Play (`--dart-define=PLAY_STORE_BUILD=true`).
+  ///
+  /// Play prohibe que una app descargue codigo ejecutable para actualizarse o
+  /// que dirija al usuario a instalar APKs externos (politica de Device and
+  /// Network Abuse). Con este flag se apaga el OTA propio y las
+  /// actualizaciones llegan solo por Play. El APK de Render sigue usando el
+  /// OTA de siempre porque el valor por defecto es `false`.
+  static const bool playStoreBuild =
+      bool.fromEnvironment('PLAY_STORE_BUILD', defaultValue: false);
+
   /// URL de estilo explicita (`--dart-define=MAP_STYLE_URL=...`).
   ///
   /// Tiene prioridad sobre todo lo demas: sirve para apuntar a un Martin
@@ -127,7 +137,8 @@ class ApiConfig {
   /// Posición inicial/por defecto del cliente (Centro de La Habana).
   static const LatLng defaultClientLocation = LatLng(23.1136, -82.3666);
 
-  static const double defaultZoom = 14;
+  /// Zoom de arranque del mapa: 20 (vista de calle), igual en las dos apps.
+  static const double defaultZoom = 20;
   static const int minZoom = 10;
   static const int maxZoom = 22;
 
@@ -137,8 +148,8 @@ class ApiConfig {
   /// calle exacta que va a ver que el trayecto entero.
   static const double distanciaZoomCerca = 500.0;
 
-  /// Zoom de la vista del cliente cuando el vehiculo va cerca.
-  static const double zoomVehiculoCerca = 17;
+  /// Zoom de la vista del cliente: 20 (vista de calle), cerca o lejos.
+  static const double zoomVehiculoCerca = 20;
 
   /// Velocidad (km/h) a partir de la cual la camara 3D se aleja un nivel.
   ///
@@ -148,28 +159,22 @@ class ApiConfig {
 
   /// Zoom de navegacion segun la velocidad del vehiculo.
   ///
-  /// 17 de base (calle) y 16 por encima de [velocidadParaZoomRapido]. La
-  /// transicion la anima `animar3D` en 1000 ms.
+  /// Siempre 20: ni la velocidad ni la distancia alejan el mapa. La antigua
+  /// salida a 16 por encima de [velocidadParaZoomRapido] se conserva como
+  /// constante por compatibilidad, pero el suelo y el techo valen 20.
   static double zoomNavegacion({double? velocidadKmh}) {
     var zoom = zoomVehiculoCerca;
     if (velocidadKmh != null && velocidadKmh >= velocidadParaZoomRapido) {
       zoom -= 1;
     }
-    return zoom.clamp(14.0, 17.0);
+    return zoom.clamp(20.0, 20.0);
   }
 
   /// Zoom segun la distancia al objetivo.
   ///
-  /// El cliente NO rota el mapa ni lo inclina, asi que su unica referencia para
-  /// decidir cuanto acercar es lo lejos que esta el vehiculo. La tabla es la
-  /// misma que usa el chofer, para que ambos vean el mismo encuadre.
-  static double zoomPorDistancia(double metros) {
-    if (metros <= 300) return 17;
-    if (metros <= 800) return 16;
-    if (metros <= 2000) return 15;
-    if (metros <= 5000) return 14;
-    return 13;
-  }
+  /// Siempre 20: la distancia ya no aleja el mapa. Tabla unica, compartida por
+  /// las dos apps para que el pasajero y el chofer vean el mismo encuadre.
+  static double zoomPorDistancia(double metros) => 20;
 
   /// Área cubierta por los tiles locales del mapa (La Habana).
   ///

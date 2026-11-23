@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_patcher/flutter_patcher.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show MapLibreMap;
 
+import 'api_config.dart';
 import 'screens/login_screen.dart';
 import 'services/api_client.dart';
 import 'theme/app_theme.dart';
@@ -16,9 +17,14 @@ Future<void> main() async {
   // OTA: instala el cargador del parche ANTES de crear la app. Si no hay
   // parche (o no es Android) es una operacion nula. Cualquier fallo aqui no
   // puede impedir abrir la app.
-  try {
-    await FlutterPatcher.init();
-  } catch (_) {}
+  //
+  // En el build de Google Play no se instala el cargador: Play prohibe
+  // descargar codigo ejecutable para autoactualizarse.
+  if (!ApiConfig.playStoreBuild) {
+    try {
+      await FlutterPatcher.init();
+    } catch (_) {}
+  }
 
   // El mapa va en TextureView y NO en Virtual Display.
   //

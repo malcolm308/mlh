@@ -70,7 +70,7 @@ class NavigationMapView extends StatefulWidget {
   /// mismo que cambiar la posicion: solo reenviar el source.
   final double? rumboVehiculo;
 
-/// Se invoca en cuanto el estilo ha cargado y las capas estan listas.
+  /// Se invoca en cuanto el estilo ha cargado y las capas estan listas.
   final VoidCallback? onListo;
 
   /// Se invoca en cuanto el controlador del mapa existe.
@@ -90,12 +90,12 @@ class NavigationMapView extends StatefulWidget {
     this.camaraLibre = false,
     this.ruta = const [],
     this.posicionVehiculo,
-this.rumboVehiculo,
+    this.rumboVehiculo,
     this.onListo,
     this.onControlador,
   });
 
-@override
+  @override
   State<NavigationMapView> createState() => _NavigationMapViewState();
 
   /// Rumbo, en grados, del punto [a] al [b].
@@ -116,11 +116,37 @@ this.rumboVehiculo,
     final lat2 = b.latitude / grados;
 
     final y = math.sin(dLon) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
 
     return (math.atan2(y, x) * grados + 360.0) % 360.0;
   }
+
+  /// Hooks de prueba: la geometria es privada porque solo la usa este widget,
+  /// pero el tamano del chevron y la contencion del disco hay que poder fijarlos.
+  /// Viven aqui, en la clase publica, para que el test pueda llamarlos.
+  @visibleForTesting
+  static Map<String, dynamic> flechaGeoJsonParaPrueba(
+    LatLng pos,
+    double rumbo,
+    double zoom, {
+    double escala = 1.0,
+  }) =>
+      _NavigationMapViewState._flechaGeoJson(pos, rumbo, zoom, escala: escala);
+
+  @visibleForTesting
+  static Map<String, dynamic> discoFondoGeoJsonParaPrueba(
+    LatLng pos,
+    double zoom,
+  ) => _NavigationMapViewState._discoFondoGeoJson(pos, zoom);
+
+  @visibleForTesting
+  static double get escalaTamano => _NavigationMapViewState._escalaTamano;
+
+  @visibleForTesting
+  static double get radioFondoPorAlto =>
+      _NavigationMapViewState._radioFondoPorAlto;
 }
 
 class _NavigationMapViewState extends State<NavigationMapView> {
@@ -175,7 +201,7 @@ class _NavigationMapViewState extends State<NavigationMapView> {
   ///
   /// La ruta cambia cuando OSRM recalcula, no en cada tic del GPS. Comparar
   /// evita ponerla otra vez cuando el numero de puntos es el mismo.
-int _puntosRutaEnviados = -1;
+  int _puntosRutaEnviados = -1;
 
   /// Ultima posicion del vehiculo enviada al estilo.
   ///
@@ -241,7 +267,8 @@ int _puntosRutaEnviados = -1;
     final t = _tiltAplicado;
     final b = _bearingAplicado;
 
-    final cambiaCentro = c == null ||
+    final cambiaCentro =
+        c == null ||
         (c.latitude - centro.latitude).abs() > 1e-6 ||
         (c.longitude - centro.longitude).abs() > 1e-6;
     final cambiaZoom = z == null || (z - widget.zoom).abs() > 0.01;
@@ -259,7 +286,7 @@ int _puntosRutaEnviados = -1;
     _tiltAplicado = widget.tilt;
     _bearingAplicado = widget.bearing;
 
-// Sin animacion: la camara la manda el GPS, y una transicion de 500 ms
+    // Sin animacion: la camara la manda el GPS, y una transicion de 500 ms
     // llegaria tarde a cada fix, dejando el vehiculo desfasado del mapa.
     ctl.moveCamera(
       CameraUpdate.newCameraPosition(
@@ -275,7 +302,7 @@ int _puntosRutaEnviados = -1;
     );
   }
 
-/// Coloca el vehiculo en el tercio inferior de la pantalla.
+  /// Coloca el vehiculo en el tercio inferior de la pantalla.
   ///
   /// El padding de MapLibre NO centra el objetivo en el rectangulo que queda
   /// libre: lo DESPLAZA desde el centro de la pantalla, y el sentido lo decide
@@ -321,6 +348,61 @@ int _puntosRutaEnviados = -1;
   /// Zoom con el que se construyeron los vertices de la flecha por ultima vez.
   double? _zoomEnviado;
 
+  /// Alto de la flecha en metros, ya con el aumento del 20 % pedido.
+  ///
+  /// Se calcula en pixeles de pantalla y se traduce a metros con los metros por
+  /// pixel del zoom. El coseno de la latitud corrige el estiramiento este-oeste
+  /// (sin el, a 23 grados la flecha sale achaparrada). El recorte evita que en
+  /// zooms bajos la figura se coma media pantalla.
+  static double _altoFlechaMetros(LatLng pos, double zoom) {
+    final latRad = pos.latitude * math.pi / 180.0;
+    final metrosPorPixel =
+        156543.03392 * math.cos(latRad) / math.pow(2.0, zoom);
+    return (metrosPorPixel * _altoBasePx * _escalaTamano).clamp(
+      1.0 * _escalaTamano,
+      40.0 * _escalaTamano,
+    );
+  }
+
+  /// Disco blanco que envuelve al chevron, como poligono GeoJSON.
+  ///
+  /// Se añade como una capa ANTES del borde y del chevron azul para que quede
+  /// detras de los dos. El radio es proporcional al alto de la flecha, asi que
+  /// mantiene la misma relacion al rotar y al cambiar de zoom.
+  static Map<String, dynamic> _discoFondoGeoJson(LatLng? pos, double zoom) {
+    if (pos == null) {
+      return {'type': 'FeatureCollection', 'features': <dynamic>[]};
+    }
+    final radio = _altoFlechaMetros(pos, zoom) * _radioFondoPorAlto;
+    final latRad = pos.latitude * math.pi / 180.0;
+    final metrosPorGradoLng = 111320.0 * math.cos(latRad).abs();
+    const metrosPorGradoLat = 110574.0;
+
+    final anillo = <List<double>>[];
+    for (var i = 0; i < 32; i++) {
+      final ang = i * 2 * math.pi / 32;
+      anillo.add(<double>[
+        pos.longitude + radio * math.cos(ang) / metrosPorGradoLng,
+        pos.latitude + radio * math.sin(ang) / metrosPorGradoLat,
+      ]);
+    }
+    anillo.add(anillo.first);
+
+    return {
+      'type': 'FeatureCollection',
+      'features': <dynamic>[
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Polygon',
+            'coordinates': <List<List<double>>>[anillo],
+          },
+          'properties': <String, dynamic>{},
+        },
+      ],
+    };
+  }
+
   /// Flecha del vehiculo como poligono GeoJSON.
   ///
   /// Se construye en coordenadas geograficas a partir de la posicion, el rumbo
@@ -334,7 +416,7 @@ int _puntosRutaEnviados = -1;
   ///
   /// Marco local de la figura: `x` hacia delante segun el rumbo, `y` hacia la
   /// derecha.
-static Map<String, dynamic> _flechaGeoJson(
+  static Map<String, dynamic> _flechaGeoJson(
     LatLng? pos,
     double rumbo,
     double zoom, {
@@ -344,23 +426,11 @@ static Map<String, dynamic> _flechaGeoJson(
       return {'type': 'FeatureCollection', 'features': <dynamic>[]};
     }
 
-    final latRad = pos.latitude * math.pi / 180.0;
-    // Metros por pixel en esta latitud y este zoom. El coseno de la latitud es
-    // lo que estira el eje este-oeste: sin el, a 23 grados la flecha sale
-    // achaparrada.
-    final metrosPorPixel =
-        156543.03392 * math.cos(latRad) / math.pow(2.0, zoom);
-    // Alto total de la figura, de la punta a la base.
-    //
-    // El tamano se fija en pixeles DE PANTALLA y no en metros fijos. Con la
-    // camara inclinada el suelo que hay por debajo del punto de mira esta mucho
-    // mas cerca que el del centro, y ahi un metro por pixel vale bastante menos:
-    // una flecha medida en el centro sale de mas del doble abajo. El recorte es
-    // el freno: sin el, en un zoom bajo la flecha se comia media pantalla.
-    //
     // `escala` multiplica el resultado y es lo que dibuja el borde: el mismo
-    // poligono un poco mayor, en blanco, debajo del azul.
-    final alto = (metrosPorPixel * 7.2 * escala).clamp(1.0, 40.0);
+    // poligono un poco mayor, en blanco, debajo del azul. El +20 % pedido ya
+    // va incluido en `_altoFlechaMetros`.
+    final alto = _altoFlechaMetros(pos, zoom) * escala;
+    final latRad = pos.latitude * math.pi / 180.0;
 
     // Proporciones medidas sobre la silueta de referencia. En ese dibujo la
     // base es tan ancha como el alto (1.005) y la muesca sube un 28 % desde
@@ -504,7 +574,7 @@ static Map<String, dynamic> _flechaGeoJson(
         _idRuta,
         _capaRuta,
         LineLayerProperties(
-// Azul fuerte de ruta, del ancho de la calzada para que la calle
+          // Azul fuerte de ruta, del ancho de la calzada para que la calle
           // por la que pasa se vea pintada entera en vez de como una raya.
           //
           // El grosor crece con el zoom porque la calzada tambien: si fuera
@@ -531,7 +601,7 @@ static Map<String, dynamic> _flechaGeoJson(
         belowLayerId: debajo,
       );
 
-// Flecha de ubicacion del chofer.
+      // Flecha de ubicacion del chofer.
       //
       // Se dibuja como POLIGONO en coordenadas geograficas, no como icono ni
       // como glifo. Los dos caminos anteriores fallaron en silencio:
@@ -553,6 +623,20 @@ static Map<String, dynamic> _flechaGeoJson(
       // ancho por defecto en 0, o sea un contorno de medio pixel que no se ve.
       // Dos poligonos superuestos dan un borde de verdad y con el grosor que
       // se quiera.
+      // Disco blanco de fondo: se añade PRIMERO porque todas las capas se
+      // insertan justo debajo de `debajo`; el ultimo queda arriba. Asi el orden
+      // final es fondo -> borde -> chevron azul.
+      await ctl.addGeoJsonSource(
+        _idFondoVehiculo,
+        _discoFondoGeoJson(widget.posicionVehiculo, widget.zoom),
+      );
+      await ctl.addFillLayer(
+        _idFondoVehiculo,
+        _capaFondoVehiculo,
+        FillLayerProperties(fillColor: '#ffffff', fillOpacity: 1.0),
+        belowLayerId: debajo,
+      );
+
       await ctl.addGeoJsonSource(
         _idFlechaBorde,
         _flechaGeoJson(
@@ -565,10 +649,7 @@ static Map<String, dynamic> _flechaGeoJson(
       await ctl.addFillLayer(
         _idFlechaBorde,
         _capaVehiculoBorde,
-        FillLayerProperties(
-          fillColor: '#ffffff',
-          fillOpacity: 1.0,
-        ),
+        FillLayerProperties(fillColor: '#ffffff', fillOpacity: 1.0),
         belowLayerId: debajo,
       );
 
@@ -603,7 +684,7 @@ static Map<String, dynamic> _flechaGeoJson(
       return;
     }
 
-_puntosRutaEnviados = widget.ruta.length;
+    _puntosRutaEnviados = widget.ruta.length;
     _vehiculoEnviado = widget.posicionVehiculo;
 
     _aplicarCamara();
@@ -623,7 +704,7 @@ _puntosRutaEnviados = widget.ruta.length;
     ctl.setGeoJsonSource(_idRuta, _lineaGeoJson(widget.ruta));
   }
 
-/// Envia la posicion del vehiculo si ha cambiado de verdad.
+  /// Envia la posicion del vehiculo si ha cambiado de verdad.
   void _aplicarVehiculo() {
     final ctl = _controlador;
     if (ctl == null) return;
@@ -642,7 +723,8 @@ _puntosRutaEnviados = widget.ruta.length;
     // coche parado el zoom cambia de fase y la flecha se queda con la geometria
     // del zoom viejo: medido en el movil, se quedaba con el tamano del zoom 14
     // y a 17 salia de 188 px de ancho en vez de unos 7, que es 26 veces mas.
-    final sinCambios = pos == null && prev == null ||
+    final sinCambios =
+        pos == null && prev == null ||
         (pos != null &&
             prev != null &&
             (prev.latitude - pos.latitude).abs() < 1e-5 &&
@@ -662,23 +744,20 @@ _puntosRutaEnviados = widget.ruta.length;
     //
     // Se mandan las dos: el borde blanco es el mismo poligono con otra escala.
     ctl.setGeoJsonSource(
-      _idFlecha,
-      _flechaGeoJson(pos, rumbo, widget.zoom),
+      _idFondoVehiculo,
+      _discoFondoGeoJson(pos, widget.zoom),
     );
+    ctl.setGeoJsonSource(_idFlecha, _flechaGeoJson(pos, rumbo, widget.zoom));
     ctl.setGeoJsonSource(
       _idFlechaBorde,
       _flechaGeoJson(pos, rumbo, widget.zoom, escala: _escalaBorde),
     );
   }
 
-
   /// GeoJSON de una linea a partir de una lista de coordenadas.
   static Map<String, dynamic> _lineaGeoJson(List<LatLng> puntos) {
     if (puntos.length < 2) {
-      return {
-        'type': 'FeatureCollection',
-        'features': <dynamic>[],
-      };
+      return {'type': 'FeatureCollection', 'features': <dynamic>[]};
     }
     final coords = puntos
         .map((p) => <double>[p.longitude, p.latitude])
@@ -695,12 +774,12 @@ _puntosRutaEnviados = widget.ruta.length;
     };
   }
 
-/// Identificadores. El prefijo evita colisionar con las capas del estilo
+  /// Identificadores. El prefijo evita colisionar con las capas del estilo
   // (`carreteras`, `edificios`...), que son suyas y no se deben tocar.
   static const String _idRuta = 'taxi-ruta';
   static const String _capaRutaHalo = 'taxi-ruta-halo';
   static const String _capaRuta = 'taxi-ruta-linea';
-static const String _idFlecha = 'taxi-flecha';
+  static const String _idFlecha = 'taxi-flecha';
   static const String _capaVehiculo = 'taxi-vehiculo-capa';
 
   /// Source y capa del contorno blanco.
@@ -710,12 +789,28 @@ static const String _idFlecha = 'taxi-flecha';
   static const String _idFlechaBorde = 'taxi-flecha-borde';
   static const String _capaVehiculoBorde = 'taxi-vehiculo-borde-capa';
 
-  /// Cuanto mayor es el poligono blanco respecto al azul.
+  /// Cuanto mayor es el poligono blanco del contorno respecto al azul.
   ///
   /// Con 1.45 el blanco asoma unos 2 px por lado a los zooms de navegacion:
   /// suficiente para separar la flecha del asfalto y de la ruta azul, sin que
   /// parezca un contorno gruboso.
   static const double _escalaBorde = 1.45;
+
+  /// Altura base, en pixeles de pantalla, de la silueta de referencia.
+  static const double _altoBasePx = 7.2;
+
+  /// Aumento del 20 % pedido para el chevron (`7.2 * 1.2 = 8.64` px).
+  static const double _escalaTamano = 1.2;
+
+  /// Radio del disco blanco de fondo respecto al alto del chevron.
+  ///
+  /// 1.10 lo deja justo por fuera del borde (1.45) en las cuatro puntas, de
+  /// modo que el chevron queda contenido sin que el circulo se vea desproporcion.
+  static const double _radioFondoPorAlto = 1.10;
+
+  /// Source y capa del disco blanco detras del chevron.
+  static const String _idFondoVehiculo = 'taxi-flecha-fondo';
+  static const String _capaFondoVehiculo = 'taxi-vehiculo-fondo-capa';
 
   @override
   Widget build(BuildContext context) {

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
+import 'package:taxi_driver/models/geo_fix.dart';
 import 'package:taxi_driver/services/navigation_mode_service.dart';
 
 /// Monta el servicio con un [TickerProvider] real. Ver `navigation_position_test`.
@@ -48,37 +49,26 @@ double _dLon(double metros, double lat) =>
 /// Grados de latitud que son [metros].
 double _dLat(double metros) => metros / 111320.0;
 
-/// Activa el viaje en [donde] siguiendo [ruta].
-///
-/// [_rumboDesdeRuta] mide desde la posicion del propio servicio (no recibe
-/// argumentos), asi que la unica forma de mover el coche en una prueba es
-/// sembrar la posicion con [NavigationModeService.activar].
-///
-/// Se apaga antes de volver a activar porque `activar` es idempotente por fase:
-/// dos llamadas seguidas con la misma fase ignorarian la segunda, y con ella la
-/// posicion. La ruta se reinyecta al final porque `apagar` la borra, que es lo
-/// correcto en produccion (fin de viaje = sin ruta).
-void _conViaje(
-  NavigationModeService nav,
-  LatLng donde,
-  List<LatLng> ruta,
-) {
-  nav.activar(null);
-  nav.activar('in_progress', posicionConocida: donde);
-  nav.informarRuta(ruta);
-}
+/// Fix sintético. El rumbo `bearing` se deja a null a proposito: si el motor
+/// lo leyera, la prueba no demostraria que la fuente es el movimiento.
+GeoFix _fix(LatLng pos, {double velocidadKmh = 30}) => GeoFix(
+      position: pos,
+      speedMps: velocidadKmh / 3.6,
+      provider: 'gps',
+    );
 
 void main() {
-  group('el rumbo sale SOLO de la ruta', () {
-    testWidgets('sin viaje no hay rumbo aunque haya ruta cargada',
+  group('el rumbo sale SOLO del movimiento GPS + Kalman', () {
+    testWidgets('sin viaje no hay rumbo aunque se alimente el GPS',
         (tester) async {
       final nav = await _servicio(tester);
-      // Ruta cargada pero viaje desactivado: no hay destino, asi que no hay rumbo.
-      nav.informarRuta([
-        const LatLng(23.13, -82.36),
-        const LatLng(23.15, -82.36),
+      const lat = 23.14;
+      nav.informarRuta(const [
+        LatLng(lat, -82.36),
+        LatLng(lat + 0.002, -82.36),
       ]);
-      nav.activar(null, posicionConocida: const LatLng(23.14, -82.36));
+      nav.informarFix(_fix(const LatLng(lat, -82.36)));
+      nav.informarFix(_fix(LatLng(lat, -82.36 + _dLon(50, lat))));
 
       expect(nav.hayViajeActivo, isFalse);
       expect(nav.rumbo, isNull);
@@ -86,111 +76,116 @@ void main() {
       nav.dispose();
     });
 
-    testWidgets('con viaje y ruta recta al este el mapa va al este',
-        (tester) async {
+    testWidgets('dos fixes al este orientan el mapa al este', (tester) async {
       final nav = await _servicio(tester);
       const lat = 23.14;
-      _conViaje(
-        nav,
-        LatLng(lat, -82.36 + _dLon(50, lat)),
-        [
-          const LatLng(lat, -82.36),
-          LatLng(lat, -82.36 + _dLon(200, lat)),
-        ],
-      );
+      nav.activar('in_progress', posicionConocida: const LatLng(lat, -82.36));
 
-      expect(nav.hayViajeActivo, isTrue);
-      expect(nav.rumboDesdeRuta(), closeTo(90, 1));
+      nav.informarFix(_fix(const LatLng(lat, -82.36)));
+      nav.informarFix(_fix(LatLng(lat, -82.36 + _dLon(50, lat))));
+
+      expect(nav.rumboGps, closeTo(90, 2));
+      expect(nav.rumbo, closeTo(90, 2));
+      expect(nav.rumboRetenido, closeTo(90, 2));
       nav.dispose();
     });
 
-    testWidgets('con viaje y ruta recta al norte el mapa va al norte',
-        (tester) async {
+    testWidgets('dos fixes al norte orientan el mapa al norte', (tester) async {
       final nav = await _servicio(tester);
-      _conViaje(
-        nav,
-        const LatLng(23.14, -82.36),
-        [const LatLng(23.13, -82.36), const LatLng(23.15, -82.36)],
-      );
+      const lat = 23.14;
+      nav.activar('in_progress', posicionConocida: const LatLng(lat, -82.36));
 
-      expect(nav.rumboDesdeRuta(), closeTo(0, 1));
+      nav.informarFix(_fix(const LatLng(lat, -82.36)));
+      nav.informarFix(_fix(LatLng(lat + _dLat(50), -82.36)));
+
+      expect(nav.rumboGps, closeTo(0, 2));
+      expect(nav.rumbo, closeTo(0, 2));
       nav.dispose();
     });
 
-    testWidgets('el segmento mas cercano manda, no el primero de la lista',
-        (tester) async {
+    testWidgets('la geometria de la ruta ya no orienta el mapa', (tester) async {
       final nav = await _servicio(tester);
-      // Dos tramos: 300 m al norte y luego 300 m al este. El coche esta en el
-      // segundo, asi que el mapa va al este aunque el primer tramo sea al norte.
       const lat = 23.14;
-      final esquina = LatLng(lat + 300 * _dLat(1), -82.36);
-      final ruta = [
+      // Ruta recta al NORTE, pero el coche se mueve al ESTE: tiene que mandar
+      // el GPS. Antes este caso daba 0 porque se proyectaba sobre la ruta.
+      nav.activar('in_progress', posicionConocida: const LatLng(lat, -82.36));
+      nav.informarRuta([
         const LatLng(lat, -82.36),
-        esquina,
-        LatLng(esquina.latitude, -82.36 + _dLon(300, lat)),
-      ];
+        LatLng(lat + _dLat(300), -82.36),
+      ]);
 
-      _conViaje(nav, LatLng(esquina.latitude, -82.36 + _dLon(50, lat)), ruta);
-      expect(nav.rumboDesdeRuta(), closeTo(90, 1));
+      nav.informarFix(_fix(const LatLng(lat, -82.36)));
+      nav.informarFix(_fix(LatLng(lat, -82.36 + _dLon(50, lat))));
 
-      _conViaje(nav, LatLng(lat, -82.36 + _dLon(1, lat)), ruta);
-      expect(nav.rumboDesdeRuta(), closeTo(0, 1),
-          reason: 'en el primer tramo manda el tramo norte');
+      expect(nav.rumbo, closeTo(90, 2),
+          reason: 'la ruta apunta al norte, el coche va al este');
       nav.dispose();
     });
 
-    testWidgets('un tramo duplicado no rompe la busqueda', (tester) async {
+    testWidgets('parado se conserva el ultimo rumbo valido', (tester) async {
       final nav = await _servicio(tester);
-      // OSRM devuelve a veces el origen repetido: el primer tramo tiene longitud
-      // cero y su direccion es ruido.
-      final ruta = [
-        const LatLng(23.1400, -82.3600),
-        const LatLng(23.1400, -82.3600),
-        const LatLng(23.1500, -82.3600),
-      ];
-      _conViaje(nav, const LatLng(23.1450, -82.3600), ruta);
+      const lat = 23.14;
+      nav.activar('in_progress', posicionConocida: const LatLng(lat, -82.36));
 
-      expect(nav.rumboDesdeRuta(), closeTo(0, 1));
+      nav.informarFix(_fix(const LatLng(lat, -82.36)));
+      nav.informarFix(_fix(LatLng(lat, -82.36 + _dLon(50, lat))));
+      expect(nav.rumbo, closeTo(90, 2));
+
+      // Fix al norte pero a 0 km/h: por debajo de 5 km/h el GPS no tiene
+      // direccion fiable y el filtro no debe girar el mapa.
+      nav.informarFix(_fix(
+        LatLng(lat + _dLat(50), -82.36 + _dLon(50, lat)),
+        velocidadKmh: 0,
+      ));
+
+      expect(nav.rumbo, closeTo(90, 2));
       nav.dispose();
     });
 
-    testWidgets('con viaje pero sin ruta no hay rumbo y no hay salto',
+    testWidgets('un giro brusco se suaviza con el filtro de Kalman',
         (tester) async {
       final nav = await _servicio(tester);
-      _conViaje(nav, const LatLng(23.14, -82.36), const []);
+      const lat = 23.14;
+      nav.activar('in_progress', posicionConocida: const LatLng(lat, -82.36));
 
-      expect(nav.hayViajeActivo, isTrue);
-      expect(nav.rumboDesdeRuta(), isNull);
-      // La ultima orientacion valida se conserva en vez de saltar al norte.
-      expect(nav.rumboRetenido, isNull);
+      nav.informarFix(_fix(const LatLng(lat, -82.36)));
+      nav.informarFix(_fix(LatLng(lat, -82.36 + _dLon(50, lat))));
+      final este = nav.rumbo!;
+      expect(este, closeTo(90, 2));
+
+      // Giro de 90 grados en una muestra: el medicion es 0 (norte), pero el
+      // Kalman tiene que quedarse en un valor intermedio, no dar un salto.
+      nav.informarFix(_fix(
+        LatLng(lat + _dLat(50), -82.36 + _dLon(50, lat)),
+      ));
+
+      expect(nav.rumbo, greaterThan(0));
+      expect(nav.rumbo, lessThan(este));
       nav.dispose();
     });
 
-    testWidgets('sin ruta el rumbo null deja el mapa en norte arriba',
+    testWidgets('rumboInicial siembra el filtro al aceptar el viaje',
         (tester) async {
       final nav = await _servicio(tester);
-      _conViaje(nav, const LatLng(23.14, -82.36), const []);
+      nav.activar('accepted', rumboInicial: 270);
 
-      // Sin rumbo el servicio no fija rotacion: el mapa se queda en norte, que es
-      // lo pedido para el caso "viaje sin ruta cargada".
-      expect(nav.rotacionActual, isNull);
-      expect(nav.debeSeguir, isTrue);
+      expect(nav.rumbo, closeTo(270, 1));
+      expect(nav.rumboGps, closeTo(270, 1));
       nav.dispose();
     });
 
-    testWidgets('apagar el viaje borra el rumbo', (tester) async {
+    testWidgets('apagar el viaje quita el rumbo del mapa', (tester) async {
       final nav = await _servicio(tester);
-      _conViaje(
-        nav,
-        const LatLng(23.14, -82.36),
-        [const LatLng(23.13, -82.36), const LatLng(23.15, -82.36)],
-      );
-      expect(nav.rumboDesdeRuta(), closeTo(0, 1));
+      const lat = 23.14;
+      nav.activar('in_progress', posicionConocida: const LatLng(lat, -82.36));
+      nav.informarFix(_fix(const LatLng(lat, -82.36)));
+      nav.informarFix(_fix(LatLng(lat, -82.36 + _dLon(50, lat))));
+      expect(nav.rumbo, closeTo(90, 2));
 
       nav.apagar();
 
+      expect(nav.hayViajeActivo, isFalse);
       expect(nav.rumbo, isNull);
-      expect(nav.rumboDesdeRuta(), isNull);
       nav.dispose();
     });
   });
