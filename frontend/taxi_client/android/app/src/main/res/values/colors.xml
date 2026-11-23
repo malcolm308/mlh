@@ -1,6 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Fondo del icono de la app. El rayo de rayo.png es amarillo y sobre
-         blanco no se veria. -->
-    <color name="ic_launcher_background">#111111</color>
+    <!-- Fondo del icono de la APP DEL CLIENTE: blanco, para diferenciarla del
+         icono oscuro del chofer. El rayo conserva su contorno oscuro y su
+         brillo interior, asi que sigue leyendose sobre blanco. -->
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>

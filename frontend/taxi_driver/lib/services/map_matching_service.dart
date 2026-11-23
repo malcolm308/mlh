@@ -11,16 +11,20 @@ class PuntoRuta {
     required this.fraccion,
     required this.distanciaMetros,
     required this.confiable,
+    required this.enRuta,
   });
 
-  /// Punto ya proyectado sobre la polilínea. Es el que se DIBUJA.
+  /// Posición que se DIBUJA y que sigue la cámara.
   ///
-  /// Siempre cae sobre una calle de la ruta, incluso cuando el GPS estaba lejos
-  /// o dentro de un edificio. Así el marcador del chofer nunca atraviesa una
-  /// manzana.
+  /// * Si [enRuta] es `true`, es el punto proyectado sobre la polilínea: cae
+  ///   siempre en una calle de la ruta, aunque el GPS haya rebotado contra un
+  ///   edificio.
+  /// * Si [enRuta] es `false`, es la posición real filtrada, SIN tocar. Antes se
+  ///   devolvía la proyección incluso a 300 m de la ruta y el marcador se
+  ///   quedaba pegado a la calle vieja hasta el siguiente recálculo.
   final LatLng posicion;
 
-  /// Posición original del GPS, sin corregir.
+  /// Posición de entrada, ya filtrada y sin encajar.
   ///
   /// La usa el detector de desvíos: si le diéramos la ya encajada, la distancia
   /// perpendicular sería siempre cero y dejaría de pedir recálculos.
@@ -35,44 +39,54 @@ class PuntoRuta {
   /// Distancia perpendicular desde el GPS hasta la ruta, en metros.
   final double distanciaMetros;
 
-  /// `true` cuando el GPS estaba dentro de [MapMatchingService.distanciaMaximaMetros].
+  /// `true` cuando el GPS estaba dentro de
+  /// [MapMatchingService.distanciaMaximaMetros].
   ///
-  /// No impide dibujar: solo mide cuánto se ha corregido el punto.
+  /// Es informativo: no decide si se dibuja encajado. Eso lo hace [enRuta].
   final bool confiable;
+
+  /// `true` si el vehículo se considera sobre la ruta.
+  ///
+  /// Al desviarse se pone en `false` y [posicion] pasa a ser la posición real
+  /// filtrada. El marcador sigue al coche de inmediato, sin esperar a que el
+  /// backend devuelva una ruta nueva.
+  final bool enRuta;
 }
 
 /// Map-matching de la POSICIÓN del vehículo sobre la ruta que se está siguiendo.
 ///
-/// El GPS urbano rebota en los edificios ("canyon effect") y la media móvil de
-/// `FiltroGps` recorta esquinas: el punto sale de la calle y el vehículo se ve
-/// atravesando manzanas. Este servicio proyecta ese punto sobre la polilínea de
-/// la ruta (la misma geometría que dibuja el mapa) antes de publicarlo y antes
-/// de dibujar la flecha.
+/// El GPS urbano rebota en los edificios ("canyon effect") y el filtro puede
+/// recortar esquinas: el punto sale de la calle y el vehículo se ve atravesando
+/// manzanas. Este servicio proyecta ese punto sobre la polilínea de la ruta (la
+/// misma geometría que dibuja el mapa) MIENTRAS el coche va por ella.
 ///
-/// NO sustituye al filtro de rumbo: el heading sigue saliendo del movimiento GPS
-/// + Kalman. Aquí solo se corrige dónde está el coche, no hacia dónde apunta.
-///
-/// Reglas anti-salto:
-///  * se busca primero en una ventana alrededor del tramo anterior, y solo se
-///    hace una búsqueda global si el punto quedó muy lejos;
-///  * cambiar de calle exige varios fixes consecutivos, salvo que los tramos
-///    sean adyacentes y el GPS esté cerca de la esquina compartida: entonces el
-///    giro se acepta en el acto y pasa por el vértice real;
+/// Reglas:
+///  * en ruta, se busca en una ventana alrededor del tramo anterior para no
+///    saltar a una calle paralela;
+///  * cambiar de calle exige varios fixes seguidos, salvo que los tramos sean
+///    adyacentes y el rumbo sea compatible: es un giro real, no una deriva;
 ///  * con el coche parado se conserva el tramo anterior;
-///  * el punto dibujado SIEMPRE va sobre la ruta. Si el GPS está lejos se marca
-///    como no confiable, pero no se devuelve crudo: el crudo viaja aparte en
-///    [PuntoRuta.posicionCruda] para el detector de desvíos.
+///  * **al desviarse se suelta el encaje**: si la distancia supera
+///    [distanciaSalidaRutaMetros] (adaptada a la precisión del GPS), [posicion]
+///    pasa a ser la posición real filtrada y [PuntoRuta.enRuta] queda en
+///    `false`. El marcador nunca se queda clavado en la ruta vieja;
+///  * no se fuerza el vértice de la esquina: el giro se acepta cuando el punto
+///    proyectado cae de verdad en el tramo nuevo.
 class MapMatchingService {
-  /// Distancia máxima aceptable entre el GPS y la ruta.
-  static const double distanciaMaximaMetros = 60.0;
+  /// Distancia máxima para ENTRAR en la ruta, en metros.
+  static const double distanciaEntradaRutaMetros = 45.0;
+
+  /// Distancia a partir de la cual se SALE de la ruta, en metros.
+  ///
+  /// Es mayor que la de entrada a propósito (histéresis): un fix con 50 m de
+  /// error no debe soltar y volver a enganchar el marcador cada segundo.
+  static const double distanciaSalidaRutaMetros = 65.0;
+
+  /// Distancia máxima para considerar el encaje "confiable".
+  static const double distanciaMaximaMetros = distanciaEntradaRutaMetros;
 
   /// Más allá de esto se hace una búsqueda global en toda la polilínea.
   static const double distanciaBuscaGlobalMetros = 150.0;
-
-  /// Radio alrededor del vértice de una esquina para aceptar el giro sin
-  /// esperar tres fixes. Con el GPS a 1 Hz, esperar tres fixes haría que el coche
-  /// sigiera recto durante tres segundos después de girar.
-  static const double distanciaVerticeMetros = 35.0;
 
   /// Tramos que se miran hacia delante en la ventana local.
   static const int ventanaTramos = 60;
@@ -96,6 +110,24 @@ class MapMatchingService {
   int _fixesCandidato = 0;
   LatLng? _ultimoAjuste;
 
+  /// Última posición de entrada. Se usa como referencia al cambiar de ruta:
+  /// tras un recálculo por desvío la ruta nueva empieza cerca del coche, así
+  /// que encajar el último punto conocido evita saltar al origen.
+  LatLng? _ultimaEntrada;
+
+  /// `true` si el vehículo está sobre la ruta ahora mismo.
+  bool _enRuta = false;
+
+  /// `true` si alguna vez se ha encajado en esta ruta. Distingue el arranque
+  /// (aún no hay historial) de una vuelta a la ruta tras un desvío.
+  bool _algunaVezEnRuta = false;
+
+  /// `true` si el vehículo se considera sobre la ruta.
+  bool get enRuta => _enRuta;
+
+  /// `true` si hay una ruta con al menos dos puntos.
+  bool get tieneRuta => _ruta.length >= 2;
+
   /// Sustituye la ruta de referencia.
   ///
   /// La pantalla publica la ruta en cada fix, así que se compara completa: si un
@@ -110,29 +142,38 @@ class MapMatchingService {
       _candidato = null;
       _fixesCandidato = 0;
       _ultimoAjuste = null;
+      _ultimaEntrada = null;
+      _enRuta = false;
+      _algunaVezEnRuta = false;
       return;
     }
     if (_mismaRuta(_ruta, ruta)) return;
 
-    // Con una ruta nueva se recoloca el índice usando el último punto ya
-    // encajado, no el primero de la polilínea: si no, tras un recálculo por
-    // desvío el marcador saltaría al origen.
-    final referencia = _ultimoAjuste ?? ruta.first;
+    // Con una ruta nueva se recoloca el índice usando la última posición real
+    // conocida, no el primer punto de la polilínea: si no, tras un recálculo por
+    // desvío el marcador saltaría al origen de la ruta.
+    final referencia = _ultimaEntrada ?? _ultimoAjuste ?? ruta.first;
     _ruta = List<LatLng>.unmodifiable(ruta);
     final (i, t, _) = _mejorTramo(referencia, 0, _ruta.length - 2);
     _tramo = i;
     _fraccion = t;
     _candidato = null;
     _fixesCandidato = 0;
+    _enRuta = false;
   }
 
   /// Encaja [crudo] sobre la ruta vigente.
+  ///
+  /// [crudo] debe ser la posición YA filtrada por `FiltroGps`: el map-matching
+  /// corrige la calle, no el ruido del sensor.
   PuntoRuta ajustar(
     LatLng crudo, {
     double? rumbo,
     double? precisionMetros,
     double? velocidadKmh,
   }) {
+    _ultimaEntrada = crudo;
+
     if (_ruta.length < 2) {
       return PuntoRuta(
         posicion: crudo,
@@ -141,33 +182,67 @@ class MapMatchingService {
         fraccion: 0.0,
         distanciaMetros: 0.0,
         confiable: false,
+        enRuta: false,
       );
     }
 
     final ultimo = _ruta.length - 2;
+    final entrada = _umbralEntrada(precisionMetros);
+    final salida = _umbralSalida(precisionMetros);
+
+    // Ventana local alrededor del progreso actual. Al volver de un desvío se
+    // mira hacia delante desde el último tramo conocido; si no aparece nada
+    // cerca, se busca en toda la ruta (rodeos, calles que se vuelven a cruzar).
     final desde = math.max(0, _tramo - tramosAtras);
     final hasta = math.min(ultimo, _tramo + ventanaTramos);
     var mejor = _mejorTramo(crudo, desde, hasta);
-    if (mejor.$3 > distanciaBuscaGlobalMetros) {
-      mejor = _mejorTramo(crudo, 0, ultimo);
+    if (mejor.$3 > (_enRuta ? salida : entrada)) {
+      final global = _mejorTramo(crudo, 0, ultimo);
+      if (global.$3 < mejor.$3) mejor = global;
     }
 
     var (i, t, d) = mejor;
-    final confiable = d <= distanciaMaximaMetros;
 
-    // Un giro en una esquina se detecta en el acto: el tramo nuevo es el
-    // siguiente (o el anterior) y el GPS está junto al vértice que comparten.
-    // Sin esto, la histeresis de tres fixes deja al coche recto dentro del
-    // edificio durante tres segundos después de cada giro.
-    final giroEnEsquina =
-        i != _tramo &&
-        (i == _tramo + 1 || i == _tramo - 1) &&
-        _rumboCompatible(i, rumbo) &&
-        _cercaDelVertice(crudo, i);
+    // Fuera de ruta: se devuelve la posición real filtrada, sin inventar una
+    // calle. El marcador sigue al vehículo aunque la polilínea vieja siga
+    // dibujada, sin esperar al recálculo.
+    if (d > (_enRuta ? salida : entrada)) {
+      _enRuta = false;
+      _candidato = null;
+      _fixesCandidato = 0;
+      _ultimoAjuste = null;
+      return PuntoRuta(
+        posicion: crudo,
+        posicionCruda: crudo,
+        tramo: _tramo,
+        fraccion: _fraccion,
+        distanciaMetros: d,
+        confiable: false,
+        enRuta: false,
+      );
+    }
 
     final parado =
         (velocidadKmh ?? 0.0) < velocidadMinimaMetrosPorSegundo * 3.6;
-    if (i != _tramo && !parado && !giroEnEsquina) {
+
+    // Un giro real: el tramo nuevo es adyacente y el rumbo del vehículo encaja
+    // con el de la calle nueva. Se acepta en el acto, sin forzar el vértice:
+    // la proyección normal ya deja el punto en el tramo nuevo, cerca de la
+    // esquina, y el coche no aparece en la esquina antes de llegar.
+    final giroEnEsquina =
+        i != _tramo &&
+        (i == _tramo + 1 || i == _tramo - 1) &&
+        _rumboCompatible(i, rumbo);
+
+    // Al arrancar (nunca se ha encajado) o yendo en ruta, un cambio de calle
+    // exige varios fixes para no saltar a una paralela. Al VOLVER de un desvío
+    // se engancha en el acto: ya se sabe que la calle anterior no era.
+    final exigeHisteresis =
+        i != _tramo &&
+        !parado &&
+        !giroEnEsquina &&
+        (_enRuta || !_algunaVezEnRuta);
+    if (exigeHisteresis) {
       if (_candidato == i) {
         _fixesCandidato++;
       } else {
@@ -175,33 +250,42 @@ class MapMatchingService {
         _fixesCandidato = 1;
       }
 
-      final puedeCambiar = _fixesCandidato >= fixesParaCambiarTramo;
-      if (!puedeCambiar) {
-        // Se mantiene el tramo anterior, pero se proyecta el punto sobre él
-        // para que el coche no se meta en el edificio de al lado.
+      if (_fixesCandidato < fixesParaCambiarTramo) {
+        // Se mantiene el tramo anterior. Si aun así el punto queda demasiado
+        // lejos de él, el GPS está claramente en la calle nueva: se acepta para
+        // no dibujar el coche a 80 m de donde está.
         final (tAnterior, dAnterior) = _proyectarEnTramo(crudo, _tramo);
-        final ajustado = _puntoEnTramo(_tramo, tAnterior);
-        _ultimoAjuste = ajustado;
-        return PuntoRuta(
-          posicion: ajustado,
-          posicionCruda: crudo,
-          tramo: _tramo,
-          fraccion: tAnterior,
-          distanciaMetros: dAnterior,
-          confiable: dAnterior <= distanciaMaximaMetros,
-        );
+        if (dAnterior <= salida) {
+          final ajustado = _puntoEnTramo(_tramo, tAnterior);
+          _ultimoAjuste = ajustado;
+          _enRuta = true;
+          _algunaVezEnRuta = true;
+          return PuntoRuta(
+            posicion: ajustado,
+            posicionCruda: crudo,
+            tramo: _tramo,
+            fraccion: tAnterior,
+            distanciaMetros: dAnterior,
+            confiable: dAnterior <= distanciaMaximaMetros,
+            enRuta: true,
+          );
+        }
       }
-      _tramo = i;
-      _candidato = null;
-      _fixesCandidato = 0;
     }
 
+    _tramo = i;
+    _candidato = null;
+    _fixesCandidato = 0;
+
     if (parado) {
-      // Parado en un semáforo el GPS baila: se conserva el tramo y la fracción,
-      // pero se dibuja sobre la calle.
+      // Parado en un semáforo el GPS baila: se conserva el tramo, pero se
+      // dibuja sobre la calle.
       final (tParado, dParado) = _proyectarEnTramo(crudo, _tramo);
+      _fraccion = tParado;
       final ajustado = _puntoEnTramo(_tramo, tParado);
       _ultimoAjuste = ajustado;
+      _enRuta = true;
+      _algunaVezEnRuta = true;
       return PuntoRuta(
         posicion: ajustado,
         posicionCruda: crudo,
@@ -209,51 +293,33 @@ class MapMatchingService {
         fraccion: tParado,
         distanciaMetros: dParado,
         confiable: dParado <= distanciaMaximaMetros,
+        enRuta: true,
       );
     }
 
-    if (giroEnEsquina) {
-      // Se fuerza el vértice compartido como punto dibujado. El siguiente fix
-      // ya vendrá sobre el tramo nuevo; mientras tanto el coche está exactamente
-      // en la esquina, no dentro de la manzana.
-      final haciaDelante = i > _tramo;
-      final vertice = haciaDelante ? _ruta[_tramo + 1] : _ruta[_tramo];
-      _tramo = i;
-      _fraccion = haciaDelante ? 0.0 : 1.0;
-      _candidato = null;
-      _fixesCandidato = 0;
-      _ultimoAjuste = vertice;
-      return PuntoRuta(
-        posicion: vertice,
-        posicionCruda: crudo,
-        tramo: _tramo,
-        fraccion: _fraccion,
-        distanciaMetros: d,
-        confiable: confiable,
-      );
-    }
-
-    _tramo = i;
     _fraccion = t;
     final ajustado = _puntoEnTramo(_tramo, t);
     _ultimoAjuste = ajustado;
+    _enRuta = true;
+    _algunaVezEnRuta = true;
     return PuntoRuta(
       posicion: ajustado,
       posicionCruda: crudo,
       tramo: _tramo,
       fraccion: t,
       distanciaMetros: d,
-      confiable: confiable,
+      confiable: d <= distanciaMaximaMetros,
+      enRuta: true,
     );
   }
 
   /// Avanza [metros] por la ruta desde el punto encajado [punto].
   ///
-  /// Sustituye la extrapolación en línea recta: entre fixes (1 Hz) el coche se
-  /// mueve SIGUIENDO la polilínea, de modo que al girar pasa por el vértice de
-  /// la esquina en vez de salir disparado hacia el edificio.
+  /// Solo tiene sentido EN ruta. Fuera de ella devuelve la posición real sin
+  /// tocar: extrapolar por la polilínea vieja es justo lo que hacía que el
+  /// marcador siguiera moviéndose por la ruta abandonada.
   LatLng avanzar(PuntoRuta punto, double metros) {
-    if (_ruta.length < 2 || metros <= 0) return punto.posicion;
+    if (!punto.enRuta || _ruta.length < 2 || metros <= 0) return punto.posicion;
 
     var tramo = punto.tramo.clamp(0, _ruta.length - 2);
     var fraccion = punto.fraccion.clamp(0.0, 1.0);
@@ -281,10 +347,19 @@ class MapMatchingService {
     return _puntoEnTramo(tramo, fraccion);
   }
 
-  bool _cercaDelVertice(LatLng crudo, int tramoNuevo) {
-    if (tramoNuevo < 0 || tramoNuevo >= _ruta.length - 1) return false;
-    final vertice = tramoNuevo > _tramo ? _ruta[_tramo + 1] : _ruta[_tramo];
-    return _distancia(crudo, vertice) <= distanciaVerticeMetros;
+  /// Umbral de entrada, ampliado si el GPS declara poca precisión.
+  static double _umbralEntrada(double? precisionMetros) {
+    final p = precisionMetros;
+    if (p == null || p <= 0) return distanciaEntradaRutaMetros;
+    return (p * 1.5).clamp(distanciaEntradaRutaMetros, 75.0);
+  }
+
+  /// Umbral de salida. Siempre por encima del de entrada (histéresis).
+  static double _umbralSalida(double? precisionMetros) {
+    return (_umbralEntrada(precisionMetros) + 20.0).clamp(
+      distanciaSalidaRutaMetros,
+      95.0,
+    );
   }
 
   bool _mismaRuta(List<LatLng> a, List<LatLng> b) {

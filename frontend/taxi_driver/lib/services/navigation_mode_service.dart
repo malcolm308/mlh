@@ -9,6 +9,7 @@ import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 import '../api_config.dart';
 import '../models/geo_fix.dart';
 import 'camara_libre.dart';
+import 'filtro_gps.dart';
 import 'heading_filter.dart';
 import 'location_service.dart';
 import 'map_matching_service.dart';
@@ -71,6 +72,17 @@ class NavigationModeService {
   /// del GPS urbano; el rumbo sigue siendo GPS + Kalman, no sale de aqui.
   final MapMatchingService _mapMatching = MapMatchingService();
 
+  /// Filtro de la posición real. Se aplica ANTES del map-matching: el encaje
+  /// corrige la calle, no el ruido del sensor. Antes se encajaba el fix crudo y
+  /// el marcador heredaba cada rebote del GPS.
+  final FiltroGps _filtroGps = FiltroGps();
+
+  /// Última posición filtrada del GPS, sin encajar.
+  LatLng? _posicionFiltrada;
+
+  /// Precisión horizontal del último fix, en metros.
+  double? _precisionMetros;
+
   /// Tope de extrapolacion entre fixes.
   ///
   /// 3 s. Pasado esto ya no se sabe donde esta el coche, y seguir proyectando
@@ -129,6 +141,20 @@ class NavigationModeService {
   /// Posicion real del ultimo fix, sin extrapolar. Al backend se le manda esta,
   /// nunca la proyectada: un punto inventado falsearia su posicion real.
   LatLng get posicionReal => _fix?.position ?? _pos;
+
+  /// Posicion real YA FILTRADA, sin encajar sobre la ruta.
+  ///
+  /// Es la que se dibuja cuando el vehiculo esta fuera de la ruta y la que
+  /// alimenta al detector de desvios. Sin viaje tambien es la posicion del
+  /// marcador: antes se pintaba el fix crudo a 1 Hz y el ruido se veia en el
+  /// mapa.
+  LatLng get posicionFiltrada => _posicionFiltrada ?? _fix?.position ?? _pos;
+
+  /// Precision horizontal del ultimo fix, en metros.
+  double? get precisionMetros => _precisionMetros;
+
+  /// `true` si el vehiculo esta sobre la ruta que se sigue.
+  bool get enRuta => _mapMatching.enRuta;
 
   /// `true` si ya llego al menos un fix del GPS.
   ///
@@ -322,6 +348,19 @@ class NavigationModeService {
     // desaparece.
     if (posicionConocida != null) _pos = posicionConocida;
 
+    // El filtro no debe arrastrar muestras de la fase anterior. Si se conoce la
+    // posicion se siembra con ella, para que el primer fix real no se mezcle con
+    // un historial viejo.
+    if (estabaApagado) {
+      _filtroGps.reiniciar();
+      _precisionMetros = null;
+      if (posicionConocida != null) {
+        _posicionFiltrada = _filtroGps.filtrar(posicionConocida);
+      } else {
+        _posicionFiltrada = null;
+      }
+    }
+
     _modo = ModoNavegacion.siguiendo;
     _iniciarTicker();
     _activarMedicionFps();
@@ -358,6 +397,9 @@ class NavigationModeService {
     _enMarchaDesdeMs = null;
     _centroObjetivo = null;
     _rotacionObjetivo = null;
+    _filtroGps.reiniciar();
+    _posicionFiltrada = null;
+    _precisionMetros = null;
     _ticker.stop();
     _desactivarMedicionFps();
     notificar();
@@ -377,6 +419,9 @@ class NavigationModeService {
     _ajusteActual = null;
     _enMarchaDesdeMs = null;
     _quietoDesdeMs = null;
+    _filtroGps.reiniciar();
+    _posicionFiltrada = null;
+    _precisionMetros = null;
     _ticker.stop();
     notificar();
   }
@@ -562,6 +607,16 @@ class NavigationModeService {
     _fixAnterior = fix.position;
     _ultimoFixMs = _ahoraMs;
 
+    // Filtro de posicion. Se alimenta con TODOS los fixes, tambien con los que
+    // dan un salto: es el filtro quien los rechaza y conserva la ultima
+    // posicion buena, incluida su precision.
+    _posicionFiltrada = _filtroGps.filtrar(
+      fix.position,
+      accuracyMetros: fix.accuracy,
+      velocidadKmh: fix.velocidadKmh,
+    );
+    _precisionMetros = _filtroGps.precisionMetros ?? fix.accuracy;
+
     // Rumbo por movimiento GPS + Kalman. Se ignora un fix con salto imposible:
     // su direccion es ruido y meteria un giro de 180 grados en el mapa.
     if (!salto) {
@@ -664,15 +719,17 @@ class NavigationModeService {
     final v = _buffer.velocidadFiltrada();
     _velocidadKmh = v * 3.6;
 
-    // Posición dibujada: SIEMPRE encajada sobre la geometría de la calle, aunque
-    // el GPS haya rebotado contra un edificio. El crudo viaja aparte en
-    // `posicionCruda` y es el que sigue mirando el detector de desvíos.
+    // Posición dibujada. Se encaja la posición YA FILTRADA sobre la geometría
+    // de la calle mientras el vehículo va en ruta. Si se desvía, el map-matching
+    // devuelve la posición real con `enRuta = false` y el marcador deja de
+    // arrastrarse por la polilínea vieja sin esperar al recálculo.
     // El encaje se calcula una vez por fix; la extrapolación se refresca en
     // cada frame con el mismo punto ya encajado.
     if (!identical(fix, _fixAjustado)) {
       _ajusteActual = _mapMatching.ajustar(
-        fix.position,
+        posicionFiltrada,
         rumbo: _rumbo,
+        precisionMetros: _precisionMetros,
         velocidadKmh: _velocidadKmh,
       );
       _fixAjustado = fix;
@@ -801,7 +858,12 @@ class NavigationModeService {
   /// pasa por el vertice de la esquina. El rumbo sigue siendo GPS + Kalman y no
   /// interviene aqui: solo mueve el punto por la calle.
   LatLng _extrapolar(PuntoRuta ajuste, GeoFix fix) {
-    final v = fix.speedMps ?? 0.0;
+    // Fuera de ruta NO se avanza por la polilínea: seguiría moviendo el coche
+    // por la calle que acaba de abandonar. El marcador usa la posición real
+    // filtrada y se refresca con cada fix.
+    if (!ajuste.enRuta) return ajuste.posicion;
+
+    final v = _velocidadKmh > 0 ? _velocidadKmh / 3.6 : (fix.speedMps ?? 0.0);
     if (v <= 0.5) return ajuste.posicion;
 
     final desde = _ultimoFixRelojServicioMs;

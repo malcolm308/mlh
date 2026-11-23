@@ -569,8 +569,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (!_nav.debeSeguir) return;
     // El detector mide DESVÍOS: necesita la posición sin encajar. Si le diéramos
     // la ya proyectada sobre la ruta, la distancia perpendicular sería siempre
-    // cero y dejaría de pedir recálculos.
-    _recalc.informarPosicion(_nav.posicionReal, _nav.velocidadMps);
+    // cero y dejaría de pedir recálculos. Se usa la posición filtrada, que es la
+    // misma que dibuja el marcador fuera de ruta.
+    _recalc.informarPosicion(_nav.posicionFiltrada, _nav.velocidadMps);
   }
 
   /// Mueve la camara cuando el chofer circula libre, sin viaje activo.
@@ -597,8 +598,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final ctl = _controlador;
     if (ctl == null || !_nav.tieneFix) return;
 
-    final pos = _nav.posicionReal;
-    final velocidad = _nav.velocidadRealKmh ?? 0.0;
+    final pos = _nav.posicionFiltrada;
+    final velocidad = _nav.velocidadMps * 3.6;
 
     final rumbo = _rumboLibre.actualizar(
       posicion: pos,
@@ -1445,31 +1446,44 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
   }
 
-  void _setDriverPos(LatLng p, {double? rumbo, double? velocidadKmh}) {
-    // El filtro sigue dando la VELOCIDAD (y con ella el zoom), pero ya no se
-    // usa para la posicion: una media movil de 4 fixes corta la esquina y deja
-    // el punto dentro de la manzana justo al girar.
-    final suave = _filtroGps.filtrar(p);
+  void _setDriverPos(
+    LatLng p, {
+    double? rumbo,
+    double? velocidadKmh,
+    double? precisionMetros,
+  }) {
+    // Filtro adaptativo con la precision del fix. Devuelve la posicion real
+    // suavizada, sin encajar: es la que se publica al backend y al pasajero.
+    final suave = _filtroGps.filtrar(
+      p,
+      accuracyMetros: precisionMetros,
+      velocidadKmh: velocidadKmh,
+    );
     final velocidad = velocidadKmh ?? _filtroGps.velocidadKmh;
 
-    // Se encaja el GPS CRUDO sobre la polilinea de calles. `posicion` siempre
-    // cae en la ruta, asi que nunca se pinta un edificio; `confiable` solo mide
-    // cuánto se corrigió y no impide dibujar. Sin viaje no hay ruta de calles y
-    // se conserva el GPS suave de siempre.
+    // El marcador con viaje usa `_nav.posicion` (filtrada y encajada, o real si
+    // hay desvio). `_driverPos` queda como respaldo, por ejemplo cuando el
+    // usuario explora el mapa. Se encaja la posicion YA filtrada, nunca el GPS
+    // crudo: encajar el ruido del sensor es lo que metia el coche en las
+    // manzanas al girar.
     final ajuste = _activeTrip == null
         ? null
         : _mapMatching.ajustar(
-            p,
+            suave,
             rumbo: rumbo ?? _nav.rumbo,
+            precisionMetros: precisionMetros,
             velocidadKmh: velocidad,
           );
-    final publicada = ajuste?.posicion ?? suave;
+    final marcador = ajuste?.posicion ?? suave;
 
-    setState(() => _driverPos = publicada);
+    setState(() => _driverPos = marcador);
     // Con el chofer libre la camara sigue este punto filtrado; se guarda aqui
     // para que el primer pintado ya salga centrado sin esperar al fix de 1 Hz.
     if (_activeTrip == null && !_manualPos) _centroLibre = suave;
     _publicarRuta();
+    // Al backend y al pasajero va la posicion REAL filtrada, no la encajada:
+    // enviar un punto proyectado falsearia donde esta el coche de verdad.
+    final publicada = suave;
     // Ultima posicion que conoce el servicio en primer plano: si tiene que
     // relevar el sondeo (app cerrada), usa este punto.
     unawaited(
@@ -1603,6 +1617,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         fix.position,
         rumbo: rumboFiltrado ?? rumbo,
         velocidadKmh: fix.velocidadKmh,
+        precisionMetros: fix.accuracy,
       );
     });
   }
@@ -3169,11 +3184,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 zoom: libre
                     ? _zoomLibre
                     : (_nav.zoomActual ?? ApiConfig.defaultZoom),
-                // Con viaje, exactamente lo de siempre: posicion proyectada del
-                // servicio y rumbo de la ruta/sensor.
-                posicionVehiculo: libre
-                    ? (_nav.tieneFix ? _nav.posicionReal : _driverPos)
-                    : (_nav.debeSeguir ? _nav.posicion : _driverPos),
+                // Con viaje, la posicion filtrada y encajada del servicio (o la
+                // real si el coche se ha desviado). Sin viaje, la posicion real
+                // filtrada a 1 Hz: antes se pintaba el fix crudo y el ruido del
+                // GPS se veia en el mapa.
+                posicionVehiculo: (!libre && _nav.debeSeguir)
+                    ? _nav.posicion
+                    : (_nav.tieneFix ? _nav.posicionFiltrada : _driverPos),
                 rumboVehiculo: libreActiva
                     ? (_bearingLibre ?? _rumboParaFlecha())
                     : _rumboParaFlecha(),
