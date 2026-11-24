@@ -174,7 +174,7 @@ Comandos usados (la clave se pasa solo en la línea de comandos):
 # Chofer
 flutter build appbundle --release --no-pub --obfuscate `
   --split-debug-info=build/app/outputs/symbols `
-  --build-name 1.0.45 --build-number 6052 `
+  --build-name 1.0.46 --build-number 6053 `
   --dart-define=MAPTILER_API_KEY=<CLAVE> `
   --dart-define=PLAY_STORE_BUILD=true
 
@@ -186,32 +186,39 @@ flutter build appbundle --release --no-pub --obfuscate `
   --dart-define=PLAY_STORE_BUILD=true
 ```
 
-### 6.1 Por qué el AAB usa `6052` y `6045`
+### 6.1 Por qué el AAB usa `6053` y `6045`
 
 Los APK que se reparten desde Render se compilan con `--split-per-abi`, y
 Flutter suma un desplazamiento al `versionCode` según la ABI: `armeabi-v7a`
 queda en `5xxx` y `arm64-v8a` en `6xxx`. Los APK instalados hoy son:
 
-- Chofer: `1.0.42`, `versionCode 6049` (arm64).
+- Chofer: `1.0.42`, `versionCode 6049` (arm64). Es la APK de prueba; sigue
+  reportando ese número para que `/app/version` responda `tipo_actualizacion:
+  "none"` en las pruebas.
 - Pasajero: `1.0.40`, `versionCode 6043` (arm64).
 
 El AAB de Play es universal y **no** lleva ese desplazamiento. Para que Google
-lo acepte sin obligar a desinstalar, se compila con `6052` y `6045`, por encima
+lo acepte sin obligar a desinstalar, se compila con `6053` y `6045`, por encima
 de los versionCode instalados y de cualquier AAB subido antes. El chofer pasó de
-`6051` a `6052` porque este AAB incluye la segunda corrección del encaje y del
-rumbo; el pasajero no cambió.
+`6052` a `6053` porque este AAB incluye el avance estimado fuera de ruta y el
+aviso de GPS débil; el pasajero no cambió.
 
 ### 6.2 Artefactos generados y verificados
 
 | App | Archivo de entrega | `versionName` | `versionCode` | Peso | Firma release (SHA-256 del certificado) |
 |---|---|---|---|---|---|
-| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.45_vc6052.aab` | 1.0.45 | **6052** | 57,1 MiB (59.165.556 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
+| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.46_vc6053.aab` | 1.0.46 | **6053** | 57,1 MiB (59.919.834 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
 | Pasajero | `dist_play/RapiTaxi_Pasajero_1.0.42_vc6045.aab` | 1.0.42 | **6045** | 57,2 MiB (60.009.425 B) | `E2:B9:CC:51:D6:A8:4F:AB:69:74:6A:47:8F:68:4E:B2:E2:FD:AD:41:78:36:39:5D:E8:19:8B:48:1D:D3:63:BF` |
 
 Hashes de los archivos (para verificar la subida):
 
-- Chofer: `E695ED7178C58F9978BAB56F27AAD61AD70F9F995A3070906F3232B427DAA036`
+- Chofer: `56A88BF836DD9BAA0D57ED47151866B230EB3AD75B793518E2139E2E3C852C12`
 - Pasajero: `A9D0988B42A57B8530A41879BBD943B622207ECED7AAD40E2707832897DF9640`
+
+Nota sobre el nombre: la marca es **RapiTaxi**, pero el `applicationId` histórico
+es `com.taxirapid.taxi_driver` y `com.taxirapid.taxi_client`. No se renombran:
+cambiarlos crearía una app distinta en Play y dejaría de actualizar las
+instalaciones existentes. En Play Console se pone ese id, no el nombre comercial.
 
 Los dos AAB quedan muy por debajo del límite de 150 MB. Se comprobó que la
 clave de MapTiler está embebida en `libapp.so` de ambos paquetes, que el
@@ -236,6 +243,17 @@ keytool -printcert -jarfile build\app\outputs\bundle\release\app-release.aab
 
 También se puede inspeccionar el manifest del AAB con `bundletool` o subirlo a
 Play Console, que muestra el `versionCode` y la huella de firma.
+
+### 6.3 Cambio funcional de esta versión del chofer
+
+Cuando el GPS deja de entregar fixes, el marcador avanza con el último rumbo y
+velocidad filtrados. Dentro de ruta el avance sigue la polilínea; fuera de ruta
+se hace en línea recta, con tope de 30 m desde el último fix real y velocidad máxima
+estimada de 54 km/h. Al llegar un fix nuevo se vuelve a la posición medida sin
+histéresis. Si no hay fix en 1,5 s el botón de GPS pasa a naranja con el aviso
+«GPS débil: posición estimada», y a los 3 s el punto deja de avanzar para no
+inventar una posición falsa. La APK de prueba mantiene `1.0.42 / 6049` para no
+alterar lo que reporta `/app/version`.
 
 ## 7. Data safety (formulario de Play Console)
 

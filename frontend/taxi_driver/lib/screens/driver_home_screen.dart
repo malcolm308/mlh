@@ -3299,13 +3299,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                       const SizedBox(height: 8),
                     ],
                     // GPS SIEMPRE visible: funcional (recetar) durante el viaje.
+                    // Si llevamos demasiado tiempo sin fix, el icono se pone
+                    // naranja: el punto se está estimando, no midiendo.
                     _circularButton(
-                      _gpsState == LocationPermissionState.granted
-                          ? (Icons.gps_fixed)
-                          : (Icons.gps_off),
-                      tooltip: _gpsState == LocationPermissionState.granted
-                          ? 'Recentrar en mi posición'
-                          : 'Activar GPS',
+                      _gpsState != LocationPermissionState.granted ||
+                              _nav.gpsDebil
+                          ? Icons.gps_off
+                          : Icons.gps_fixed,
+                      tooltip: _gpsState != LocationPermissionState.granted
+                          ? 'Activar GPS'
+                          : _nav.gpsDebil
+                              ? 'GPS débil: posición estimada'
+                              : 'Recentrar en mi posición',
+                      iconColor: _gpsState == LocationPermissionState.granted &&
+                              _nav.gpsDebil
+                          ? Colors.orange
+                          : null,
                       onTap: _gpsState == LocationPermissionState.granted
                           ? _followGpsAgain
                           : _enableGps,
@@ -3327,6 +3336,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     IconData icon, {
     required VoidCallback onTap,
     String? tooltip,
+    Color? iconColor,
   }) {
     return Material(
       color: Colors.white,
@@ -3341,7 +3351,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           child: SizedBox(
             width: 44,
             height: 44,
-            child: Icon(icon, color: AppColors.tinta, size: 22),
+            child: Icon(icon, color: iconColor ?? AppColors.tinta, size: 22),
           ),
         ),
       ),

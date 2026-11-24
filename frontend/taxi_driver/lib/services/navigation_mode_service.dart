@@ -89,6 +89,19 @@ class NavigationModeService {
   /// lo saca de la calle.
   static const double _extrapolacionMaxima = 3.0;
 
+  /// Tope del avance recto cuando el coche esta FUERA de ruta.
+  ///
+  /// No se puede seguir la polilinea (seria la calle que acaba de abandonar),
+  /// pero tampoco conviene inventar una posicion lejana: 30 m bastan para que
+  /// el punto no parezca congelado entre dos fixes y no lo sacan del barrio.
+  static const double _avanceFueraRutaMaximoMetros = 30.0;
+
+  /// Velocidad maxima usada para el avance estimado (54 km/h).
+  static const double _velocidadMaximaExtrapoladaKmh = 54.0;
+
+  /// A partir de aqui se considera que la senal GPS esta debil.
+  static const double _avisoGpsDebilSegundos = 1.5;
+
   /// Cuanto se acerca la camara al CENTRO y al ZOOM por frame (a 60 Hz).
   ///
   /// El rumbo ya NO usa este valor: tiene su propia respuesta, [_respuestaRotacion].
@@ -219,6 +232,13 @@ class NavigationModeService {
   // no en el del fix: `_extrapolar` corre en cada frame del ticker y necesita
   // comparar siempre contra la misma referencia.
   int? _ultimoFixRelojServicioMs;
+
+  /// `true` cuando llevamos demasiado tiempo sin un fix de posicion.
+  ///
+  /// Se muestra en la interfaz para que el chofer sepa que el punto se esta
+  /// estimando, no midiendo. Se limpia en cuanto llega un fix nuevo.
+  bool _gpsDebil = false;
+  bool get gpsDebil => _gpsDebil;
 
   // Camara interpolada: el objetivo es lo que se quiere, el actual es lo que se
   // va moviendo hacia el. Se guardan los dos para poder interpolar sin saltos.
@@ -644,6 +664,7 @@ class NavigationModeService {
     // se comparaba contra ese mismo valor: el delta daba siempre 0 y la flecha
     // nunca avanzaba entre fixes.
     _ultimoFixRelojServicioMs = _ahoraMs;
+    _gpsDebil = false;
 
     if (_modo == ModoNavegacion.siguiendo) {
       _recalcularObjetivo();
@@ -679,8 +700,12 @@ class NavigationModeService {
   /// que es justo lo que no puede pasar en un mapa de conduccion.
   static final Stopwatch _reloj = Stopwatch()..start();
 
+  /// Reloj falso, usado solo por las pruebas para avanzar sin esperar de verdad.
+  @visibleForTesting
+  static int? relojPruebaMs;
+
   /// Milisegundos monotonos desde que arranco el servicio.
-  static int get _ahoraMs => _reloj.elapsedMilliseconds;
+  static int get _ahoraMs => relojPruebaMs ?? _reloj.elapsedMilliseconds;
 
   /// Duracion de un tramo, en milisegundos monotonos.
   static int _desde(int? desde) => desde == null ? 0 : _ahoraMs - desde;
@@ -863,22 +888,60 @@ class NavigationModeService {
   /// pasa por el vertice de la esquina. El rumbo sigue siendo GPS + Kalman y no
   /// interviene aqui: solo mueve el punto por la calle.
   LatLng _extrapolar(PuntoRuta ajuste, GeoFix fix) {
-    // Fuera de ruta NO se avanza por la polilínea: seguiría moviendo el coche
-    // por la calle que acaba de abandonar. El marcador usa la posición real
-    // filtrada y se refresca con cada fix.
-    if (!ajuste.enRuta) return ajuste.posicion;
+    final desde = _ultimoFixRelojServicioMs;
+    if (desde == null) return ajuste.posicion;
+
+    final dtReal = (_ahoraMs - desde) / 1000.0;
+    _gpsDebil = dtReal >= _avisoGpsDebilSegundos;
+
+    if (!ajuste.enRuta) {
+      // Fuera de ruta NO se avanza por la polilínea: seguiría moviendo el coche
+      // por la calle que acaba de abandonar. Pero quedarse clavado en el último
+      // fix tampoco: se avanza en línea recta con el último rumbo y velocidad,
+      // con tope de 30 m y solo mientras el fix tenga menos de 3 s.
+      if (dtReal <= 0 || dtReal > _extrapolacionMaxima) {
+        return ajuste.posicion;
+      }
+      return _extrapolarFueraRuta(ajuste, dtReal);
+    }
 
     final v = _velocidadKmh > 0 ? _velocidadKmh / 3.6 : (fix.speedMps ?? 0.0);
     if (v <= 0.5) return ajuste.posicion;
 
-    final desde = _ultimoFixRelojServicioMs;
-    if (desde == null) return ajuste.posicion;
-    final dtReal = (_ahoraMs - desde) / 1000.0;
     if (dtReal <= 0 || dtReal > _extrapolacionMaxima) {
       return ajuste.posicion;
     }
 
     return _mapMatching.avanzar(ajuste, v * dtReal);
+  }
+
+  /// Avance estimado en línea recta cuando el GPS se pierde fuera de ruta.
+  ///
+  /// Usa el rumbo GPS + Kalman ya calculado y la velocidad suavizada. Nunca se
+  /// aleja más de [_avanceFueraRutaMaximoMetros] del último fix real y, en
+  /// cuanto llega uno nuevo, el punto vuelve a la posición medida.
+  LatLng _extrapolarFueraRuta(PuntoRuta ajuste, double dtReal) {
+    final rumbo = _rumboGps.rumbo ?? _rumboRetenido;
+    if (rumbo == null) return ajuste.posicion;
+
+    final vKmh = _velocidadKmh > 0
+        ? _velocidadKmh
+        : (_fix?.speedMps ?? 0.0) * 3.6;
+    final vMps = vKmh.clamp(0.0, _velocidadMaximaExtrapoladaKmh) / 3.6;
+    if (vMps <= 0.5) return ajuste.posicion;
+
+    final metros = math.min(vMps * dtReal, _avanceFueraRutaMaximoMetros);
+    if (metros <= 0) return ajuste.posicion;
+
+    const metrosPorGrado = 111320.0;
+    final rad = rumbo * math.pi / 180.0;
+    final lat = ajuste.posicion.latitude;
+    final cosLat = math.cos(lat * math.pi / 180.0).abs().clamp(0.01, 1.0);
+    return LatLng(
+      lat + metros * math.cos(rad) / metrosPorGrado,
+      ajuste.posicion.longitude +
+          metros * math.sin(rad) / (metrosPorGrado * cosLat),
+    );
   }
 
   // ---------------- rumbo por movimiento GPS ----------------
