@@ -17,10 +17,11 @@ credenciales escritas a mano en el código Dart ni en los archivos Android: los
 tokens de sesión están en `flutter_secure_storage` y las claves de servicios se
 inyectan en tiempo de compilación.
 
-Quedan **tres pendientes externos** que no se pueden cerrar desde el código de
-la app: rotar la clave de MapTiler que se compartió por chat, publicar la
-política de privacidad en una URL pública y ofrecer la eliminación de cuenta
-desde la app o desde una URL web (requisito de Play Console).
+Queda **un pendiente externo** que no se puede cerrar desde el código de la
+app: rotar la clave de MapTiler que se compartió por chat (el titular decidió
+mantenerla por ahora). Las políticas de privacidad ya están publicadas en URL
+pública y la eliminación de cuenta ya está disponible desde la app y desde una
+página web pública, con los enlaces indicados en la sección 9.
 
 ## 2. Alcance y metodología
 
@@ -135,7 +136,7 @@ Pruebas: `test/estado_flotante_test.dart` (13) y la suite completa de
 | 10 | Comentarios obsoletos sobre tokens en `SharedPreferences` | Informativa | Corregidos |
 | 11 | Firma cae a debug si falta el keystore | Media | Aceptado para desarrollo; **el AAB de Play se verificó firmado con release** |
 
-### 4.1 Detalle de los pendientes
+### 4.1 Detalle de medidas y pendientes
 
 **1. Rotar la clave de MapTiler.** La clave `ZsGcg7…` se compartió en el chat y
 debe considerarse comprometida. Pasos:
@@ -150,7 +151,7 @@ La clave no está en el repositorio: se inyecta solo con
 `--dart-define=MAPTILER_API_KEY=...`. Aun así, cualquier clave usada por una app
 móvil es extraíble del binario; la restricción por paquete es la defensa real.
 
-**3. Eliminación de cuenta.** Play Console exige que toda app con registro
+**Eliminación de cuenta (ya implementada).** Play Console exige que toda app con registro
 permita eliminar la cuenta y los datos desde dentro de la app y, además,
 ofrezca una URL web para solicitarlo. Estado actual:
 
@@ -221,7 +222,7 @@ Comandos usados (la clave se pasa solo en la línea de comandos):
 # Chofer
 flutter build appbundle --release --no-pub --obfuscate `
   --split-debug-info=build/app/outputs/symbols `
-  --build-name 1.0.46 --build-number 6053 `
+  --build-name 1.0.46 --build-number 6054 `
   --dart-define=MAPTILER_API_KEY=<CLAVE> `
   --dart-define=PLAY_STORE_BUILD=true
 
@@ -233,22 +234,25 @@ flutter build appbundle --release --no-pub --obfuscate `
   --dart-define=PLAY_STORE_BUILD=true
 ```
 
-### 6.1 Por qué el AAB usa `6053` y `6046`
+### 6.1 Por qué el AAB usa `6054` y `6046`
 
 Los APK que se reparten desde Render se compilan con `--split-per-abi`, y
 Flutter suma un desplazamiento al `versionCode` según la ABI: `armeabi-v7a`
 queda en `5xxx` y `arm64-v8a` en `6xxx`. Los APK instalados hoy son:
 
-- Chofer: `1.0.42`, `versionCode 6049` (arm64). Es la APK de prueba; sigue
-  reportando ese número para que `/app/version` responda `tipo_actualizacion:
-  "none"` en las pruebas.
+- Chofer: `1.0.46`, `versionCode 6054` (arm64, compilada sin
+  `--split-per-abi`). Es la APK de prueba instalada en el móvil; `/app/version`
+  responde `tipo_actualizacion: "none"` porque coincide con esta versión.
 - Pasajero: `1.0.40`, `versionCode 6043` (arm64).
 
 El AAB de Play es universal y **no** lleva ese desplazamiento. Para que Google
-lo acepte sin obligar a desinstalar, se compila con `6053` y `6046`, por encima
-de los versionCode instalados y de cualquier AAB subido antes. El chofer pasó de
-`6052` a `6053` porque este AAB incluye el avance estimado fuera de ruta y el
-aviso de GPS débil.
+lo acepte sin obligar a desinstalar, se compila con `6054` y `6046`, por encima
+del último AAB subido a Play (`6053` en el chofer, `6045` en el pasajero). El
+chofer pasó de `6053` a `6054` porque este AAB añade los widgets flotantes de
+saldo y estado de red y reduce el tamaño de la tarjeta de saldo. Nota: la APK de
+prueba instalada en el móvil también reporta `6054`; quien la tenga instalada
+fuera de Play tendrá que desinstalarla antes de instalar el AAB desde Prueba
+interna, porque Play no propone una actualización entre versionCodes iguales.
 
 El pasajero ya tenía publicado el `versionCode 6045`. Play rechazó volver a
 subirlo con dos mensajes: *«no permite que ningún usuario existente actualice
@@ -263,12 +267,12 @@ publicado y que el bundle no puede ser el mismo. Por eso se recompiló el AAB co
 
 | App | Archivo de entrega | `versionName` | `versionCode` | Peso | Firma release (SHA-256 del certificado) |
 |---|---|---|---|---|---|
-| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.46_vc6053.aab` | 1.0.46 | **6053** | 57,1 MiB (59.919.834 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
+| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.46_vc6054.aab` | 1.0.46 | **6054** | 57,2 MiB (59.961.556 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
 | Pasajero | `dist_play/RapiTaxi_Pasajero/RapiTaxi_Pasajero_1.0.42_vc6046.aab` | 1.0.42 | **6046** | 57,2 MiB (60.009.422 B) | `E2:B9:CC:51:D6:A8:4F:AB:69:74:6A:47:8F:68:4E:B2:E2:FD:AD:41:78:36:39:5D:E8:19:8B:48:1D:D3:63:BF` |
 
 Hashes de los archivos (para verificar la subida):
 
-- Chofer: `56A88BF836DD9BAA0D57ED47151866B230EB3AD75B793518E2139E2E3C852C12`
+- Chofer: `ADD1DE515265E53B7045ABF7A85F2BE22D83289746B5EC6F797547FEF29E83A0`
 - Pasajero: `4B2D2091C40DCCDFA6B828BDC06E366DC0CA33E44F1DBFF6A4C2635F3D74060A`
 
 Nota sobre el nombre: la marca es **RapiTaxi**, pero el `applicationId` histórico
@@ -308,8 +312,18 @@ se hace en línea recta, con tope de 30 m desde el último fix real y velocidad 
 estimada de 54 km/h. Al llegar un fix nuevo se vuelve a la posición medida sin
 histéresis. Si no hay fix en 1,5 s el botón de GPS pasa a naranja con el aviso
 «GPS débil: posición estimada», y a los 3 s el punto deja de avanzar para no
-inventar una posición falsa. La APK de prueba mantiene `1.0.42 / 6049` para no
-alterar lo que reporta `/app/version`.
+inventar una posición falsa.
+
+Además, el mapa muestra dos widgets flotantes que respetan el *safe area*: el
+saldo disponible arriba-centro, con un arco semicircular que representa el
+porcentaje de la última recarga y un botón de refresco; y el estado de la red a
+media altura a la derecha. Con buena señal el aviso desaparece; con señal débil
+aparece un cartel amarillo con parpadeo suave; sin señal, un cartel oscuro con
+parpadeo intenso y un botón «REINTENTAR». El saldo se oculta mientras hay un
+viaje activo. La comprobación de red usa una sonda `/health` del backend con
+intervalos de 15 s con señal y 5 s sin ella, y se pausa en segundo plano, sin
+añadir `connectivity_plus`. La tarjeta de saldo se redujo de 204 a 128 px de
+ancho y usa `FittedBox` para que un saldo largo siga en una sola línea.
 
 ## 7. Data safety (formulario de Play Console)
 
