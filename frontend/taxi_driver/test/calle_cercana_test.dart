@@ -22,7 +22,7 @@ void main() {
         nombre: 'Calle 23',
       );
 
-  Future<NavigationModeService> _servicio(WidgetTester tester) async {
+  Future<NavigationModeService> servicio(WidgetTester tester) async {
     late NavigationModeService nav;
     await tester.pumpWidget(
       Directionality(
@@ -85,7 +85,7 @@ void main() {
 
     testWidgets('el vehículo se dibuja en la calle y no salta al edificio',
         (tester) async {
-      final nav = await _servicio(tester);
+      final nav = await servicio(tester);
       nav.activar('accepted', posicionConocida: anclaje().punto);
       // Viaje sin trazado todavía: es el caso que se estaba dibujando sobre
       // los edificios.

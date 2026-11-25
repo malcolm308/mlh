@@ -12,6 +12,9 @@ import '../models/models.dart';
 import '../services/api_client.dart';
 import '../services/api_service.dart';
 import '../services/cancellation_service.dart';
+import '../services/conectividad_service.dart';
+import '../services/estado_flotante_controller.dart';
+import '../widgets/estado_flotante/estado_flotante_overlay.dart';
 import '../widgets/menu_lateral_chofer.dart';
 import '../services/address_service.dart';
 import '../services/nav_camera.dart';
@@ -264,6 +267,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// desvío de verdad no quede disfrazado de "siempre sobre la ruta".
   final MapMatchingService _mapMatching = MapMatchingService();
 
+  /// Estado compartido de los widgets flotantes del mapa (saldo y red).
+  ///
+  /// Cada widget decide su visibilidad por separado: el saldo se oculta con
+  /// viaje activo y el de red desaparece cuando la conexión es buena.
+  final EstadoFlotanteController _flotante = EstadoFlotanteController();
+
+  /// Vigila si el backend responde para avisar de señal débil o sin señal.
+  ///
+  /// Se crea en `initState`. La sonda es adaptativa (15 s con red buena, 5 s
+  /// con problemas) y se pausa en segundo plano.
+  late final ConectividadService _conectividad;
+
   // ---------------- CAMARA LIBRE (SOLO SIN VIAJE) ----------------
 
   /// Rumbo por movimiento GPS + Kalman. Solo se alimenta cuando
@@ -482,6 +497,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       if (trip == null) return;
       _ws.rutaViaje(trip.tripId, puntos);
     };
+
+    // Widgets flotantes del mapa. El controlador carga la referencia de la
+    // ultima recarga (SharedPreferences) sin bloquear el primer frame y la
+    // sonda de red arranca ya: si el backend no responde, el chofer lo ve.
+    _conectividad = ConectividadService()..addListener(_alCambiarRed);
+    _conectividad.iniciar();
+    unawaited(_flotante.cargar());
 
     // El saldo decide si se puede aceptar un viaje, asi que se lee al abrir y
     // se refresca con el mismo ritmo que el sondeo de ofertas.
@@ -824,6 +846,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _subRecalc?.cancel();
     _recalc.removeListener(_alCambiarEstadoRecalc);
     _recalc.dispose();
+    _conectividad
+      ..removeListener(_alCambiarRed)
+      ..detener()
+      ..dispose();
+    _flotante.dispose();
     super.dispose();
   }
 
@@ -2252,15 +2279,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   double? _saldo;
 
+  /// Vuelca el estado de la sonda en el widget flotante de red.
+  void _alCambiarRed() {
+    _flotante.actualizarRed(_conectividad.estado);
+  }
+
   Future<void> _refrescarSaldo() async {
+    _flotante.marcarActualizandoSaldo(true);
     try {
       final fondo = await widget.api.getDriverFondo(widget.driverId);
       if (!mounted) return;
       final valor = (fondo['fondo'] as num?)?.toDouble();
+      // El controlador guarda el monto y detecta la recarga para rellenar el
+      // arco; el `_saldo` de la pantalla sigue mandando en el bloqueo de
+      // aceptacion y en el menu lateral.
+      _flotante.actualizarSaldo(valor);
       if (valor != _saldo) setState(() => _saldo = valor);
     } catch (_) {
       // Si el saldo no se puede leer no se bloquea al chofer: el servidor es
       // quien manda y ya dira algo si de verdad no puede trabajar.
+    } finally {
+      _flotante.marcarActualizandoSaldo(false);
     }
   }
 
@@ -3152,6 +3191,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     // movimiento GPS + Kalman). Con viaje manda `NavigationModeService` y este
     // widget recupera su `moveCamera` de siempre.
     final libre = _activeTrip == null;
+    // El widget de saldo solo se ve con el chofer disponible. Se sincroniza en
+    // cada build porque `_activeTrip` cambia desde muchos sitios.
+    _flotante.sincronizarEnViaje(!libre);
     // La camara libre solo corre si ademas no hay oferta en pantalla ni pin
     // movido a mano: en esos casos el mapa lo encuadra `_encuadrarTrayecto`.
     final libreActiva = libre && _selectedOffer == null && !_manualPos;
@@ -3329,6 +3371,20 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                   ],
                 ),
               ),
+            // Widgets flotantes de estado: el saldo arriba y centrado (bajo la
+            // barra de estado) y el aviso de red a media altura pegado a la
+            // derecha, para no tapar el marcador del vehiculo. El saldo
+            // desaparece con viaje activo y el de red con señal buena.
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: EstadoFlotanteOverlay(
+                controller: _flotante,
+                onRefrescarSaldo: _refrescarSaldo,
+                onReintentarRed: _conectividad.reintentar,
+              ),
+            ),
             if (_selectedOffer != null || _lostOffer != null)
               _buildOfferOverlay(),
             if (_selectedOffer == null && _lostOffer == null)

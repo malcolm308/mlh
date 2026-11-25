@@ -50,6 +50,7 @@ desde la app o desde una URL web (requisito de Play Console).
 | Auto-update propio | Desactivado en el build de Play | Desactivado en el build de Play |
 | Tokens JWT | `flutter_secure_storage`, espejo legacy eliminado | `flutter_secure_storage` |
 | Anclaje del vehículo a la calle | Nuevo: `GET /geo/calle-cercana` lee `public.streets` de Supabase | No aplica |
+| Widgets flotantes del mapa | Nuevo: saldo con arco y aviso de red | No aplica |
 
 ### 3.1 Zoom de navegación (chofer)
 
@@ -94,7 +95,29 @@ se envía al backend y al pasajero sigue siendo la real filtrada: el anclaje es
 visual, no falsifica la posición. La petición está limitada a una cada 5 s y se
 cachea 60 s; si el GPS rebota más de 50 m, se descarta la respuesta antigua.
 Pruebas: `test/calle_cercana_test.dart` y la suite completa de `flutter test`
-(181/181).
+(193/193).
+
+### 3.4 Widgets flotantes de estado (chofer)
+
+Dos tarjetas sobre el mapa, con Safe Area para no chocar con la barra de estado
+ni el notch:
+
+- **Saldo**: arriba y centrado, entre el menú y la campana/GPS. Arco dibujado
+  con `CustomPainter` que representa lo que queda de la última recarga
+  (persistida en `SharedPreferences`), monto en CUP y botón de refrescar. Solo
+  se muestra si el chofer no tiene viaje activo.
+- **Red**: a media altura y pegado al borde derecho, en formato compacto para
+  no tapar el marcador del vehículo. «Sin señal» es oscuro, parpadea y ofrece
+  REINTENTAR; «señal débil» es amarillo y parpadea más suave. Con señal buena
+  desaparece. Los dos estados son excluyentes.
+
+La conectividad se comprueba contra `/health` (no solo contra la interfaz de
+red) con intervalos adaptativos de 15 s con red buena y 5 s con problemas, y se
+pausa en segundo plano. No se añadió `connectivity_plus`: la sonda HTTP mide lo
+que de verdad importa (que el backend responda).
+
+Pruebas: `test/estado_flotante_test.dart` (12) y la suite completa de
+`flutter test` (193/193).
 
 ## 4. Hallazgos
 
