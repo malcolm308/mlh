@@ -1,13 +1,11 @@
 # Política de Privacidad — RapiTaxi Chofer
 
-**Última actualización:** 21 de noviembre de 2026
-**Aplicación:** RapiTaxi Chofer (`com.taxirapid.taxi_driver`)
-**Titular:** [NOMBRE LEGAL DEL TITULAR / EMPRESA]
-**Contacto de privacidad:** [CORREO DE PRIVACIDAD] · WhatsApp: +53 59295207
+**URL pública:** https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_chofer.html
 
-> **Antes de publicar:** sustituye los campos entre corchetes por los datos
-> legales reales del titular. El resto del texto ya describe el funcionamiento
-> actual de la app.
+**Última actualización:** 24 de noviembre de 2026
+**Aplicación:** RapiTaxi Chofer (`com.taxirapid.taxi_driver`)
+**Titular:** RapiTaxi
+**Contacto de privacidad:** rapitaxicuba@gmail.com · WhatsApp: +53 59295207
 
 ---
 
@@ -150,7 +148,7 @@ Puedes solicitar:
 - **Retirada del consentimiento** en cualquier momento, sin afectar al
   tratamiento previo.
 
-Escríbenos a **[CORREO DE PRIVACIDAD]** o por WhatsApp al **+53 59295207**
+Escríbenos a **rapitaxicuba@gmail.com** o por WhatsApp al **+53 59295207**
 indicando tu nombre, teléfono y el derecho que deseas ejercer. Podemos pedirte
 una verificación de identidad razonable. Responderemos en el plazo legal
 aplicable.
@@ -178,7 +176,7 @@ actualización. Si el cambio es sustancial, avisaremos dentro de la app.
 
 ## 12. Contacto
 
-- **Responsable:** [NOMBRE LEGAL DEL TITULAR]
-- **Correo:** [CORREO DE PRIVACIDAD]
+- **Responsable:** RapiTaxi
+- **Correo:** rapitaxicuba@gmail.com
 - **WhatsApp de soporte:** +53 59295207
 - **Sitio:** https://rapitaxi-api-fws6.onrender.com

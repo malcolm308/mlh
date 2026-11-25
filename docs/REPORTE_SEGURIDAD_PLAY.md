@@ -319,47 +319,33 @@ Declarar para **ambas apps**:
       documentación adicional.
 - [ ] Verificar el flujo de recuperación de contraseña por correo.
 
-## 9. Cómo publicar la política de privacidad en una URL pública
+## 9. Política de privacidad publicada
 
-La política debe estar en una URL HTTPS accesible sin iniciar sesión. Hay tres
-opciones sencillas:
+Las dos políticas están publicadas como páginas HTML estáticas servidas por el
+mismo backend FastAPI. Se pueden abrir sin iniciar sesión:
 
-### Opción A — GitHub Pages (gratis, recomendada)
+- **Cliente:** `https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_cliente.html`
+- **Chofer:** `https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_chofer.html`
 
-1. Convierte `docs/POLITICA_PRIVACIDAD_CHOFER.md` y
-   `docs/POLITICA_PRIVACIDAD_CLIENTE.md` a HTML (por ejemplo con
-   `pandoc archivo.md -o archivo.html` agregando una cabecera CSS).
-2. Crea en el repositorio una carpeta `docs/privacidad/` con
-   `chofer.html` y `cliente.html`.
-3. En GitHub → *Settings → Pages*, selecciona la rama principal y la carpeta
-   `/docs`.
-4. Las URLs quedarán así:
-   - `https://<usuario>.github.io/<repo>/privacidad/chofer.html`
-   - `https://<usuario>.github.io/<repo>/privacidad/cliente.html`
-5. Si el repositorio es privado, GitHub Pages requiere un plan que lo permita;
-   en ese caso usa la opción B.
+Los archivos fuente están en `docs/POLITICA_PRIVACIDAD_CLIENTE.md` y
+`docs/POLITICA_PRIVACIDAD_CHOFER.md`; las páginas publicadas son
+`static/politica_privacidad_cliente.html` y
+`static/politica_privacidad_chofer.html`.
 
-### Opción B — Render Static Site (mismo proveedor del backend)
+Titular: **RapiTaxi**. Contacto de privacidad:
+**rapitaxicuba@gmail.com** y WhatsApp **+53 59295207**. Última actualización:
+**24 de noviembre de 2026**.
 
-1. En Render → *New → Static Site*.
-2. Conecta el repositorio y usa como *Publish directory* `docs/privacidad`.
-3. Render entrega una URL `https://<nombre>.onrender.com`.
-4. Añade las rutas `chofer.html` y `cliente.html` en Play Console.
+Estas URLs son las que se pegan en Play Console:
 
-### Opción C — Servir el HTML desde el backend FastAPI
+| App | Campo de Play Console | URL |
+|---|---|---|
+| RapiTaxi Pasajero | URL de la política de privacidad | `https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_cliente.html` |
+| RapiTaxi Chofer | URL de la política de privacidad | `https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_chofer.html` |
 
-Si prefieres una sola URL, crea `static/privacidad/chofer.html` y
-`static/privacidad/cliente.html`. El backend ya sirve `/static`, así que
-quedarían en:
-
-- `https://rapitaxi-api-fws6.onrender.com/static/privacidad/chofer.html`
-- `https://rapitaxi-api-fws6.onrender.com/static/privacidad/cliente.html`
-
-Ventaja: no hay que crear otro servicio. Desventaja: depende de que Render esté
-despierto y del mismo despliegue del backend.
-
-> En las tres opciones, verifica la URL en una ventana de incógnito y sin sesión
-> antes de pegarla en Play Console.
+> Verifica la URL en una ventana de incógnito antes de guardarla. El backend de
+> Render puede tardar unos segundos en despertar si lleva mucho tiempo sin
+> tráfico; la página debe cargar igualmente sin sesión.
 
 ## 10. Recomendaciones posteriores a la publicación
 
