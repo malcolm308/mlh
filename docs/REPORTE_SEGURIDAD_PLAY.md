@@ -49,6 +49,7 @@ desde la app o desde una URL web (requisito de Play Console).
 | Ofuscación Dart | `--obfuscate --split-debug-info` | Igual |
 | Auto-update propio | Desactivado en el build de Play | Desactivado en el build de Play |
 | Tokens JWT | `flutter_secure_storage`, espejo legacy eliminado | `flutter_secure_storage` |
+| Anclaje del vehículo a la calle | Nuevo: `GET /geo/calle-cercana` lee `public.streets` de Supabase | No aplica |
 
 ### 3.1 Zoom de navegación (chofer)
 
@@ -74,6 +75,26 @@ Solución: el build de Play se compila con
 
 El APK que se reparte desde Render mantiene el OTA de siempre porque el valor
 por defecto del flag es `false`.
+
+### 3.3 Anclaje del vehículo sin ruta de viaje
+
+Cuando el chofer está libre, o cuando el viaje aún no tiene trazado, no había
+ninguna polilínea donde encajar el GPS y el marcador se dibujaba sobre los
+edificios. Se añadió `GET /geo/calle-cercana?lat=...&lon=...&radio_m=120`, que
+consulta **siempre** la tabla `public.streets` de Supabase/Postgres (17.037 vías,
+índice GiST) y devuelve:
+
+- el punto proyectado sobre la vía más cercana;
+- un trozo de su geometría (~150 m a cada lado) para avanzar entre fixes sin
+  cortar manzanas;
+- nombre, tipo y distancia, con `origen = supabase:streets`.
+
+La app usa ese punto solo para dibujar y orientar la cámara. La coordenada que
+se envía al backend y al pasajero sigue siendo la real filtrada: el anclaje es
+visual, no falsifica la posición. La petición está limitada a una cada 5 s y se
+cachea 60 s; si el GPS rebota más de 50 m, se descarta la respuesta antigua.
+Pruebas: `test/calle_cercana_test.dart` y la suite completa de `flutter test`
+(181/181).
 
 ## 4. Hallazgos
 

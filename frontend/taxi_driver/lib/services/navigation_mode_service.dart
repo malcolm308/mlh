@@ -8,6 +8,7 @@ import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 
 import '../api_config.dart';
 import '../models/geo_fix.dart';
+import 'calle_cercana_service.dart';
 import 'camara_libre.dart';
 import 'filtro_gps.dart';
 import 'heading_filter.dart';
@@ -72,6 +73,25 @@ class NavigationModeService {
   /// del GPS urbano; el rumbo sigue siendo GPS + Kalman, no sale de aqui.
   final MapMatchingService _mapMatching = MapMatchingService();
 
+  /// Encaje sobre la vía más cercana cuando NO hay ruta de viaje (chofer libre
+  /// o ruta aún no calculada). Es el mismo algoritmo, alimentado con el trozo de
+  /// geometría que devuelve Supabase (`public.streets`).
+  final MapMatchingService _mapMatchingCalle = MapMatchingService();
+
+  /// Matching que se está usando ahora. Lo consulta [_extrapolar] para avanzar
+  /// por la geometría correcta: la del viaje o la de la calle libre.
+  MapMatchingService? _matchingActual;
+
+  /// Último anclaje recibido del backend. Solo se usa cuando no hay ruta.
+  AnclajeCalle? _anclajeCalle;
+  List<LatLng>? _geomAnclaje;
+  DateTime? _ultimaPeticionAnclaje;
+
+  /// Posición visible cuando no hay ruta: la real si aún no llegó el anclaje,
+  /// o el punto proyectado sobre la calle. La posición publicada al backend no
+  /// se toca nunca.
+  LatLng? _posicionAnclada;
+
   /// Filtro de la posición real. Se aplica ANTES del map-matching: el encaje
   /// corrige la calle, no el ruido del sensor. Antes se encajaba el fix crudo y
   /// el marcador heredaba cada rebote del GPS.
@@ -101,6 +121,10 @@ class NavigationModeService {
 
   /// A partir de aqui se considera que la senal GPS esta debil.
   static const double _avisoGpsDebilSegundos = 1.5;
+
+  /// Se apaga en pruebas para que un fix sintético no dispare HTTP real.
+  @visibleForTesting
+  static bool pedirAnclajeAutomatico = true;
 
   /// Cuanto se acerca la camara al CENTRO y al ZOOM por frame (a 60 Hz).
   ///
@@ -164,11 +188,16 @@ class NavigationModeService {
   /// mapa.
   LatLng get posicionFiltrada => _posicionFiltrada ?? _fix?.position ?? _pos;
 
+  /// Posición que debe dibujarse cuando el chofer está libre o el viaje aún no
+  /// tiene ruta. Ancla el vehículo a la calle; si el servicio aún no respondió,
+  /// cae a la posición filtrada sin inventar nada.
+  LatLng get posicionAnclada => _posicionAnclada ?? posicionFiltrada;
+
   /// Precision horizontal del ultimo fix, en metros.
   double? get precisionMetros => _precisionMetros;
 
   /// `true` si el vehiculo esta sobre la ruta que se sigue.
-  bool get enRuta => _mapMatching.enRuta;
+  bool get enRuta => (_matchingActual ?? _mapMatching).enRuta;
 
   /// `true` si ya llego al menos un fix del GPS.
   ///
@@ -596,6 +625,65 @@ class NavigationModeService {
     _fixAjustado = null;
   }
 
+  /// Entrega el anclaje a la calle más cercana calculado por el backend.
+  ///
+  /// Se usa SOLO mientras no hay ruta de viaje. Con ruta, el encaje manda la
+  /// geometría del viaje y este valor queda guardado para cuando se acabe.
+  void informarAnclajeCalle(AnclajeCalle? anclaje) {
+    _anclajeCalle = anclaje;
+    if (anclaje == null) {
+      _mapMatchingCalle.actualizarRuta(const []);
+      _geomAnclaje = null;
+      _posicionAnclada = _posicionFiltrada;
+      _fixAjustado = null;
+      return;
+    }
+
+    if (_geomAnclaje == null || !_mismaGeom(_geomAnclaje!, anclaje.geom)) {
+      _mapMatchingCalle.actualizarRuta(anclaje.geom);
+      _geomAnclaje = List<LatLng>.unmodifiable(anclaje.geom);
+    }
+    final real = _posicionFiltrada;
+    // Un anclaje calculado hace 10 s ya no describe dónde está el coche.
+    _posicionAnclada = real != null &&
+            LocationService.distanceBetween(real, anclaje.punto) <= 80.0
+        ? anclaje.punto
+        : real;
+    _fixAjustado = null;
+    notificar();
+  }
+
+  bool _mismaGeom(List<LatLng> a, List<LatLng> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// Pide el anclaje sin bloquear el canal del GPS.
+  ///
+  /// La limitación de frecuencia vive en [CalleCercanaService]; aquí solo se
+  /// evita que una respuesta antigua sobrescriba una posición ya alejada.
+  void _pedirAnclajeCalle(LatLng real) {
+    if (!pedirAnclajeAutomatico) return;
+    final ahora = DateTime.now();
+    final ultima = _ultimaPeticionAnclaje;
+    if (ultima != null && ahora.difference(ultima) < const Duration(seconds: 5)) {
+      return;
+    }
+    _ultimaPeticionAnclaje = ahora;
+    unawaited(CalleCercanaService.de(real).then((anclaje) {
+      if (anclaje == null) return;
+      final actual = _posicionFiltrada;
+      if (actual == null ||
+          LocationService.distanceBetween(real, actual) > 50.0) {
+        return;
+      }
+      informarAnclajeCalle(anclaje);
+    }));
+  }
+
   // ---------------- datos ----------------
 
   void _alRecibirFix(GeoFix fix) {
@@ -637,6 +725,21 @@ class NavigationModeService {
       velocidadKmh: fix.velocidadKmh,
     );
     _precisionMetros = _filtroGps.precisionMetros ?? fix.accuracy;
+
+    // Sin ruta de viaje (chofer libre, o viaje aceptado al que aún no llegó el
+    // trazado) no hay polilínea donde encajar. Se pide la vía más cercana a la
+    // malla de Supabase y se dibuja sobre ella, nunca sobre los edificios.
+    if (!_hayViajeActivo || !_mapMatching.tieneRuta) {
+      final real = _posicionFiltrada!;
+      final anclaje = _anclajeCalle;
+      _posicionAnclada = anclaje != null &&
+              LocationService.distanceBetween(real, anclaje.punto) <= 80.0
+          ? anclaje.punto
+          : real;
+      if (ApiConfig.inMapArea(real)) _pedirAnclajeCalle(real);
+    } else {
+      _posicionAnclada = null;
+    }
 
     // Rumbo por movimiento GPS + Kalman. Se ignora un fix con salto imposible:
     // su direccion es ruido y meteria un giro de 180 grados en el mapa.
@@ -751,8 +854,16 @@ class NavigationModeService {
     // arrastrarse por la polilínea vieja sin esperar al recálculo.
     // El encaje se calcula una vez por fix; la extrapolación se refresca en
     // cada frame con el mismo punto ya encajado.
+    // Con viaje y ruta se encaja sobre el trazado del viaje; sin ruta se usa la
+    // geometría de la calle que devolvió Supabase. Así el avance entre fixes
+    // sigue la vía en los dos casos y no corta manzanas.
+    _matchingActual = _anclajeCalle != null &&
+            (!_hayViajeActivo || !_mapMatching.tieneRuta)
+        ? _mapMatchingCalle
+        : _mapMatching;
+
     if (!identical(fix, _fixAjustado)) {
-      _ajusteActual = _mapMatching.ajustar(
+      _ajusteActual = (_matchingActual ?? _mapMatching).ajustar(
         posicionFiltrada,
         // [_rumbo] se actualiza mas abajo, en [_aplicarOrientacion], con este
         // mismo fix: usarlo aqui era usar el rumbo del fix ANTERIOR y el mapa
@@ -895,6 +1006,16 @@ class NavigationModeService {
     _gpsDebil = dtReal >= _avisoGpsDebilSegundos;
 
     if (!ajuste.enRuta) {
+      // Con anclaje a calle activo, un fix que rebota contra un edificio NO debe
+      // mover el marcador en línea recta: se conserva el último punto que sí
+      // caía sobre la vía. Es mejor congelarlo un instante que verlo entrar en
+      // la manzana.
+      final sobreCalle = (_matchingActual ?? _mapMatching).ultimoAjuste;
+      if (_anclajeCalle != null &&
+          (!_hayViajeActivo || !_mapMatching.tieneRuta) &&
+          sobreCalle != null) {
+        return sobreCalle;
+      }
       // Fuera de ruta NO se avanza por la polilínea: seguiría moviendo el coche
       // por la calle que acaba de abandonar. Pero quedarse clavado en el último
       // fix tampoco: se avanza en línea recta con el último rumbo y velocidad,
@@ -912,7 +1033,7 @@ class NavigationModeService {
       return ajuste.posicion;
     }
 
-    return _mapMatching.avanzar(ajuste, v * dtReal);
+    return (_matchingActual ?? _mapMatching).avanzar(ajuste, v * dtReal);
   }
 
   /// Avance estimado en línea recta cuando el GPS se pierde fuera de ruta.

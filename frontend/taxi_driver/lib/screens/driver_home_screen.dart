@@ -604,7 +604,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final ctl = _controlador;
     if (ctl == null || !_nav.tieneFix) return;
 
-    final pos = _nav.posicionFiltrada;
+    // La cámara sigue el punto anclado a la calle, no el fix crudo: si el GPS
+    // rebota contra un edificio el mapa no debe girar hacia la manzana.
+    final pos = _nav.posicionAnclada;
     final velocidad = _nav.velocidadMps * 3.6;
 
     final rumbo = _rumboLibre.actualizar(
@@ -1467,12 +1469,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
     final velocidad = velocidadKmh ?? _filtroGps.velocidadKmh;
 
-    // El marcador con viaje usa `_nav.posicion` (filtrada y encajada, o real si
-    // hay desvio). `_driverPos` queda como respaldo, por ejemplo cuando el
-    // usuario explora el mapa. Se encaja la posicion YA filtrada, nunca el GPS
-    // crudo: encajar el ruido del sensor es lo que metia el coche en las
-    // manzanas al girar.
-    final ajuste = _activeTrip == null
+    // Con ruta de viaje se encaja sobre la polilínea calculada por calles. Sin
+    // ruta (chofer libre, o viaje al que aún no llegó el trazado) se dibuja el
+    // punto anclado a la vía más cercana que trae Supabase. En ambos casos se
+    // encaja la posición YA filtrada, nunca el GPS crudo: encajar el ruido del
+    // sensor es lo que metía el coche en las manzanas al girar.
+    final sinRuta = _activeTrip == null || _rutaParaMatching.isEmpty;
+    final ajuste = sinRuta
         ? null
         : _mapMatching.ajustar(
             suave,
@@ -1480,12 +1483,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
             precisionMetros: precisionMetros,
             velocidadKmh: velocidad,
           );
-    final marcador = ajuste?.posicion ?? suave;
+    final anclada = _nav.posicionAnclada;
+    final anclajeValido =
+        sinRuta && LocationService.distanceBetween(suave, anclada) <= 80.0;
+    final marcador = ajuste?.posicion ?? (anclajeValido ? anclada : suave);
 
     setState(() => _driverPos = marcador);
-    // Con el chofer libre la camara sigue este punto filtrado; se guarda aqui
-    // para que el primer pintado ya salga centrado sin esperar al fix de 1 Hz.
-    if (_activeTrip == null && !_manualPos) _centroLibre = suave;
+    // Con el chofer libre la camara sigue este mismo punto anclado; se guarda
+    // aqui para que el primer pintado ya salga centrado sin esperar al 1 Hz.
+    if (_activeTrip == null && !_manualPos) _centroLibre = marcador;
     _publicarRuta();
     // Al backend y al pasajero va la posicion REAL filtrada, no la encajada:
     // enviar un punto proyectado falsearia donde esta el coche de verdad.
@@ -3190,13 +3196,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 zoom: libre
                     ? _zoomLibre
                     : (_nav.zoomActual ?? ApiConfig.defaultZoom),
-                // Con viaje, la posicion filtrada y encajada del servicio (o la
-                // real si el coche se ha desviado). Sin viaje, la posicion real
-                // filtrada a 1 Hz: antes se pintaba el fix crudo y el ruido del
-                // GPS se veia en el mapa.
-                posicionVehiculo: _nav.hayViajeActivo
+                // Con viaje y ruta, la posicion filtrada y encajada del
+                // servicio. Sin ruta (incluido el chofer libre), la posicion
+                // anclada a la calle mas cercana de Supabase: ni el ruido del
+                // GPS ni un rebote en un edificio mueven el coche.
+                posicionVehiculo: _nav.hayViajeActivo &&
+                        _rutaParaMatching.isNotEmpty
                     ? _nav.posicion
-                    : (_nav.tieneFix ? _nav.posicionFiltrada : _driverPos),
+                    : (_nav.tieneFix ? _nav.posicionAnclada : _driverPos),
                 rumboVehiculo: libreActiva
                     ? (_bearingLibre ?? _rumboParaFlecha())
                     : _rumboParaFlecha(),

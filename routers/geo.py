@@ -128,6 +128,13 @@ _cache_lock = threading.Lock()
 TTL_CACHE = 60 * 60 * 24 * 7   # una semana: las calles no cambian
 MAX_CACHE = 5000
 
+# Cache corta para el anclaje del vehiculo: el coche se mueve, asi que una
+# respuesta vieja solo sirve mientras el GPS no se haya alejado de ella.
+_snap_cache: Dict[str, Tuple[Dict, float]] = {}
+_snap_lock = threading.Lock()
+SNAP_TTL = 60.0
+SNAP_MAX = 500
+
 
 # --------------------------------------------------------------------------
 # geometria (plano local en metros)
@@ -1794,6 +1801,54 @@ async def buscar(q: str = Query(..., min_length=2),
 # --------------------------------------------------------------------------
 # endpoints
 # --------------------------------------------------------------------------
+@router.get("/geo/calle-cercana")
+def calle_cercana(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radio_m: float = Query(120, ge=10, le=300),
+):
+    """Punto de la vía más cercana para anclar el marcador del chofer.
+
+    Lee SIEMPRE la tabla `public.streets` de Supabase/Postgres (la malla vial
+    migrada), no Mongo. Se devuelve el punto proyectado y un trozo corto de la
+    geometría para que la app pueda seguir la calle entre dos fixes GPS sin
+    dibujar el vehículo sobre los edificios.
+    """
+    if not _en_mapa(lat, lon):
+        return {"ok": False, "motivo": "fuera_del_area"}
+
+    clave = "%.5f|%.5f|%d" % (lat, lon, int(radio_m))
+    ahora = time.time()
+    with _snap_lock:
+        golpe = _snap_cache.get(clave)
+        if golpe and ahora - golpe[1] < SNAP_TTL:
+            salida = dict(golpe[0])
+            salida["cache"] = True
+            return salida
+
+    r = streets_repo.calle_mas_cercana(lat, lon, radio_m)
+    if r is None or r.get("dist_m") is None or r["dist_m"] > radio_m:
+        respuesta = {"ok": False, "motivo": "sin_calle_cercana",
+                     "origen": "supabase:streets"}
+    else:
+        punto_lat, punto_lon = r["punto"]
+        respuesta = {
+            "ok": True,
+            "punto": {"lat": punto_lat, "lon": punto_lon},
+            "geom": r["geom"],
+            "dist_m": r["dist_m"],
+            "nombre": r.get("nombre"),
+            "tipo": r.get("tipo"),
+            "origen": "supabase:streets",
+        }
+
+    with _snap_lock:
+        if len(_snap_cache) > SNAP_MAX:
+            _snap_cache.clear()
+        _snap_cache[clave] = (respuesta, ahora)
+    return respuesta
+
+
 @router.get("/geo/direccion")
 def direccion(lat: float = Query(..., ge=-90, le=90),
               lon: float = Query(..., ge=-180, le=180),

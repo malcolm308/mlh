@@ -152,6 +152,13 @@ class MapMatchingService {
   /// `true` si hay una ruta con al menos dos puntos.
   bool get tieneRuta => _ruta.length >= 2;
 
+  /// Último punto dibujado que caía sobre la polilínea, si lo hubo.
+  ///
+  /// Se usa para conservar el vehículo en la calle cuando un fix malo parece
+  /// meterlo en un edificio: vale más congelarlo un instante en la vía que
+  /// dibujarlo atravesando la manzana.
+  LatLng? get ultimoAjuste => _ultimoAjuste;
+
   /// Sustituye la ruta de referencia.
   ///
   /// La pantalla publica la ruta en cada fix, así que se compara completa: si un
@@ -237,7 +244,9 @@ class MapMatchingService {
       _enRuta = false;
       _candidato = null;
       _fixesCandidato = 0;
-      _ultimoAjuste = null;
+      // Se conserva [_ultimoAjuste]: es el último punto que sí caía sobre la
+      // vía. Con anclaje a calle sirve para congelar el vehículo ahí mientras
+      // llega el siguiente fix, en vez de dibujarlo dentro de un edificio.
       return PuntoRuta(
         posicion: crudo,
         posicionCruda: crudo,
@@ -285,7 +294,8 @@ class MapMatchingService {
         // solo retrasa el salto entre calle y calle; nunca debe mover el punto:
         // mientras se decide, se muestra la posición real filtrada.
         _enRuta = false;
-        _ultimoAjuste = null;
+        // Igual que arriba: se conserva el último punto sobre la calle para no
+        // meter el coche en la manzana mientras se confirma el cambio de vía.
         return PuntoRuta(
           posicion: crudo,
           posicionCruda: crudo,

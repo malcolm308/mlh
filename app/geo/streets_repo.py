@@ -172,6 +172,93 @@ def calles_cerca(lat: float, lon: float, radio_m: float) -> list[dict]:
     return [_doc(f, con_dist=True) for f in filas]
 
 
+def calle_mas_cercana(lat: float, lon: float, radio_m: float) -> Optional[dict]:
+    """Vía más cercana a un punto, con el punto proyectado sobre ella.
+
+    Se usa para anclar el vehículo del chofer a la calle cuando no hay ruta de
+    viaje. Consulta SIEMPRE `public.streets` (Supabase/Postgres), sin pasar por
+    Mongo ni por el flag `GEO_READ_SOURCE`: la malla vial ya vive ahí.
+
+    Devuelve `nombre`, `tipo`, `dist_m`, `punto` (lat, lon) y `geom`
+    ([[lat, lon], ...]) recortado a ~150 m a cada lado del punto, suficiente
+    para extrapolar el marcador por encima de la vía entre dos fixes GPS.
+    """
+    try:
+        with _conexion() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                WITH p AS (
+                    SELECT ST_SetSRID(ST_MakePoint(%s, %s), 4326) AS pt
+                ), mas_cerca AS (
+                    SELECT s.mongo_id, s.nombre, s.properties, s.geom,
+                           ST_Distance(s.geom, p.pt::geography) AS dist_m,
+                           ST_LineLocatePoint(s.geom::geometry, p.pt) AS frac,
+                           ST_Length(s.geom) AS largo_m
+                      FROM streets s, p
+                     WHERE ST_DWithin(s.geom, p.pt::geography, %s)
+                     ORDER BY ST_Distance(s.geom, p.pt::geography)
+                     LIMIT 1
+                )
+                SELECT mongo_id, nombre,
+                       COALESCE(properties->>'tipo', '') AS tipo,
+                       dist_m,
+                       ST_Y(ST_ClosestPoint(geom::geometry,
+                                            (SELECT pt FROM p))) AS punto_lat,
+                       ST_X(ST_ClosestPoint(geom::geometry,
+                                            (SELECT pt FROM p))) AS punto_lon,
+                       ST_AsGeoJSON(
+                           COALESCE(
+                               ST_LineSubstring(
+                                   geom::geometry,
+                                   GREATEST(0.0, frac - 150.0 / NULLIF(largo_m, 0.0)),
+                                   LEAST(1.0, frac + 150.0 / NULLIF(largo_m, 0.0))
+                               ),
+                               geom::geometry
+                           )
+                       ) AS geom_geojson
+                  FROM mas_cerca
+                """,
+                (float(lon), float(lat), float(radio_m)),
+            )
+            fila = cur.fetchone()
+    except Exception:
+        log.exception("streets_repo.calle_mas_cercana falló")
+        return None
+    if not fila:
+        return None
+
+    geojson = fila.get("geom_geojson")
+    if isinstance(geojson, str):
+        try:
+            geojson = json.loads(geojson)
+        except ValueError:
+            geojson = None
+    latlon = []
+    for par in (geojson or {}).get("coordinates") or []:
+        if isinstance(par, (list, tuple)) and len(par) >= 2:
+            try:
+                latlon.append([float(par[1]), float(par[0])])
+            except (TypeError, ValueError):
+                continue
+    if len(latlon) < 2:
+        return None
+
+    try:
+        punto_lat = float(fila["punto_lat"])
+        punto_lon = float(fila["punto_lon"])
+        dist_m = float(fila["dist_m"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+    return {
+        "nombre": fila.get("nombre"),
+        "tipo": fila.get("tipo") or None,
+        "dist_m": dist_m,
+        "punto": (punto_lat, punto_lon),
+        "geom": latlon,
+    }
+
+
 def cruza_con(geom_geojson: dict | str, nombres: list[str],
               limite: int = 600) -> list[dict]:
     """Calles de `nombres` que intersectan de verdad la geometría dada."""
