@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solicitar eliminación de cuenta — RapiTaxi</title>
+  <meta name="description" content="Solicita la eliminación de tu cuenta de RapiTaxi Pasajero o RapiTaxi Chofer y de los datos asociados.">
+  <meta name="theme-color" content="#0b1f3a">
+  <link rel="canonical" href="https://rapitaxi-api-fws6.onrender.com/static/solicitar_borrado_cuenta.html">
+  <style>
+    :root {
+      --tinta: #0b1f3a;
+      --texto: #253247;
+      --suave: #5b6b82;
+      --linea: #e4e9f1;
+      --fondo: #f5f7fb;
+      --blanco: #ffffff;
+      --acento: #f5b301;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--fondo);
+      color: var(--texto);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 17px;
+      line-height: 1.68;
+    }
+    .cabecera {
+      background: linear-gradient(135deg, #07162b 0%, #0b1f3a 60%, #12315a 100%);
+      color: var(--blanco);
+      padding: 38px 20px 34px;
+      border-bottom: 5px solid var(--acento);
+    }
+    .cabecera .interior { max-width: 900px; margin: 0 auto; }
+    .marca {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+      letter-spacing: .3px;
+      font-size: 20px;
+      margin-bottom: 18px;
+    }
+    .marca .punto {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--acento);
+      box-shadow: 0 0 0 5px rgba(245,179,1,.16);
+    }
+    .cabecera h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 42px);
+      line-height: 1.2;
+      letter-spacing: -0.5px;
+    }
+    .cabecera p { margin: 0; color: #cdd8e8; font-size: 16px; }
+    main { max-width: 900px; margin: -18px auto 40px; padding: 0 18px; }
+    .documento {
+      background: var(--blanco);
+      border: 1px solid var(--linea);
+      border-radius: 18px;
+      padding: clamp(24px, 5vw, 52px);
+      box-shadow: 0 18px 45px rgba(11,31,58,.08);
+    }
+    .documento h1 {
+      margin-top: 0;
+      font-size: clamp(26px, 4vw, 36px);
+      line-height: 1.25;
+      color: var(--tinta);
+    }
+    .documento h2 {
+      margin: 2.1em 0 .55em;
+      padding-top: .45em;
+      border-top: 1px solid var(--linea);
+      font-size: 23px;
+      line-height: 1.3;
+      color: var(--tinta);
+    }
+    .documento p { margin: 0 0 1em; }
+    .documento strong { color: var(--tinta); }
+    .documento a {
+      color: #0a5bd6;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .documento ol { padding-left: 1.3em; margin: 0 0 1.15em; }
+    .documento li { margin: .35em 0; }
+    .paso {
+      margin: 18px 0;
+      padding: 18px 20px;
+      border: 1px solid var(--linea);
+      border-left: 4px solid var(--acento);
+      border-radius: 12px;
+      background: #fbfcfe;
+    }
+    .paso strong { display: block; margin-bottom: 4px; }
+    .botones { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0 6px; }
+    .boton {
+      display: inline-block;
+      padding: 11px 20px;
+      border-radius: 999px;
+      background: var(--tinta);
+      color: var(--blanco) !important;
+      font-weight: 700;
+      text-decoration: none !important;
+      font-size: 15.5px;
+    }
+    .boton.secundario { background: #eef2f8; color: var(--tinta) !important; }
+    .contacto {
+      margin-top: 28px;
+      padding: 20px 22px;
+      border-radius: 14px;
+      background: #f0f5ff;
+      border: 1px solid #d7e4fb;
+    }
+    .contacto h2 {
+      margin-top: 0 !important;
+      border-top: 0 !important;
+      padding-top: 0 !important;
+      font-size: 21px;
+    }
+    footer {
+      max-width: 900px;
+      margin: 0 auto 30px;
+      padding: 0 20px;
+      color: var(--suave);
+      font-size: 14px;
+      text-align: center;
+    }
+    footer a { color: var(--suave); }
+    @media (max-width: 620px) {
+      body { font-size: 16px; }
+      .documento { border-radius: 14px; }
+      .documento h2 { font-size: 21px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="cabecera">
+    <div class="interior">
+      <div class="marca"><span class="punto"></span> RapiTaxi</div>
+      <h1>Eliminación de cuenta</h1>
+      <p>Solicita el borrado de tu cuenta y de los datos asociados.</p>
+    </div>
+  </header>
+  <main>
+    <article class="documento">
+      <h1>Solicitar eliminación de cuenta y datos asociados</h1>
+      <p><strong>Titular:</strong> RapiTaxi<br>
+      <strong>Aplicaciones:</strong> RapiTaxi Pasajero (<code>com.taxirapid.taxi_client</code>) y RapiTaxi Chofer (<code>com.taxirapid.taxi_driver</code>)<br>
+      <strong>Última actualización:</strong> 24 de noviembre de 2026</p>
+
+      <p>Si tienes una cuenta en RapiTaxi puedes pedir en cualquier momento que la
+      eliminemos junto con los datos personales asociados. No necesitas estar en
+      La Habana ni usar un formulario especial: puedes hacerlo desde la propia
+      app o escribirnos por correo o WhatsApp.</p>
+
+      <h2>1. La forma más rápida: desde la app</h2>
+
+      <div class="paso">
+        <strong>RapiTaxi Pasajero</strong>
+        Abre el menú lateral (tres líneas) y toca <strong>«Borrar cuenta»</strong>
+        (en rojo, al final del menú). Confirma en el diálogo «¿Borrar cuenta?».
+        La cuenta se elimina de inmediato y se cierra la sesión.
+      </div>
+
+      <div class="paso">
+        <strong>RapiTaxi Chofer</strong>
+        Entra en <strong>Configuración</strong> y toca <strong>«Eliminar cuenta»</strong>.
+        Confirma el diálogo y la cuenta se elimina de inmediato.
+      </div>
+
+      <p>Si no puedes iniciar sesión, o la app te impide borrar la cuenta (por
+      ejemplo, por un viaje en curso), usa el correo o el WhatsApp indicados más
+      abajo.</p>
+
+      <h2>2. Solicítalo por correo o WhatsApp</h2>
+
+      <p>Escríbenos indicando:</p>
+      <ol>
+        <li>La app a la que pertenece la cuenta: <strong>Pasajero</strong> o <strong>Chofer</strong>.</li>
+        <li>Tu nombre y el teléfono o correo con el que te registraste.</li>
+        <li>La frase: <em>«Solicito la eliminación de mi cuenta y de los datos asociados»</em>.</li>
+      </ol>
+
+      <p>Podemos pedirte una verificación sencilla de identidad para asegurarnos
+      de que la cuenta es tuya. Respondemos en el plazo legal aplicable y
+      confirmamos cuando el borrado se haya completado.</p>
+
+      <div class="botones">
+        <a class="boton" href="mailto:rapitaxicuba@gmail.com?subject=Solicitud%20de%20eliminaci%C3%B3n%20de%20cuenta%20RapiTaxi&amp;body=Hola%2C%20solicito%20la%20eliminaci%C3%B3n%20de%20mi%20cuenta%20y%20datos%20asociados.%0A%0AApp%20%28Pasajero%20o%20Chofer%29%3A%0ANombre%3A%0ATel%C3%A9fono%20o%20correo%20de%20la%20cuenta%3A">Enviar correo</a>
+        <a class="boton secundario" href="https://wa.me/5359295207?text=Hola%2C%20solicito%20la%20eliminaci%C3%B3n%20de%20mi%20cuenta%20y%20datos%20asociados%20de%20RapiTaxi.">Escribir por WhatsApp</a>
+      </div>
+
+      <h2>3. Qué datos se eliminan</h2>
+
+      <p>Al completar la baja se eliminan o anonimizan los datos de perfil
+      (nombre, teléfono, correo y foto), las credenciales y los tokens de sesión,
+      las ubicaciones favoritas y los datos de contacto. Los registros de viajes
+      y las operaciones económicas se anonimizan o se conservan únicamente durante
+      el plazo que exigen las obligaciones legales y fiscales; dejan de estar
+      asociados a tu identidad.</p>
+
+      <h2>4. Más información</h2>
+
+      <p>Consulta la política de privacidad de cada app para saber qué datos se
+      recogen, cómo se usan y cuáles son tus derechos:</p>
+      <ul style="padding-left:1.3em;margin:0 0 1.15em">
+        <li><a href="https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_cliente.html">Política de privacidad — RapiTaxi Pasajero</a></li>
+        <li><a href="https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_chofer.html">Política de privacidad — RapiTaxi Chofer</a></li>
+      </ul>
+
+      <div class="contacto">
+        <h2>Contacto</h2>
+        <p><strong>Correo:</strong> <a href="mailto:rapitaxicuba@gmail.com">rapitaxicuba@gmail.com</a><br>
+        <strong>WhatsApp:</strong> <a href="https://wa.me/5359295207?text=Hola%2C%20necesito%20ayuda%20con%20RapiTaxi.">+53 59295207</a><br>
+        <strong>Sitio:</strong> <a href="https://rapitaxi-api-fws6.onrender.com">https://rapitaxi-api-fws6.onrender.com</a></p>
+      </div>
+    </article>
+  </main>
+  <footer>
+    <p>RapiTaxi · <a href="mailto:rapitaxicuba@gmail.com">rapitaxicuba@gmail.com</a> · WhatsApp +53 59295207</p>
+  </footer>
+</body>
+</html>

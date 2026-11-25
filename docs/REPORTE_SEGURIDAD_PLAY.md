@@ -108,14 +108,17 @@ móvil es extraíble del binario; la restricción por paquete es la defensa real
 
 **3. Eliminación de cuenta.** Play Console exige que toda app con registro
 permita eliminar la cuenta y los datos desde dentro de la app y, además,
-ofrezca una URL web para solicitarlo. Hoy existen borrados administrativos,
-pero no un endpoint público autenticado ni una pantalla de baja. Antes de enviar
-a revisión hay que:
+ofrezca una URL web para solicitarlo. Estado actual:
 
-- Añadir `DELETE /clientes/{id}` y `DELETE /choferes/{id}` autenticados, con
-  borrado o anonimización de viajes y documentos según los plazos legales.
-- Añadir la opción «Eliminar mi cuenta» en el perfil de ambas apps.
-- Publicar una URL de solicitud de baja y declararla en Play Console.
+- Pasajero: menú lateral → «Borrar cuenta», que llama a `DELETE /users/me`.
+- Chofer: Configuración → «Eliminar cuenta», que llama a
+  `DELETE /driver/account`.
+- Ambos endpoints están autenticados, anonimizan el perfil, invalidan los
+  tokens y cierran la sesión local.
+- URL pública de solicitud (sin inicio de sesión):
+  https://rapitaxi-api-fws6.onrender.com/static/solicitar_borrado_cuenta.html
+- Pendiente: revisar que viajes, documentos y saldos se anonimicen o se
+  conserven solo durante los plazos legales, y declarar la URL en Play Console.
 
 **5. Token del WebSocket en la URL.** El JWT del canal de ofertas viaja como
 parámetro de consulta y aparece en los logs de uvicorn/Render. Recomendación:
