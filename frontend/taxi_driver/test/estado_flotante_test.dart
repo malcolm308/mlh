@@ -6,6 +6,7 @@ import 'package:taxi_driver/services/conectividad_service.dart';
 import 'package:taxi_driver/services/estado_flotante_controller.dart';
 import 'package:taxi_driver/widgets/estado_flotante/estado_flotante_overlay.dart';
 import 'package:taxi_driver/widgets/estado_flotante/widget_red.dart';
+import 'package:taxi_driver/widgets/estado_flotante/widget_saldo.dart';
 
 /// Los widgets flotantes del chofer tienen dos reglas que no pueden romperse:
 /// el saldo se esconde con viaje activo y el aviso de red solo aparece cuando
@@ -105,6 +106,29 @@ void main() {
 
       await s.comprobar();
       expect(s.estado, EstadoRed.buena);
+    });
+  });
+
+  group('WidgetSaldo', () {
+    testWidgets('un saldo largo no desborda la tarjeta', (tester) async {
+      // El saldo real de las cuentas de prueba llega a seis cifras con
+      // decimales. Antes partía «CUP» a otra línea y empujaba el texto fuera
+      // de la tarjeta; el FittedBox debe reducirlo sin desbordar.
+      await tester.pumpWidget(host(Center(
+        child: WidgetSaldo(
+          saldo: 155371.65,
+          progreso: 1,
+          actualizando: false,
+          onRefrescar: () {},
+        ),
+      )));
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.textContaining('155371.65', findRichText: true),
+        findsOneWidget,
+      );
+      expect(find.textContaining('CUP', findRichText: true), findsOneWidget);
     });
   });
 

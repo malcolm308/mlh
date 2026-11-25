@@ -95,7 +95,7 @@ se envía al backend y al pasajero sigue siendo la real filtrada: el anclaje es
 visual, no falsifica la posición. La petición está limitada a una cada 5 s y se
 cachea 60 s; si el GPS rebota más de 50 m, se descarta la respuesta antigua.
 Pruebas: `test/calle_cercana_test.dart` y la suite completa de `flutter test`
-(193/193).
+(194/194).
 
 ### 3.4 Widgets flotantes de estado (chofer)
 
@@ -116,8 +116,8 @@ red) con intervalos adaptativos de 15 s con red buena y 5 s con problemas, y se
 pausa en segundo plano. No se añadió `connectivity_plus`: la sonda HTTP mide lo
 que de verdad importa (que el backend responda).
 
-Pruebas: `test/estado_flotante_test.dart` (12) y la suite completa de
-`flutter test` (193/193).
+Pruebas: `test/estado_flotante_test.dart` (13) y la suite completa de
+`flutter test` (194/194).
 
 ## 4. Hallazgos
 

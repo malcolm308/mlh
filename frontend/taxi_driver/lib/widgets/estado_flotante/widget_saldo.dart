@@ -7,6 +7,10 @@ import 'arco_saldo_painter.dart';
 ///
 /// El arco representa lo que queda de la última recarga conocida. El botón de
 /// refrescar vuelve a consultar `/drivers/{id}/fondo`.
+///
+/// Tamaño compacto: ocupa poco más de una pulgada y media de alto para no
+/// quitarle mapa al conductor, pero el monto sigue siendo lo más grande de la
+/// tarjeta.
 class WidgetSaldo extends StatelessWidget {
   const WidgetSaldo({
     super.key,
@@ -25,16 +29,16 @@ class WidgetSaldo extends StatelessWidget {
   Widget build(BuildContext context) {
     final monto = saldo == null ? '--' : '\$${saldo!.toStringAsFixed(2)}';
     return Container(
-      width: 204,
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      width: 128,
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.96),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: const [
           BoxShadow(
             color: Color(0x33000000),
-            blurRadius: 18,
-            offset: Offset(0, 6),
+            blurRadius: 12,
+            offset: Offset(0, 4),
           ),
         ],
       ),
@@ -44,39 +48,42 @@ class WidgetSaldo extends StatelessWidget {
           Row(
             children: [
               Container(
-                width: 26,
-                height: 26,
+                width: 18,
+                height: 18,
                 decoration: const BoxDecoration(
                   color: AppColors.acento,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.bolt_rounded,
-                  size: 16,
+                  size: 11,
                   color: AppColors.tinta,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 5),
               const Expanded(
-                child: Text(
-                  'SALDO DISPONIBLE',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.7,
-                    color: AppColors.secundario,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'SALDO DISPONIBLE',
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.3,
+                      color: AppColors.secundario,
+                    ),
                   ),
                 ),
               ),
               SizedBox(
-                width: 30,
-                height: 30,
+                width: 22,
+                height: 22,
                 child: actualizando
                     ? const Padding(
-                        padding: EdgeInsets.all(8),
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        padding: EdgeInsets.all(6),
+                        child: CircularProgressIndicator(strokeWidth: 1.5),
                       )
                     : IconButton(
                         padding: EdgeInsets.zero,
@@ -85,48 +92,62 @@ class WidgetSaldo extends StatelessWidget {
                         onPressed: onRefrescar,
                         icon: const Icon(
                           Icons.refresh_rounded,
-                          size: 20,
+                          size: 15,
                           color: AppColors.secundario,
                         ),
                       ),
               ),
             ],
           ),
+          const SizedBox(height: 1),
           SizedBox(
-            width: 172,
-            height: 88,
+            width: 108,
+            height: 56,
             child: CustomPaint(
               painter: ArcoSaldoPainter(
                 progreso: progreso,
                 colorActivo: AppColors.acento,
                 colorInactivo: const Color(0xFFEDE8DA),
-                grosor: 14,
+                grosor: 9,
               ),
             ),
           ),
-          const SizedBox(height: 2),
-          RichText(
-            textAlign: TextAlign.center,
-            text: TextSpan(
-              children: [
-                TextSpan(
-                  text: monto,
-                  style: const TextStyle(
-                    fontSize: 30,
-                    height: 1.0,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.tinta,
-                  ),
+          const SizedBox(height: 1),
+          // Un saldo de cinco cifras con decimales no cabe a 19 px. El
+          // `FittedBox` lo reduce lo justo para que «$155371.65 CUP» siga en
+          // una sola línea dentro de la tarjeta, sin desbordar ni partir el
+          // sufijo «CUP» a un renglón aparte.
+          SizedBox(
+            width: double.infinity,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
+              child: RichText(
+                maxLines: 1,
+                softWrap: false,
+                textAlign: TextAlign.center,
+                text: TextSpan(
+                  children: [
+                    TextSpan(
+                      text: monto,
+                      style: const TextStyle(
+                        fontSize: 19,
+                        height: 1.0,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.tinta,
+                      ),
+                    ),
+                    const TextSpan(
+                      text: ' CUP',
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.secundario,
+                      ),
+                    ),
+                  ],
                 ),
-                const TextSpan(
-                  text: ' CUP',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.secundario,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ],
