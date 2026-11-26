@@ -1,6 +1,6 @@
 # Reporte de seguridad y checklist de publicación — RapiTaxi
 
-**Fecha:** 21 de noviembre de 2026
+**Fecha:** 26 de noviembre de 2026
 **Apps:** RapiTaxi Chofer (`com.taxirapid.taxi_driver`) y RapiTaxi Pasajero
 (`com.taxirapid.taxi_client`)
 **Backend de producción:** https://rapitaxi-api-fws6.onrender.com
@@ -96,7 +96,7 @@ se envía al backend y al pasajero sigue siendo la real filtrada: el anclaje es
 visual, no falsifica la posición. La petición está limitada a una cada 5 s y se
 cachea 60 s; si el GPS rebota más de 50 m, se descarta la respuesta antigua.
 Pruebas: `test/calle_cercana_test.dart` y la suite completa de `flutter test`
-(194/194).
+(199/199).
 
 ### 3.4 Widgets flotantes de estado (chofer)
 
@@ -107,10 +107,10 @@ ni el notch:
   con `CustomPainter` que representa lo que queda de la última recarga
   (persistida en `SharedPreferences`), monto en CUP y botón de refrescar. Solo
   se muestra si el chofer no tiene viaje activo.
-- **Red**: a media altura y pegado al borde derecho, en formato compacto para
-  no tapar el marcador del vehículo. «Sin señal» es oscuro, parpadea y ofrece
-  REINTENTAR; «señal débil» es amarillo y parpadea más suave. Con señal buena
-  desaparece. Los dos estados son excluyentes.
+- **Red**: a media altura y pegado al borde izquierdo, en formato compacto para
+  no tapar el marcador del vehículo. «Sin señal» es oscuro y ofrece REINTENTAR;
+  «señal débil» es amarillo. Ambos parpadean con un tramo de 2 s (ciclo completo
+  de 4 s). Con señal buena desaparece. Los dos estados son excluyentes.
 
 La conectividad se comprueba contra `/health` (no solo contra la interfaz de
 red) con intervalos adaptativos de 15 s con red buena y 5 s con problemas, y se
@@ -118,7 +118,7 @@ pausa en segundo plano. No se añadió `connectivity_plus`: la sonda HTTP mide l
 que de verdad importa (que el backend responda).
 
 Pruebas: `test/estado_flotante_test.dart` (13) y la suite completa de
-`flutter test` (194/194).
+`flutter test` (199/199).
 
 ## 4. Hallazgos
 
@@ -222,7 +222,7 @@ Comandos usados (la clave se pasa solo en la línea de comandos):
 # Chofer
 flutter build appbundle --release --no-pub --obfuscate `
   --split-debug-info=build/app/outputs/symbols `
-  --build-name 1.0.46 --build-number 6054 `
+  --build-name 1.0.46 --build-number 6056 `
   --dart-define=MAPTILER_API_KEY=<CLAVE> `
   --dart-define=PLAY_STORE_BUILD=true
 
@@ -234,25 +234,26 @@ flutter build appbundle --release --no-pub --obfuscate `
   --dart-define=PLAY_STORE_BUILD=true
 ```
 
-### 6.1 Por qué el AAB usa `6054` y `6046`
+### 6.1 Por qué el AAB usa `6056` y `6046`
 
 Los APK que se reparten desde Render se compilan con `--split-per-abi`, y
 Flutter suma un desplazamiento al `versionCode` según la ABI: `armeabi-v7a`
 queda en `5xxx` y `arm64-v8a` en `6xxx`. Los APK instalados hoy son:
 
-- Chofer: `1.0.46`, `versionCode 6054` (arm64, compilada sin
+- Chofer: `1.0.46`, `versionCode 6055` (arm64, compilada sin
   `--split-per-abi`). Es la APK de prueba instalada en el móvil; `/app/version`
   responde `tipo_actualizacion: "none"` porque coincide con esta versión.
 - Pasajero: `1.0.40`, `versionCode 6043` (arm64).
 
 El AAB de Play es universal y **no** lleva ese desplazamiento. Para que Google
-lo acepte sin obligar a desinstalar, se compila con `6054` y `6046`, por encima
+lo acepte sin obligar a desinstalar, se compila con `6056` y `6046`, por encima
 del último AAB subido a Play (`6053` en el chofer, `6045` en el pasajero). El
-chofer pasó de `6053` a `6054` porque este AAB añade los widgets flotantes de
-saldo y estado de red y reduce el tamaño de la tarjeta de saldo. Nota: la APK de
-prueba instalada en el móvil también reporta `6054`; quien la tenga instalada
-fuera de Play tendrá que desinstalarla antes de instalar el AAB desde Prueba
-interna, porque Play no propone una actualización entre versionCodes iguales.
+chofer pasó de `6053` a `6056` porque este AAB añade los widgets flotantes de
+saldo y estado de red, el suavizado visual del marcador, el parpadeo más lento
+del aviso de red y la corrección del falso aviso «viaje ya no está activo». La
+APK de prueba del móvil reporta `6055`, así que Prueba interna sí puede
+actualizarla a `6056`; quien tenga una instalación side-loaded anterior
+(`6054` o menos) también recibirá la actualización.
 
 El pasajero ya tenía publicado el `versionCode 6045`. Play rechazó volver a
 subirlo con dos mensajes: *«no permite que ningún usuario existente actualice
@@ -267,12 +268,12 @@ publicado y que el bundle no puede ser el mismo. Por eso se recompiló el AAB co
 
 | App | Archivo de entrega | `versionName` | `versionCode` | Peso | Firma release (SHA-256 del certificado) |
 |---|---|---|---|---|---|
-| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.46_vc6054.aab` | 1.0.46 | **6054** | 57,2 MiB (59.961.556 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
+| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.46_vc6056.aab` | 1.0.46 | **6056** | 57,2 MiB (59.964.261 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
 | Pasajero | `dist_play/RapiTaxi_Pasajero/RapiTaxi_Pasajero_1.0.42_vc6046.aab` | 1.0.42 | **6046** | 57,2 MiB (60.009.422 B) | `E2:B9:CC:51:D6:A8:4F:AB:69:74:6A:47:8F:68:4E:B2:E2:FD:AD:41:78:36:39:5D:E8:19:8B:48:1D:D3:63:BF` |
 
 Hashes de los archivos (para verificar la subida):
 
-- Chofer: `ADD1DE515265E53B7045ABF7A85F2BE22D83289746B5EC6F797547FEF29E83A0`
+- Chofer: `38ED0EA3BEF0B10DC88E6C8256A87C682BA4064964ED87B763FDECBED475267D`
 - Pasajero: `4B2D2091C40DCCDFA6B828BDC06E366DC0CA33E44F1DBFF6A4C2635F3D74060A`
 
 Nota sobre el nombre: la marca es **RapiTaxi**, pero el `applicationId` histórico
@@ -317,13 +318,28 @@ inventar una posición falsa.
 Además, el mapa muestra dos widgets flotantes que respetan el *safe area*: el
 saldo disponible arriba-centro, con un arco semicircular que representa el
 porcentaje de la última recarga y un botón de refresco; y el estado de la red a
-media altura a la derecha. Con buena señal el aviso desaparece; con señal débil
-aparece un cartel amarillo con parpadeo suave; sin señal, un cartel oscuro con
-parpadeo intenso y un botón «REINTENTAR». El saldo se oculta mientras hay un
-viaje activo. La comprobación de red usa una sonda `/health` del backend con
-intervalos de 15 s con señal y 5 s sin ella, y se pausa en segundo plano, sin
-añadir `connectivity_plus`. La tarjeta de saldo se redujo de 204 a 128 px de
-ancho y usa `FittedBox` para que un saldo largo siga en una sola línea.
+media altura a la izquierda. Con buena señal el aviso desaparece; con señal débil
+aparece un cartel amarillo; sin señal, un cartel oscuro con un botón
+«REINTENTAR». Ambos estados parpadean con un tramo de 2 s y su reverso, es decir,
+un ciclo completo de 4 s. El saldo se oculta mientras hay un viaje activo. La
+comprobación de red usa una sonda `/health` del backend con intervalos de 15 s
+con señal y 5 s sin ella, y se pausa en segundo plano, sin añadir
+`connectivity_plus`. La tarjeta de saldo se redujo de 204 a 128 px de ancho y usa
+`FittedBox` para que un saldo largo siga en una sola línea.
+
+El marcador del chofer se suaviza solo en pantalla con un único `Ticker`
+(constante de tiempo de 0,30 s). Un salto mayor de 120 m se recoloca sin
+interpolar, y el anclaje a la calle se recalcula desde la posición filtrada, no
+desde un punto absoluto. La coordenada que se publica al backend sigue siendo la
+real filtrada: el suavizado nunca falsifica la posición.
+
+También se corrigió el falso aviso «El viaje ya no está activo». El servicio en
+segundo plano guarda el id de la asignación para recuperarla al volver al frente;
+si ese viaje había cerrado mientras la app estaba minimizada, la recuperación
+mostraba el aviso aunque no hubiera ninguna solicitud nueva. Ahora esa
+recuperación silenciosa limpia el marcador sin avisar. Los avisos sí se mantienen
+cuando el chofer toca una notificación o llega un evento de asignación real.
+Pruebas: `test/asignacion_inactiva_test.dart` (2).
 
 ## 7. Data safety (formulario de Play Console)
 

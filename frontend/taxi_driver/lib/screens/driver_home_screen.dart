@@ -69,6 +69,14 @@ class DriverHomeScreen extends StatefulWidget {
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
+/// Un aviso de «viaje ya no está activo» solo tiene sentido cuando el chofer
+/// tocó una notificación o llegó un evento nuevo. Las asignaciones que la app
+/// recupera sola de `SharedPreferences` pueden quedar de un viaje que cerró
+/// mientras estaba en segundo plano: avisar ahí hace creer que existe una
+/// solicitud que nunca se hizo.
+bool debeAvisarViajeInactivo({required bool asignacionRecuperada}) =>
+    !asignacionRecuperada;
+
 /// Desenlace de una oferta que dejo de venir en el sondeo del chofer.
 ///
 /// El sondeo solo dice "ya no esta". Antes de acusar a nadie se consulta el
@@ -626,9 +634,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final ctl = _controlador;
     if (ctl == null || !_nav.tieneFix) return;
 
-    // La cámara sigue el punto anclado a la calle, no el fix crudo: si el GPS
-    // rebota contra un edificio el mapa no debe girar hacia la manzana.
-    final pos = _nav.posicionAnclada;
+    // La cámara sigue el punto ANCLADO Y SUAVIZADO, no el fix crudo: si el GPS
+    // rebota contra un edificio el mapa no debe girar hacia la manzana, y si el
+    // anclaje cambia el coche no debe dar un salto delante del conductor.
+    final pos = _nav.posicionVisual;
     final velocidad = _nav.velocidadMps * 3.6;
 
     final rumbo = _rumboLibre.actualizar(
@@ -1036,6 +1045,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   Future<void> _abrirViajeAsignado(
     Map<String, dynamic>? datos, {
     String? tripId,
+    bool asignacionRecuperada = false,
   }) async {
     final id = (tripId ?? datos?['trip_id'] ?? '').toString();
     if (!mounted || id.isEmpty) return;
@@ -1065,7 +1075,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       if (!estadosViajeVivos.contains(viaje.status)) {
         await _limpiarMarcadorViaje();
         await OfertasBackgroundService.limpiarViajeAsignado();
-        _mostrarAviso('Ese viaje ya no está activo');
+        if (debeAvisarViajeInactivo(
+          asignacionRecuperada: asignacionRecuperada,
+        )) {
+          _mostrarAviso('Ese viaje ya no está activo');
+        }
         return;
       }
       // El evento llega sin que el chofer toque nada: tambien se vuelve al
@@ -1141,7 +1155,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     final id = await OfertasBackgroundService.leerViajeAsignado();
     if (id == null || id.isEmpty || !mounted) return;
     await OfertasBackgroundService.limpiarViajeAsignado();
-    await _abrirViajeAsignado(null, tripId: id);
+    // Si el viaje ya cerró mientras la app estaba en segundo plano, no hay
+    // nada que contar: el chofer no tocó ninguna notificación ni pidió viaje.
+    await _abrirViajeAsignado(
+      null,
+      tripId: id,
+      asignacionRecuperada: true,
+    );
   }
 
   /// La oferta se agoto sin respuesta. Se cierra la tarjeta y se vuelve al
@@ -3238,14 +3258,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 zoom: libre
                     ? _zoomLibre
                     : (_nav.zoomActual ?? ApiConfig.defaultZoom),
-                // Con viaje y ruta, la posicion filtrada y encajada del
-                // servicio. Sin ruta (incluido el chofer libre), la posicion
-                // anclada a la calle mas cercana de Supabase: ni el ruido del
-                // GPS ni un rebote en un edificio mueven el coche.
-                posicionVehiculo: _nav.hayViajeActivo &&
-                        _rutaParaMatching.isNotEmpty
-                    ? _nav.posicion
-                    : (_nav.tieneFix ? _nav.posicionAnclada : _driverPos),
+                // Una sola posición dibujada para todos los casos: la del
+                // servicio, ya encajada sobre la calle/ruta y suavizada por
+                // frame. Antes con viaje se pintaba el objetivo sin suavizar y
+                // sin viaje el punto del último anclaje, que se congelaba y
+                // saltaba cada vez que llegaba una respuesta de Supabase.
+                // Lo que se publica al backend y al pasajero sigue siendo la
+                // posición REAL filtrada, no esta.
+                posicionVehiculo: _nav.tieneFix
+                    ? _nav.posicionVisual
+                    : _driverPos,
                 rumboVehiculo: libreActiva
                     ? (_bearingLibre ?? _rumboParaFlecha())
                     : _rumboParaFlecha(),

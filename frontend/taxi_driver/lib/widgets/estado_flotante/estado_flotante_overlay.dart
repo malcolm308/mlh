@@ -13,9 +13,9 @@ import 'widget_saldo.dart';
 /// Reparto pensado para no tapar al conductor:
 ///  * **saldo**: arriba y centrado, por debajo de la barra de estado y entre el
 ///    menú y la campana/GPS, que viven en las esquinas;
-///  * **red**: a media altura, pegado al borde derecho y en formato compacto.
-///    El marcador del vehículo se dibuja en el centro del mapa, así que este
-///    aviso queda a su derecha sin cubrirlo.
+///  * **red**: a media altura, pegado al borde IZQUIERDO y en formato compacto.
+///    Así queda en la zona media izquierda, lejos de los botones de la esquina
+///    derecha y sin cubrir el marcador, que se dibuja en el centro del mapa.
 ///
 /// La visibilidad de cada tarjeta la decide [EstadoFlotanteController] por
 /// separado:
@@ -71,9 +71,9 @@ class EstadoFlotanteOverlay extends StatelessWidget {
                 Positioned(
                   top: 0,
                   bottom: 0,
-                  right: 10,
+                  left: 10,
                   child: Align(
-                    alignment: Alignment.centerRight,
+                    alignment: Alignment.centerLeft,
                     child: WidgetRed(
                       estado: controller.red,
                       onReintentar: onReintentarRed,

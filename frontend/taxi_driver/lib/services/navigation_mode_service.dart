@@ -45,6 +45,12 @@ class NavigationModeService {
   NavigationModeService({required TickerProvider vsync})
     : _ticker = vsync.createTicker(_callbackTic);
 
+  /// Un único [Ticker] para camara y marcador.
+  ///
+  /// Al principio el suavizado del marcador tenia su propio ticker, pero un
+  /// `SingleTickerProviderStateMixin` solo permite crear uno. ComparTir este es
+  /// ademas mas barato: un solo bucle de frames mueve las dos cosas.
+
   /// Adaptador para el [Ticker].
   ///
   /// Hace falta porque en un inicializador de campo no se puede referenciar
@@ -92,6 +98,10 @@ class NavigationModeService {
   /// se toca nunca.
   LatLng? _posicionAnclada;
 
+  /// Último encaje calculado sobre la calle libre. Se reutiliza en
+  /// `_recalcularObjetivo` para no llamar al map-matching dos veces por fix.
+  PuntoRuta? _ajusteAnclaje;
+
   /// Filtro de la posición real. Se aplica ANTES del map-matching: el encaje
   /// corrige la calle, no el ruido del sensor. Antes se encajaba el fix crudo y
   /// el marcador heredaba cada rebote del GPS.
@@ -121,6 +131,23 @@ class NavigationModeService {
 
   /// A partir de aqui se considera que la senal GPS esta debil.
   static const double _avisoGpsDebilSegundos = 1.5;
+
+  /// Constante de tiempo del suavizado del MARCADOR, en segundos.
+  ///
+  /// El objetivo cambia a 1 Hz con el GPS (y cuando llega el anclaje de la calle,
+  /// que puede tardar varios segundos). Con 0,30 s el punto recorre el 96 % del
+  /// camino antes del siguiente fix y ningun cambio se ve como un salto. Es el
+  /// mismo orden de magnitud que el suavizado de la camara (~0,14 s), asi que el
+  /// coche no se queda descolgado del centro del mapa.
+  static const double _suavizadoMarcadorSegundos = 0.30;
+
+  /// Distancia a partir de la cual se recoloca el marcador sin interpolar.
+  ///
+  /// Solo para discontinuidades de verdad (arranque de la app, cambio de
+  /// ciudad): un rebote de 40 m del GPS ya lo filtra [FiltroGps] o el
+  /// map-matching, asi que no llega hasta aqui. Si se interpolara un salto de
+  /// kilometros, el coche cruzaria el mapa en linea recta durante medio segundo.
+  static const double _saltoMarcadorMaximoMetros = 120.0;
 
   /// Se apaga en pruebas para que un fix sintético no dispare HTTP real.
   @visibleForTesting
@@ -192,6 +219,13 @@ class NavigationModeService {
   /// tiene ruta. Ancla el vehículo a la calle; si el servicio aún no respondió,
   /// cae a la posición filtrada sin inventar nada.
   LatLng get posicionAnclada => _posicionAnclada ?? posicionFiltrada;
+
+  /// Posicion suavizada que debe pintar el mapa en TODOS los casos.
+  ///
+  /// Mientras no haya ningun fix se cae al punto sembrado por la pantalla, para
+  /// que el primer cuadro no muestre el centro fijo del configuracion.
+  LatLng get posicionVisual => _posicionVisual ??
+      (_hayViajeActivo ? _pos : posicionAnclada);
 
   /// Precision horizontal del ultimo fix, en metros.
   double? get precisionMetros => _precisionMetros;
@@ -278,6 +312,26 @@ class NavigationModeService {
   LatLng? _centroActual;
   double? _zoomActual;
   double? _rotacionActual;
+
+  /// Posicion que se DIBUJA: persigue al objetivo con suavizado por frame.
+  ///
+  /// El objetivo es `_pos` con viaje y ruta, y `posicionAnclada` sin ella. Antes
+  /// el mapa pintaba el objetivo directamente, asi que cada fix, cada respuesta
+  /// de `/geo/calle-cercana` y cada caducidad de la extrapolacion se veia como
+  /// un teletransporte. Este valor es solo visual: lo que se publica al backend
+  /// sigue siendo [posicionReal].
+  LatLng? _posicionVisual;
+
+  /// Reloj del último frame que interpoló el marcador.
+  ///
+  /// El [Ticker] acumula su `elapsed` entre arranques y paradas, así que usarlo
+  /// directamente como `dt` daría un primer salto grande cada vez que el coche
+  /// lleva un rato parado. Se guarda el valor al arrancar y se mide el delta.
+  int _ultimoTicVisualMicros = 0;
+
+  /// Puesto al arrancar el ticker: el primer frame solo toma la referencia de
+  /// tiempo, para no aplicar como `dt` todo el rato que el ticker estuvo parado.
+  bool _reiniciarDeltaVisual = true;
 
   // Histeresis
   int? _quietoDesdeMs;
@@ -643,14 +697,44 @@ class NavigationModeService {
       _mapMatchingCalle.actualizarRuta(anclaje.geom);
       _geomAnclaje = List<LatLng>.unmodifiable(anclaje.geom);
     }
-    final real = _posicionFiltrada;
-    // Un anclaje calculado hace 10 s ya no describe dónde está el coche.
-    _posicionAnclada = real != null &&
-            LocationService.distanceBetween(real, anclaje.punto) <= 80.0
-        ? anclaje.punto
-        : real;
+    // NO se toma `anclaje.punto` como posición absoluta. Antes el marcador se
+    // congelaba en ese punto hasta que llegaba la respuesta siguiente (5 s o
+    // más) y entonces daba un salto. Ahora se proyecta la posición filtrada
+    // actual sobre la geometría de la calle, así el coche sigue avanzando por
+    // la vía entre respuestas.
+    _posicionAnclada = _calcularPosicionAnclada();
     _fixAjustado = null;
+    // Una respuesta nueva de Supabase puede mover el objetivo aunque no llegue
+    // ningún fix: se reanima el marcador también en ese caso.
+    if (_posicionAnclada != null) _iniciarTicker();
     notificar();
+  }
+
+  /// Punto de la calle que debe dibujarse cuando no hay ruta de viaje.
+  ///
+  /// Usa el map-matching de la geometría corta que devuelve Supabase, no el
+  /// punto del backend a secas: el marcador avanza por la vía con cada fix y un
+  /// rebote contra un edificio no lo mete en la manzana. El punto publicado al
+  /// backend no se toca nunca.
+  LatLng? _calcularPosicionAnclada() {
+    final real = _posicionFiltrada;
+    final anclaje = _anclajeCalle;
+    _ajusteAnclaje = null;
+    if (real == null ||
+        anclaje == null ||
+        LocationService.distanceBetween(real, anclaje.punto) > 80.0) {
+      return real;
+    }
+    final ajuste = _mapMatchingCalle.ajustar(
+      real,
+      rumbo: _rumboGps.rumbo ?? _rumbo,
+      precisionMetros: _precisionMetros,
+      velocidadKmh: _velocidadKmh,
+    );
+    _ajusteAnclaje = ajuste;
+    return ajuste.enRuta
+        ? ajuste.posicion
+        : (_mapMatchingCalle.ultimoAjuste ?? real);
   }
 
   bool _mismaGeom(List<LatLng> a, List<LatLng> b) {
@@ -731,11 +815,14 @@ class NavigationModeService {
     // malla de Supabase y se dibuja sobre ella, nunca sobre los edificios.
     if (!_hayViajeActivo || !_mapMatching.tieneRuta) {
       final real = _posicionFiltrada!;
-      final anclaje = _anclajeCalle;
-      _posicionAnclada = anclaje != null &&
-              LocationService.distanceBetween(real, anclaje.punto) <= 80.0
-          ? anclaje.punto
-          : real;
+      _posicionAnclada = _calcularPosicionAnclada();
+      // El encaje de este fix se reutiliza abajo en `_recalcularObjetivo`: dos
+      // pasadas por muestra adelantarían la histeresis de cambio de calle.
+      final ajusteAnclaje = _ajusteAnclaje;
+      if (ajusteAnclaje != null) {
+        _ajusteActual = ajusteAnclaje;
+        _fixAjustado = fix;
+      }
       if (ApiConfig.inMapArea(real)) _pedirAnclajeCalle(real);
     } else {
       _posicionAnclada = null;
@@ -768,6 +855,10 @@ class NavigationModeService {
     // nunca avanzaba entre fixes.
     _ultimoFixRelojServicioMs = _ahoraMs;
     _gpsDebil = false;
+
+    // El marcador se interpola por frame TAMBIÉN sin viaje: se arranca el mismo
+    // ticker que mueve la cámara, que en modo libre se detenía solo.
+    _iniciarTicker();
 
     if (_modo == ModoNavegacion.siguiendo) {
       _recalcularObjetivo();
@@ -1104,13 +1195,68 @@ class NavigationModeService {
   // ---------------- bucle de render ----------------
 
   void _iniciarTicker() {
-    if (!_ticker.isActive) _ticker.start();
+    if (!_ticker.isActive) {
+      _reiniciarDeltaVisual = true;
+      _ticker.start();
+    }
   }
 
-  /// Un tic del bucle de animacion de la camara.
+  /// Un frame del suavizado del marcador.
+  ///
+  /// El objetivo salta a 1 Hz con el GPS y cada varios segundos con el anclaje
+  /// de la calle; aquí se recorre ese camino en ~0,3 s con exponencial por
+  /// tiempo, así que el salto no se ve. Si la distancia es enorme se recoloca
+  /// sin interpolar: eso es un reinicio de la app, no un movimiento del coche.
+  ///
+  /// Devuelve `true` mientras quede camino por recorrer, para que [_alTic]
+  /// sepa si debe seguir pidiendo frames cuando no hay viaje (la cámara libre
+  /// no necesita animación).
+  bool _alTicVisual(Duration elapsed) {
+    if (_reiniciarDeltaVisual) {
+      _ultimoTicVisualMicros = elapsed.inMicroseconds;
+      _reiniciarDeltaVisual = false;
+    }
+    final objetivo = _hayViajeActivo && _mapMatching.tieneRuta
+        ? _pos
+        : posicionAnclada;
+    final actual = _posicionVisual;
+    if (actual == null ||
+        LocationService.distanceBetween(actual, objetivo) >
+            _saltoMarcadorMaximoMetros) {
+      final cambia = actual == null ||
+          LocationService.distanceBetween(actual, objetivo) > 1e-4;
+      _posicionVisual = objetivo;
+      if (cambia) notificar();
+      return false;
+    }
+
+    final distancia = LocationService.distanceBetween(actual, objetivo);
+    if (distancia < 0.02) {
+      // Ya está encima: se iguala y no se notifica para no repintar parado.
+      _posicionVisual = objetivo;
+      return false;
+    }
+
+    final micros = elapsed.inMicroseconds;
+    final dt = ((micros - _ultimoTicVisualMicros) / 1e6).clamp(0.0, 0.1);
+    _ultimoTicVisualMicros = micros;
+    final k = 1 - math.exp(-dt / _suavizadoMarcadorSegundos);
+    _posicionVisual = LatLng(
+      actual.latitude + (objetivo.latitude - actual.latitude) * k,
+      actual.longitude + (objetivo.longitude - actual.longitude) * k,
+    );
+    notificar();
+    return true;
+  }
+
+  /// Un tic del bucle de animacion. Mueve el marcador siempre y la camara solo
+  /// cuando el chofer no ha cogido el mapa con la mano.
   void _alTic(Duration elapsed) {
+    final suavizadoPendiente = _alTicVisual(elapsed);
     if (_modo != ModoNavegacion.siguiendo) {
-      _ticker.stop();
+      // Sin viaje no hay camara que animar; se cortan los frames en cuanto el
+      // marcador alcanza al objetivo para no gastar bateria parado.
+      if (!suavizadoPendiente) _ticker.stop();
       return;
     }
     _contadorTics++;

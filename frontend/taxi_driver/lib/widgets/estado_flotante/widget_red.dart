@@ -11,10 +11,11 @@ import '../../theme/app_theme.dart';
 ///  * [EstadoRed.buena]: el widget desaparece por completo.
 ///
 /// Los dos estados con problema parpadean para que el chofer los note de reojo
-/// sin dejar de mirar el mapa. El de señal débil lo hace más despacio y con
-/// menos contraste: avisa sin resultar molesto. La animación se detiene en
-/// [didUpdateWidget] cuando el estado pasa a bueno, así no consume frames de
-/// más.
+/// sin dejar de mirar el mapa, pero despacio: cada tramo de subida o bajada
+/// dura [_periodoParpadeo] (2 s), así que el pulso completo son 4 s. El de señal
+/// débil además baja menos la opacidad: avisa sin resultar molesto. La
+/// animación se detiene en [didUpdateWidget] cuando el estado pasa a bueno, así
+/// no consume frames de más.
 class WidgetRed extends StatefulWidget {
   const WidgetRed({
     super.key,
@@ -33,9 +34,13 @@ class WidgetRed extends StatefulWidget {
 
 class _WidgetRedState extends State<WidgetRed>
     with SingleTickerProviderStateMixin {
+  /// Duración de cada tramo del parpadeo. Con `repeat(reverse: true)` el ciclo
+  /// completo (mínimo → máximo → mínimo) dura el doble.
+  static const Duration _periodoParpadeo = Duration(seconds: 2);
+
   late final AnimationController _parpadeo = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 850),
+    duration: _periodoParpadeo,
   );
 
   /// Opacidad mínima del parpadeo. Sin señal baja más (aviso urgente); señal
@@ -63,9 +68,7 @@ class _WidgetRedState extends State<WidgetRed>
     }
     _parpadeo
       ..stop()
-      ..duration = Duration(
-        milliseconds: widget.estado == EstadoRed.sinSenal ? 850 : 1500,
-      )
+      ..duration = _periodoParpadeo
       ..value = 0
       ..repeat(reverse: true);
   }
@@ -112,7 +115,7 @@ class _Banner extends StatelessWidget {
         sinSenal ? const Color(0xFFBFC3CA) : const Color(0xB31C1E21);
 
     return Container(
-      // Tarjeta compacta: vive en el borde derecho, a media altura, sin
+      // Tarjeta compacta: vive en el borde izquierdo, a media altura, sin
       // invadir el centro del mapa ni el marcador del vehiculo.
       width: 164,
       padding: const EdgeInsets.all(11),

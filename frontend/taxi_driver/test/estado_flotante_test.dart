@@ -173,6 +173,15 @@ void main() {
       expect(find.text('REINTENTAR'), findsNothing);
       expect(find.byType(Opacity), findsOneWidget);
 
+      // Parpadeo lento: cada tramo dura 2 s (4 s el pulso completo).
+      final animacion = tester.widget<AnimatedBuilder>(
+        find.ancestor(
+          of: find.text('SEÑAL DÉBIL'),
+          matching: find.byType(AnimatedBuilder),
+        ).first,
+      ).animation as AnimationController;
+      expect(animacion.duration, const Duration(seconds: 2));
+
       await tester.pump(const Duration(milliseconds: 750));
       expect(find.text('SEÑAL DÉBIL'), findsOneWidget);
 
@@ -211,6 +220,20 @@ void main() {
 
       expect(find.text('SALDO DISPONIBLE'), findsOneWidget);
       expect(find.text('SEÑAL DÉBIL'), findsOneWidget);
+
+      // El aviso vive en la mitad izquierda, a media altura.
+      final posicion = tester.widget<Positioned>(
+        find.ancestor(
+          of: find.text('SEÑAL DÉBIL'),
+          matching: find.byType(Positioned),
+        ).first,
+      );
+      expect(posicion.left, 10);
+      expect(posicion.right, isNull);
+      final centro = tester.getCenter(find.text('SEÑAL DÉBIL'));
+      expect(centro.dx, lessThan(180));
+      expect(centro.dy, greaterThan(240));
+      expect(centro.dy, lessThan(480));
 
       await tester.tap(find.byTooltip('Refrescar saldo'));
       expect(refrescos, 1);
