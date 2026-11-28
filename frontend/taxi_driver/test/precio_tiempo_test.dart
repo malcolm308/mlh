@@ -54,4 +54,51 @@ void main() {
     // El telefono cree que son las 13:00, pero el servidor dice 12:01.
     expect(viaje.tiempoEnViajeSegs(DateTime.utc(2026, 1, 1, 12, 1)), 60);
   });
+
+  TripOffer esperandoCon({int? esperaSegundos, String status = 'driver_arrived'}) {
+    return TripOffer.fromJson({
+      'trip_id': 't2',
+      'status': status,
+      'hora_llegada': '2026-01-01T12:00:00',
+      'hora_inicio_viaje': '2026-01-01T12:06:00',
+      'espera_segundos': ?esperaSegundos,
+      'tiempo_espera_cortesia_minutos': 4,
+    });
+  }
+
+  test('la cortesia baja segundo a segundo con el reloj del servidor', () {
+    final viaje = esperandoCon(esperaSegundos: 0);
+    final ahora = DateTime.utc(2026, 1, 1, 12, 1, 30);
+
+    expect(viaje.esperaVivaSegs(ahora), 90);
+    // 4 min de cortesia - 90 s esperados = 150 s gratis.
+    expect(viaje.cortesiaRestanteSegs(ahora), 150);
+    expect(viaje.excedenteVivo(ahora), 0);
+  });
+
+  test('un espera vieja del backend no clava el contador', () {
+    final viaje = esperandoCon(esperaSegundos: 15);
+    final ahora = DateTime.utc(2026, 1, 1, 12, 2);
+
+    expect(viaje.esperaVivaSegs(ahora), 120);
+    expect(viaje.cortesiaRestanteSegs(ahora), 120);
+  });
+
+  test('agotada la cortesia el excedente tambien corre en vivo', () {
+    final viaje = esperandoCon(esperaSegundos: 0);
+    final ahora = DateTime.utc(2026, 1, 1, 12, 5);
+
+    expect(viaje.esperaVivaSegs(ahora), 300);
+    expect(viaje.cortesiaRestanteSegs(ahora), 0);
+    expect(viaje.excedenteVivo(ahora), 60);
+  });
+
+  test('con el viaje iniciado la espera se queda en lo que ocurrio antes', () {
+    final viaje = esperandoCon(
+        esperaSegundos: 360, status: 'in_progress');
+    final muchoDespues = DateTime.utc(2026, 1, 1, 12, 20);
+
+    expect(viaje.esperaVivaSegs(muchoDespues), 360);
+    expect(viaje.excedenteVivo(muchoDespues), 120);
+  });
 }

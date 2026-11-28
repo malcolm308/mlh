@@ -494,11 +494,19 @@ this.currency = 'CUP',
   /// `hora_llegada`. El reloj que se pasa es el del servidor (`ahoraUtc`), no
   /// el del teléfono.
   int esperaVivaSegs(DateTime ahoraUtc) {
-    if (esperaSegs != null && esperaSegs! > 0) return esperaSegs!;
     final llegada = horaLlegadaUtc;
     if (llegada == null) return esperaSegs ?? 0;
-    final segundos = ahoraUtc.difference(llegada).inSeconds;
-    return segundos > 0 ? segundos : 0;
+
+    // `esperaSegs` es una foto del ultimo sondeo: si se devuelve tal cual, el
+    // contador se queda clavado en ese valor y la cortesia "no corre". Mientras
+    // el pasajero no sube, se calcula cada segundo desde `hora_llegada` con el
+    // reloj del servidor. Cuando el viaje ya empezo, el fin es `hora_inicio`:
+    // ahi la espera es la que ocurrio antes de subir y no debe seguir subiendo.
+    final fin = status == 'driver_arrived'
+        ? ahoraUtc
+        : (horaInicioUtc ?? ahoraUtc);
+    final segundos = fin.difference(llegada).inSeconds;
+    return segundos > 0 ? segundos : (esperaSegs ?? 0);
   }
 
   /// Segundos de cortesía que quedan. Cero cuando ya se agotó.
@@ -510,6 +518,12 @@ this.currency = 'CUP',
   /// Excedente que se está cobrando ya, calculado en vivo con la misma regla
   /// que aplica el backend al cerrar el viaje.
   int excedenteVivo(DateTime ahoraUtc) {
+    // Igual que la espera: mientras se espera al pasajero, el excedente se
+    // recalcula con el reloj en vez de quedarse con el valor del ultimo sondeo.
+    if (status == 'driver_arrived') {
+      final excesoVivo = esperaVivaSegs(ahoraUtc) - cortesiaTotalSegs;
+      return excesoVivo > 0 ? excesoVivo : 0;
+    }
     if (excedenteEsperaSegs != null) return excedenteEsperaSegs!;
     final exceso = esperaVivaSegs(ahoraUtc) - cortesiaTotalSegs;
     return exceso > 0 ? exceso : 0;
