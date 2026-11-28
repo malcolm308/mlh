@@ -63,6 +63,9 @@ class NavigationMapView extends StatefulWidget {
   /// servicio.
   final LatLng? posicionVehiculo;
 
+  /// Oculta el chevron nativo cuando la pantalla dibuja su propio marcador.
+  final bool mostrarVehiculo;
+
   /// Rumbo del vehiculo en GRADOS, para orientar la flecha.
   ///
   /// Lo consume icon-rotate. Va como propiedad del Feature y no como
@@ -90,6 +93,7 @@ class NavigationMapView extends StatefulWidget {
     this.camaraLibre = false,
     this.ruta = const [],
     this.posicionVehiculo,
+    this.mostrarVehiculo = true,
     this.rumboVehiculo,
     this.onListo,
     this.onControlador,
@@ -348,7 +352,14 @@ class _NavigationMapViewState extends State<NavigationMapView> {
   /// Zoom con el que se construyeron los vertices de la flecha por ultima vez.
   double? _zoomEnviado;
 
-  /// Alto de la flecha en metros, ya con el aumento del 20 % pedido.
+  /// Ultimo valor de `mostrarVehiculo` enviado al estilo.
+  ///
+  /// Sin este dato, ocultar el chevron nativo no reenvia nada: la posicion
+  /// sigue siendo la misma y el guardia de `_aplicarVehiculo` daba por hecho
+  /// que no habia cambios, dejando el marcador dibujado.
+  bool? _vehiculoVisible;
+
+  /// Alto de la flecha en metros, ya con el aumento del 30 % pedido.
   ///
   /// Se calcula en pixeles de pantalla y se traduce a metros con los metros por
   /// pixel del zoom. El coseno de la latitud corrige el estiramiento este-oeste
@@ -626,9 +637,11 @@ class _NavigationMapViewState extends State<NavigationMapView> {
       // Disco blanco de fondo: se añade PRIMERO porque todas las capas se
       // insertan justo debajo de `debajo`; el ultimo queda arriba. Asi el orden
       // final es fondo -> borde -> chevron azul.
+      final posVisible =
+          widget.mostrarVehiculo ? widget.posicionVehiculo : null;
       await ctl.addGeoJsonSource(
         _idFondoVehiculo,
-        _discoFondoGeoJson(widget.posicionVehiculo, widget.zoom),
+        _discoFondoGeoJson(posVisible, widget.zoom),
       );
       await ctl.addFillLayer(
         _idFondoVehiculo,
@@ -640,7 +653,7 @@ class _NavigationMapViewState extends State<NavigationMapView> {
       await ctl.addGeoJsonSource(
         _idFlechaBorde,
         _flechaGeoJson(
-          widget.posicionVehiculo,
+          posVisible,
           widget.rumboVehiculo ?? 0.0,
           widget.zoom,
           escala: _escalaBorde,
@@ -656,7 +669,7 @@ class _NavigationMapViewState extends State<NavigationMapView> {
       await ctl.addGeoJsonSource(
         _idFlecha,
         _flechaGeoJson(
-          widget.posicionVehiculo,
+          posVisible,
           widget.rumboVehiculo ?? 0.0,
           widget.zoom,
         ),
@@ -708,7 +721,7 @@ class _NavigationMapViewState extends State<NavigationMapView> {
   void _aplicarVehiculo() {
     final ctl = _controlador;
     if (ctl == null) return;
-    final pos = widget.posicionVehiculo;
+    final pos = widget.mostrarVehiculo ? widget.posicionVehiculo : null;
     final rumbo = widget.rumboVehiculo ?? 0.0;
     final prev = _vehiculoEnviado;
     final prevRumbo = _rumboEnviado;
@@ -724,17 +737,19 @@ class _NavigationMapViewState extends State<NavigationMapView> {
     // del zoom viejo: medido en el movil, se quedaba con el tamano del zoom 14
     // y a 17 salia de 188 px de ancho en vez de unos 7, que es 26 veces mas.
     final sinCambios =
-        pos == null && prev == null ||
-        (pos != null &&
-            prev != null &&
-            (prev.latitude - pos.latitude).abs() < 1e-5 &&
-            (prev.longitude - pos.longitude).abs() < 1e-5 &&
-            (prevRumbo - rumbo).abs() < 1.0 &&
-            (_zoomEnviado == null ||
-                (_zoomEnviado! - widget.zoom).abs() < 0.01));
+        _vehiculoVisible == widget.mostrarVehiculo &&
+        (pos == null && prev == null ||
+            (pos != null &&
+                prev != null &&
+                (prev.latitude - pos.latitude).abs() < 1e-5 &&
+                (prev.longitude - pos.longitude).abs() < 1e-5 &&
+                (prevRumbo - rumbo).abs() < 1.0 &&
+                (_zoomEnviado == null ||
+                    (_zoomEnviado! - widget.zoom).abs() < 0.01)));
     if (sinCambios) return;
 
     _vehiculoEnviado = pos;
+    _vehiculoVisible = widget.mostrarVehiculo;
     _rumboEnviado = rumbo;
     _zoomEnviado = widget.zoom;
     // La flecha es geometria calculada en metros a partir del zoom, asi que
@@ -799,8 +814,8 @@ class _NavigationMapViewState extends State<NavigationMapView> {
   /// Altura base, en pixeles de pantalla, de la silueta de referencia.
   static const double _altoBasePx = 7.2;
 
-  /// Aumento del 20 % pedido para el chevron (`7.2 * 1.2 = 8.64` px).
-  static const double _escalaTamano = 1.2;
+  /// Aumento del 30 % pedido para el chevron (`7.2 * 1.3 = 9.36` px).
+  static const double _escalaTamano = 1.3;
 
   /// Radio del disco blanco de fondo respecto al alto del chevron.
   ///

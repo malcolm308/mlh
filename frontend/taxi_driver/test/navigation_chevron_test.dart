@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 import 'package:taxi_driver/widgets/navigation_map_view.dart';
 
-/// El chevron del chofer creció un 20 % y lleva un disco blanco de fondo que
+/// El chevron del chofer creció un 30 % y lleva un disco blanco de fondo que
 /// lo contiene. Se comprueba sobre la geometria real que se envia a MapLibre.
 const _pos = LatLng(23.14, -82.36);
 
@@ -36,8 +36,8 @@ double _alto(List<List<double>> anillo) {
 }
 
 void main() {
-  test('el tamaño del chevron es exactamente un 20 % mayor', () {
-    expect(NavigationMapView.escalaTamano, closeTo(1.2, 1e-9));
+  test('el tamaño del chevron es exactamente un 30 % mayor', () {
+    expect(NavigationMapView.escalaTamano, closeTo(1.3, 1e-9));
 
     for (final zoom in <double>[16, 17, 18, 19]) {
       final geo = NavigationMapView.flechaGeoJsonParaPrueba(_pos, 0, zoom);
@@ -47,7 +47,7 @@ void main() {
           math.cos(_pos.latitude * math.pi / 180.0) /
           math.pow(2.0, zoom);
       final altoAnterior = metrosPorPixel * 7.2;
-      expect(alto / altoAnterior, closeTo(1.2, 1e-3), reason: 'zoom $zoom');
+      expect(alto / altoAnterior, closeTo(1.3, 1e-3), reason: 'zoom $zoom');
     }
   });
 

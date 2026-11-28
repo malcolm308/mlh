@@ -14,7 +14,10 @@ import '../services/api_service.dart';
 import '../services/cancellation_service.dart';
 import '../services/conectividad_service.dart';
 import '../services/estado_flotante_controller.dart';
+import '../widgets/driver_map/driver_idle_layouts.dart';
+import '../widgets/driver_map/trip_request_layout.dart';
 import '../widgets/estado_flotante/estado_flotante_overlay.dart';
+import '../widgets/estado_flotante/widget_red.dart';
 import '../widgets/menu_lateral_chofer.dart';
 import '../services/address_service.dart';
 import '../services/nav_camera.dart';
@@ -3287,6 +3290,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 posicionVehiculo: _nav.tieneFix
                     ? _nav.posicionVisual
                     : _driverPos,
+                // En el estado activo sin viaje dibuja el radar de la nueva UI;
+                // el chevron nativo seguiria compitiendo en el mismo punto.
+                mostrarVehiculo: !(libre &&
+                    _lostOffer == null &&
+                    _selectedOffer == null &&
+                    _online),
                 rumboVehiculo: libreActiva
                     ? (_bearingLibre ?? _rumboParaFlecha())
                     : _rumboParaFlecha(),
@@ -3295,6 +3304,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 onControlador: (c) => _controlador = c,
               ),
             ),
+            // Tinte crema de los nuevos layouts. Es una capa hermana del mapa,
+            // no un filtro sobre la camara: no altera coordenadas ni el estilo
+            // de MapLibre y por eso la navegacion sigue calcada en la calle.
+            if (_activeTrip == null) const Positioned.fill(child: CreamMapTint()),
             // El asistente de ruta paso a paso (Fase 3): arriba y centrado,
             // con SafeArea. Aparece solo con viaje activo y pasos vigentes.
             if (_asistente.activo)
@@ -3337,99 +3350,153 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                   ),
                 ),
               ),
-            // Menu hamburguesa SOLO cuando el chofer no tiene viaje activo:
-            // during navegacion estorban la vista (mismo criterio que la
-            // campana a la derecha). El busque de GPS si queda: funcional.
-            if (_activeTrip == null)
-              Positioned(
-                top: MediaQuery.of(context).padding.top + 8,
-                left: 8,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(left: 16),
-                      child: Text(
-                        'CN',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1,
-                          shadows: [
-                            Shadow(color: Colors.black45, blurRadius: 4),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    _circularButton(
-                      Icons.menu,
-                      tooltip: 'Menú',
-                      onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                    ),
-                  ],
-                ),
-              ),
-            // Campana SOLO con el chofer libre; el GPS queda visible porque es
-            // funcional en el viaje. Aparecen si `_alPerderElViaje` borra
-            // `_activeTrip` y desaparecen en el `setState` al aceptar.
-            if (_activeTrip == null)
+            // Con viaje activo NO se toca nada: se conservan el GPS, el aviso
+            // de red y los paneles de recogida/navegacion tal como estaban.
+            if (_activeTrip != null)
               Positioned(
                 top: MediaQuery.of(context).padding.top + 24,
                 right: 8,
-                child: Column(
-                  children: [
-                    if (_activeTrip == null) ...[
-                      _circularButton(
-                        Icons.notifications_none,
-                        tooltip: 'Notificaciones',
-                        onTap: _showNotifications,
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    // GPS SIEMPRE visible: funcional (recetar) durante el viaje.
-                    // Si llevamos demasiado tiempo sin fix, el icono se pone
-                    // naranja: el punto se está estimando, no midiendo.
-                    _circularButton(
-                      _gpsState != LocationPermissionState.granted ||
-                              _nav.gpsDebil
-                          ? Icons.gps_off
-                          : Icons.gps_fixed,
-                      tooltip: _gpsState != LocationPermissionState.granted
-                          ? 'Activar GPS'
-                          : _nav.gpsDebil
-                              ? 'GPS débil: posición estimada'
-                              : 'Recentrar en mi posición',
-                      iconColor: _gpsState == LocationPermissionState.granted &&
-                              _nav.gpsDebil
-                          ? Colors.orange
-                          : null,
-                      onTap: _gpsState == LocationPermissionState.granted
-                          ? _followGpsAgain
-                          : _enableGps,
-                    ),
-                  ],
+                child: _circularButton(
+                  _gpsState != LocationPermissionState.granted || _nav.gpsDebil
+                      ? Icons.gps_off
+                      : Icons.gps_fixed,
+                  tooltip: _gpsState != LocationPermissionState.granted
+                      ? 'Activar GPS'
+                      : _nav.gpsDebil
+                          ? 'GPS débil: posición estimada'
+                          : 'Recentrar en mi posición',
+                  iconColor: _gpsState == LocationPermissionState.granted &&
+                          _nav.gpsDebil
+                      ? Colors.orange
+                      : null,
+                  onTap: _gpsState == LocationPermissionState.granted
+                      ? _followGpsAgain
+                      : _enableGps,
                 ),
               ),
-            // Widgets flotantes de estado: el saldo arriba y centrado (bajo la
-            // barra de estado) y el aviso de red a media altura pegado a la
-            // derecha, para no tapar el marcador del vehiculo. El saldo
-            // desaparece con viaje activo y el de red con señal buena.
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: EstadoFlotanteOverlay(
-                controller: _flotante,
-                onRefrescarSaldo: _refrescarSaldo,
-                onReintentarRed: _conectividad.reintentar,
+            if (_activeTrip != null)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: EstadoFlotanteOverlay(
+                  controller: _flotante,
+                  onRefrescarSaldo: _refrescarSaldo,
+                  onReintentarRed: _conectividad.reintentar,
+                ),
               ),
-            ),
-            if (_selectedOffer != null || _lostOffer != null)
+            if (_activeTrip != null) _buildPanelInferior(),
+
+            // Sin viaje entran los tres layouts nuevos. La barra superior
+            // comparte las mismas acciones de siempre: menu, saldo y campana.
+            if (_activeTrip == null && _lostOffer == null)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 8,
+                left: 16,
+                right: 16,
+                child: TopBar(
+                  saldo: _saldo,
+                  onMenu: () => _scaffoldKey.currentState?.openDrawer(),
+                  onNotifications: _showNotifications,
+                  onSaldoTap: () => unawaited(_refrescarSaldo()),
+                ),
+              ),
+            if (_activeTrip == null &&
+                _lostOffer == null &&
+                _selectedOffer == null)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _online
+                    ? ActiveOverlay(
+                        gananciasHoy: _todayEarnings,
+                        onDesactivar: _toggleOnline,
+                        onUbicacion: _gpsState == LocationPermissionState.granted
+                            ? _followGpsAgain
+                            : _enableGps,
+                        cargando: _busy || _loading,
+                      )
+                    : BottomSheetPaused(
+                        tipoVehiculo: _vehicleTypeLabel(
+                          _tipoVehiculoActivo ?? widget.profile.vehicleType,
+                        ),
+                        modeloVehiculo:
+                            _nombreVehiculoActivo ?? widget.profile.vehicleModel,
+                        gananciasHoy: _todayEarnings,
+                        onActivar: _toggleOnline,
+                        cargando: _busy || _loading,
+                      ),
+              ),
+            // En pausado el GPS sigue a mano, encima de la hoja.
+            if (_activeTrip == null &&
+                _lostOffer == null &&
+                _selectedOffer == null &&
+                !_online)
+              Positioned(
+                right: 16,
+                bottom: 200,
+                child: LocationFab(
+                  onTap: _gpsState == LocationPermissionState.granted
+                      ? _followGpsAgain
+                      : _enableGps,
+                ),
+              ),
+            if (_activeTrip == null &&
+                _lostOffer == null &&
+                _selectedOffer != null)
+              TripRequestOverlay(
+                onMenu: () => _scaffoldKey.currentState?.openDrawer(),
+                tipoVehiculo: _vehicleTypeLabel(
+                  _selectedOffer!.vehicleType,
+                ),
+                metodoPago: _selectedOffer!.paymentMethod.trim().isEmpty
+                    ? 'Efectivo'
+                    : _selectedOffer!.paymentMethod,
+                precio: _selectedOffer!.precioEstimado,
+                distanciaKm: _tripKm ?? _selectedOffer!.distanceKm,
+                pasajeros: _selectedOffer!.numPasajes,
+                tiempoMin: _tripMin,
+                recogidaKm:
+                    _toPickupKm ?? _selectedOffer!.distanciaChoferKm,
+                direccionRecogida:
+                    _selectedOffer!.requestAddress?.trim() ?? '',
+                direccionDestino: _destino(_selectedOffer!),
+                countdown: _offerCountdown,
+                countdownTotal:
+                    _selectedOffer!.offerExpiresInSecs ?? _offerLimitSecs,
+                aceptando: _isAccepting || _busy,
+                ocupado: _loading,
+                saldoNegativo: _saldoNegativo,
+                onAceptar: () => _acceptOffer(_selectedOffer!),
+                onRechazar: () => _declineOffer(_selectedOffer!),
+                promocion: _selectedOffer!.tieneCampana
+                    ? _buildCampanaOferta(_selectedOffer!)
+                    : null,
+              ),
+            // El desenlace «otro chofer la tomó» mantiene su tarjeta actual.
+            if (_activeTrip == null && _lostOffer != null)
               _buildOfferOverlay(),
-            if (_selectedOffer == null && _lostOffer == null)
-              _buildPanelInferior(),
+            // Aviso de red: el saldo ya vive en la barra superior.
+            if (_activeTrip == null)
+              Positioned(
+                top: 0,
+                bottom: 0,
+                left: 10,
+                child: ListenableBuilder(
+                  listenable: _flotante,
+                  builder: (context, _) {
+                    if (!_flotante.redVisible) return const SizedBox.shrink();
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: WidgetRed(
+                        estado: _flotante.red,
+                        onReintentar: _conectividad.reintentar,
+                      ),
+                    );
+                  },
+                ),
+              ),
           ],
         ),
       ),
