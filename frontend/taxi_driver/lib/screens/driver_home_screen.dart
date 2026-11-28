@@ -211,6 +211,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// en `driver_arrived`; el backend sigue siendo quien decide la espera real
   /// al cerrar el viaje.
   Timer? _esperaTimer;
+
+  /// Reloj de 1 s del tiempo de trayecto. Solo corre en `in_progress` y usa
+  /// `api.ahoraUtc`, el mismo reloj del servidor que el contador de espera.
+  Timer? _viajeTimer;
   int _offerCountdown = 0;
   DateTime? _offerDeadlineAt;
   Timer? _lostTimer;
@@ -846,6 +850,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _offerTimer?.cancel();
     _esperaTimer?.cancel();
+    _viajeTimer?.cancel();
     _lostTimer?.cancel();
     _subNotif?.cancel();
     _notif.dispose();
@@ -1315,28 +1320,40 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _ticker = Timer.periodic(const Duration(seconds: 4), (_) => _tick());
   }
 
-  /// Mantiene al día el contador de cortesía mientras el chófer espera al
-  /// pasajero en el punto de recogida.
-  ///
-  /// Se repinta cada segundo con el reloj del servidor, no con el del teléfono:
-  /// el teléfono puede ir desfasado y la espera que se cobra la decide el
-  /// backend. Al salir de `driver_arrived` el temporizador se apaga.
-  void _mantenerRelojEspera([TripOffer? viaje]) {
+  /// Mantiene al día los dos contadores del viaje con el reloj del servidor:
+  /// la cortesía mientras el pasajero no sube y el tiempo de trayecto cuando
+  /// ya va en marcha. El teléfono puede ir desfasado; lo que se cobra lo decide
+  /// el backend al cerrar.
+  void _mantenerRelojes([TripOffer? viaje]) {
     final estado = (viaje ?? _activeTrip)?.status;
+
     if (estado != 'driver_arrived') {
       _esperaTimer?.cancel();
       _esperaTimer = null;
-      return;
+    } else if (!(_esperaTimer?.isActive ?? false)) {
+      _esperaTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted || _activeTrip?.status != 'driver_arrived') {
+          _esperaTimer?.cancel();
+          _esperaTimer = null;
+          return;
+        }
+        setState(() {});
+      });
     }
-    if (_esperaTimer?.isActive ?? false) return;
-    _esperaTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || _activeTrip?.status != 'driver_arrived') {
-        _esperaTimer?.cancel();
-        _esperaTimer = null;
-        return;
-      }
-      setState(() {});
-    });
+
+    if (estado != 'in_progress') {
+      _viajeTimer?.cancel();
+      _viajeTimer = null;
+    } else if (!(_viajeTimer?.isActive ?? false)) {
+      _viajeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted || _activeTrip?.status != 'in_progress') {
+          _viajeTimer?.cancel();
+          _viajeTimer = null;
+          return;
+        }
+        setState(() {});
+      });
+    }
   }
 
   Future<void> _tick() async {
@@ -2487,7 +2504,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           _encuadrarTrayecto(pickup: updated.pickup);
         }
       });
-      _mantenerRelojEspera(updated);
+      _mantenerRelojes(updated);
       // Al pasar a 'in_progress' la ruta de recogida se borra al instante y
       // aparece la ruta hacia el destino. Y el ASISTENTE tambien: reset
       // completo de pasos + nueva ruta hacia el destino final (si no,
@@ -2552,7 +2569,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       // de carrera), el evento también se lo devuelve a la pantalla.
       if (!mismoViaje && _activeTrip != null) return;
       setState(() => _activeTrip = actual);
-      _mantenerRelojEspera(actual);
+      _mantenerRelojes(actual);
       if (actual.status == 'in_progress') {
         unawaited(
           _asistente.iniciar(
@@ -2641,6 +2658,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     _tripPoller = null;
     _esperaTimer?.cancel();
     _esperaTimer = null;
+    _viajeTimer?.cancel();
+    _viajeTimer = null;
     _recalc.detener();
     // El asistente de ruta se apaga con el viaje: ni mensajes ni peticiones
     // fantasma al proxy de navegacion.
@@ -2828,7 +2847,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       // reiniciar la suya.
       final actual = await widget.api.getTrip(trip.tripId);
       if (!mounted) return;
-      _mantenerRelojEspera(actual);
+      _mantenerRelojes(actual);
 
       if (!estadosViajeVivos.contains(actual.status)) {
         // Si lo cerró el administrador (o se completó en otro dispositivo),
@@ -3745,6 +3764,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   ///  * Mixto (promo + resto): promo aplicada y `A cobrar por <metodo>`.
   /// El backend ya manda `saldo_promocional_usado` y `monto_excedente`
   /// calculados con el metodo real, asi que aqui no se recalcula nada.
+  /// El `precio_provisional` tambien lo calcula el servidor en cada sondeo;
+  /// aqui solo se pinta para que se vea que el tiempo va cambiando el precio.
   Widget _buildDesglosePagoActivo(TripOffer trip) {
     const muted = Color(0xFF6B7280);
     const text = Color(0xFF1F2937);
@@ -3758,12 +3779,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     // facturacion para el mismo viaje (y lo leia como doble cobro).
     filas.add(
       _filaPago(
-        'Precio estimado',
+        'Precio estimado al pedir',
         '${trip.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
         color: text,
         bold: true,
       ),
     );
+
+    if (trip.precioProvisional != null) {
+      filas.add(
+        _filaPago(
+          'Con tiempo transcurrido',
+          '${trip.precioProvisional!.toStringAsFixed(2)} CUP',
+          color: verde,
+          bold: true,
+        ),
+      );
+    }
 
     if (promo > 0) {
       filas.add(
@@ -4441,9 +4473,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            const Text('Precio', style: TextStyle(fontSize: 10, color: muted)),
             Text(
-              '${t.precioEstimado?.toStringAsFixed(2) ?? '---'} CUP',
+              t.precioProvisional != null ? 'Precio ahora' : 'Precio',
+              style: const TextStyle(fontSize: 10, color: muted),
+            ),
+            Text(
+              '${(t.precioProvisional ?? t.precioEstimado)?.toStringAsFixed(2) ?? '---'} CUP',
               style: const TextStyle(
                 color: text,
                 fontSize: 15,
@@ -4723,6 +4758,73 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     );
   }
 
+  /// Reloj y precio provisional mientras el viaje está en marcha.
+  ///
+  /// El tiempo se cuenta con el reloj del servidor desde `hora_inicio_viaje`.
+  /// El precio lo calcula el backend en cada sondeo con ESE tiempo real, no con
+  /// la velocidad media de 30 km/h que se usó al cotizar. Se dice "provisional"
+  /// porque el definitivo lo cierra `complete_trip` al pulsar "Completar viaje".
+  Widget _lineaTiempoViaje(TripOffer trip) {
+    if (trip.status != 'in_progress') return const SizedBox.shrink();
+
+    final transcurrido = trip.tiempoEnViajeSegs(widget.api.ahoraUtc);
+    final provisional = trip.precioProvisional ?? trip.precioEstimado;
+    final facturable = trip.tiempoFacturableSecs ?? transcurrido;
+    const colorTexto = Color(0xFF1E40AF);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFDBEAFE),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFBFDBFE)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 1),
+              child: Icon(Icons.timer_outlined, size: 16, color: colorTexto),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Tiempo en viaje: ${_mmss(transcurrido)}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: colorTexto,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Precio provisional: '
+                    '${provisional?.toStringAsFixed(2) ?? '---'} ${trip.currency}',
+                    style: const TextStyle(fontSize: 11, color: colorTexto),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Incluye ${_mmss(facturable)} facturables. '
+                    'El precio final se cierra al completar el viaje.',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: colorTexto.withValues(alpha: 0.85),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Reloj "m:ss" para el contador de cortesía.
   String _mmss(int segundos) {
     final total = segundos < 0 ? 0 : segundos;
@@ -4984,6 +5086,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
           ),
         ],
         _lineaEspera(trip),
+        _lineaTiempoViaje(trip),
         const SizedBox(height: 10),
 
         // ---- Unico bloque de pago: precio + desglose o metodo ----

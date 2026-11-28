@@ -3,7 +3,7 @@
 **URL pública:** https://rapitaxi-api-fws6.onrender.com/static/politica_privacidad_chofer.html
 
 **Última actualización:** 24 de noviembre de 2026
-**Aplicación:** RapiTaxi Chofer (`com.taxirapid.taxi_driver`)
+**Aplicación:** RapiTaxi Chofer (`com.taxirapid.driver`)
 **Titular:** RapiTaxi
 **Contacto de privacidad:** rapitaxicuba@gmail.com · WhatsApp: +53 59295207
 

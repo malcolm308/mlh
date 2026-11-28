@@ -3,6 +3,7 @@ sys.path.insert(0, "E:\\Taxi_Rapid")
 
 import os
 import logging
+import re
 from contextlib import contextmanager
 
 from fastapi import APIRouter, HTTPException, Header, Query, BackgroundTasks
@@ -1133,6 +1134,129 @@ def calcular_descuentos_cotizacion(
     }
 
 
+def _wkt_point_lat_lng(valor) -> tuple:
+    """Extrae ``(lat, lng)`` de un ``POINT(lng lat)`` de PostGIS.
+
+    `get_trip` devuelve la geometria como WKT, no como Point de Shapely. Sin
+    esta conversion la zona especial (aeropuerto) no se podia aplicar al
+    precio provisional porque no habia coordenadas que mirar.
+    """
+    if not valor:
+        return None, None
+    hallado = re.search(
+        r"POINT\s*\(\s*([-+]?\d+(?:\.\d+)?)\s+([-+]?\d+(?:\.\d+)?)\s*\)",
+        str(valor), re.IGNORECASE)
+    if not hallado:
+        return None, None
+    return float(hallado.group(2)), float(hallado.group(1))
+
+
+def _precio_en_curso(trip: dict, ahora: Optional[datetime] = None) -> dict:
+    """Precio que se cobraria si el viaje se cerrara ahora (solo lectura).
+
+    Es el mismo desglose que aplica `complete_trip`, pero sin escribir en la
+    base: se sustituye el tiempo estimado de la cotizacion (30 km/h) por el
+    tiempo real transcurrido desde `started_at` mas el excedente de espera.
+    El chofer ve asi un precio PROVISIONAL mientras va en camino; el precio
+    final definitivo lo sigue calculando el cierre.
+
+    Nunca lanza: si falta algun dato o la configuracion cambia a medias, se
+    devuelve el precio estimado guardado y el viaje sigue funcionando igual.
+    """
+    estimado = float(trip.get("precio_estimado") or trip.get("total_fare") or 0)
+    resultado = {
+        "tiempo_transcurrido_secs": 0,
+        "tiempo_facturable_secs": 0,
+        "espera_secs": 0,
+        "excedente_espera_secs": 0,
+        "precio_provisional": round(estimado, 2),
+    }
+    try:
+        inicio = trip.get("started_at")
+        # El respaldo a `requested_at` existe en `complete_trip` para viajes que
+        # llegaron a 'in_progress' sin started_at. Antes de iniciar (por
+        # ejemplo en 'driver_arrived') NO debe contarse ese tiempo como trayecto.
+        if inicio is None and trip.get("status") == "in_progress":
+            inicio = trip.get("requested_at")
+        if inicio is None:
+            return resultado
+        if getattr(inicio, "tzinfo", None) is None:
+            inicio = inicio.replace(tzinfo=timezone.utc)
+        ahora_cmp = ahora or datetime.now(timezone.utc)
+        if getattr(ahora_cmp, "tzinfo", None) is None:
+            ahora_cmp = ahora_cmp.replace(tzinfo=timezone.utc)
+        transcurrido = max(0, int((ahora_cmp - inicio).total_seconds()))
+
+        # Espera = inicio del viaje - llegada del chofer. Las dos columnas son
+        # TIMESTAMP sin zona que guardan UTC, igual que en `complete_trip`.
+        espera = 0
+        llegada = trip.get("hora_llegada")
+        if llegada is not None:
+            if getattr(llegada, "tzinfo", None) is None:
+                llegada = llegada.replace(tzinfo=timezone.utc)
+            espera = max(0, int((inicio - llegada).total_seconds()))
+        excedente, facturable = excedente_espera(
+            espera, transcurrido, _cortesia_minutos_actual())
+
+        tipo = _normalize_vehicle_type(trip.get("vehicle_type")) or "basico"
+        lat_recogida, lng_recogida = _wkt_point_lat_lng(
+            trip.get("pickup_location") or trip.get("request_location"))
+        lat_destino, lng_destino = _wkt_point_lat_lng(
+            trip.get("dropoff_location"))
+        desglose = _price_breakdown(
+            float(trip.get("distance_km") or 0), tipo,
+            lat_recogida, lng_recogida, lat_destino, lng_destino)
+
+        # La cotizacion guardada ya trae descuentos, reintento y recargo por
+        # transferencia. Se recalcula desde cero para que el nuevo tiempo
+        # tambien reciba esas mismas reglas, igual que al cerrar.
+        sin_tiempo = (float(desglose["precio_estimado"])
+                      - float(desglose["time_fare"]))
+        tiempo_real = (facturable / 60.0) * float(
+            desglose["price_per_minute"])
+        bruto = round(sin_tiempo + tiempo_real, 2)
+
+        recargo_reintento = Decimal("0")
+        if trip.get("is_retry"):
+            recargo_reintento = (
+                Decimal(str(bruto))
+                * Decimal(str(RETRY_SURCHARGE_RATE))).quantize(
+                    CENT, rounding=ROUND_HALF_UP)
+        con_reintento = float(
+            (Decimal(str(bruto)) + recargo_reintento).quantize(
+                CENT, rounding=ROUND_HALF_UP))
+
+        promo = leer_promocion()
+        cliente_doc = _datos_cliente_descuento(trip.get("client_id"))
+        descuentos = calcular_descuentos_cotizacion(
+            con_reintento, cliente_doc, promo)
+        neto = float(descuentos["precio_final"])
+
+        try:
+            metodo = _normalizar_metodo_pago(trip.get("payment_method"))
+        except Exception:
+            metodo = "Efectivo"
+        recargo_transferencia = 0.0
+        if metodo == "Transferencia":
+            recargo_transferencia = float(
+                (Decimal(str(neto))
+                 * Decimal(str(promo["recargo_transferencia"]))).quantize(
+                    CENT, rounding=ROUND_HALF_UP))
+
+        resultado.update({
+            "tiempo_transcurrido_secs": transcurrido,
+            "tiempo_facturable_secs": facturable,
+            "espera_secs": espera,
+            "excedente_espera_secs": excedente,
+            "precio_provisional": round(neto + recargo_transferencia, 2),
+        })
+    except Exception:
+        logger.warning(
+            "no se pudo calcular el precio provisional del viaje %s",
+            trip.get("trip_id"), exc_info=True)
+    return resultado
+
+
 def _saldo_real_cliente(cliente_doc: Optional[dict]) -> Decimal:
     """Fondo real (recargado) del cliente, nunca negativo."""
     try:
@@ -1799,6 +1923,12 @@ def update_trip_status(trip_id: str, status: str) -> bool:
         set_clauses = ["status = %s"]
         params = [status]
 
+        if "hora_llegada" in extra:
+            # Sin esta rama el chofer marcaba "Llegué" y la hora se calculaba
+            # pero NUNCA se guardaba: `espera_segundos` daba 0, el contador de
+            # cortesia no aparecia y al cerrar no se cobraba la espera.
+            set_clauses.append("hora_llegada = %s")
+            params.append(extra["hora_llegada"])
         if "started_at" in extra:
             set_clauses.append("started_at = %s")
             params.append(extra["started_at"])
@@ -4485,7 +4615,11 @@ async def api_get_trip(trip_id: str):
             "pago_billetera_total": pago_billetera_total,
         })
     else:
-        precio = float(trip.get("total_fare") or trip.get("precio_estimado") or 0)
+        # El desglose de pago sigue al precio con tiempo del sondeo, no al de
+        # la cotizacion inicial: si no, el chofer veia el precio nuevo arriba
+        # y un excedente calculado con el precio viejo abajo.
+        precio = float(trip.get("precio_provisional")
+                       or trip.get("precio_estimado") or 0)
         client_doc = (cliente_coleccion.find_one({"_id": to_mongo_id(trip["client_id"])})
                       if trip.get("client_id") else None)
         mixto = calcular_pago_mixto(precio, client_doc, metodo)
@@ -4545,6 +4679,24 @@ async def api_get_trip(trip_id: str):
     # pintar el contador sin tener que recordar un número que el administrador
     # puede cambiar en cualquier momento.
     trip["tiempo_espera_cortesia_minutos"] = _cortesia_minutos_actual()
+
+    # Reloj del viaje: lo pide la app del chofer para contar el tiempo real
+    # desde que se pulso "Iniciar viaje" con el reloj del servidor, no con el
+    # del telefono. `started_at` ya viaja serializado por FastAPI; esta copia
+    # explicita es la que consume `TripOffer`.
+    inicio = trip.get("started_at") or trip.get("requested_at")
+    trip["hora_inicio_viaje"] = inicio.isoformat() if inicio else None
+
+    # Precio PROVISIONAL con el tiempo transcurrido hasta ahora. Solo para
+    # viajes vivos: en los cerrados el precio definitivo es `total_fare`.
+    if trip.get("status") in (
+            "accepted", "driver_on_the_way", "driver_arrived", "in_progress"):
+        trip.update(_precio_en_curso(trip))
+    else:
+        trip["precio_provisional"] = float(
+            trip.get("total_fare") or trip.get("precio_estimado") or 0)
+        trip["tiempo_transcurrido_secs"] = int(trip.get("duration_secs") or 0)
+        trip["tiempo_facturable_secs"] = int(trip.get("duration_secs") or 0)
 
     # Segundos que le quedan a la BUSQUEDA de chofer (solo mientras el viaje
     # sigue en `requested`). El pasajero pinta un contador sincronizado con el

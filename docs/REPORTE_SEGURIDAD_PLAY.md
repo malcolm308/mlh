@@ -1,7 +1,7 @@
 # Reporte de seguridad y checklist de publicación — RapiTaxi
 
 **Fecha:** 26 de noviembre de 2026
-**Apps:** RapiTaxi Chofer (`com.taxirapid.taxi_driver`) y RapiTaxi Pasajero
+**Apps:** RapiTaxi Chofer (`com.taxirapid.driver`) y RapiTaxi Pasajero
 (`com.taxirapid.taxi_client`)
 **Backend de producción:** https://rapitaxi-api-fws6.onrender.com
 
@@ -143,7 +143,7 @@ debe considerarse comprometida. Pasos:
 
 1. En MapTiler Cloud → *Account → Keys*, crear una clave nueva por app.
 2. Restringirla, si el plan lo permite, por paquete Android
-   (`com.taxirapid.taxi_driver` y `com.taxirapid.taxi_client`) o por dominio.
+   (`com.taxirapid.driver` y `com.taxirapid.taxi_client`) o por dominio.
 3. Revocar la clave antigua.
 4. Recompilar ambos AAB con la clave nueva.
 
@@ -268,18 +268,22 @@ publicado y que el bundle no puede ser el mismo. Por eso se recompiló el AAB co
 
 | App | Archivo de entrega | `versionName` | `versionCode` | Peso | Firma release (SHA-256 del certificado) |
 |---|---|---|---|---|---|
-| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.46_vc6056.aab` | 1.0.46 | **6056** | 57,2 MiB (59.964.261 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
+| Chofer | `dist_play/RapiTaxi_Chofer/RapiTaxi_Chofer_1.0.49_vc6059.aab` | 1.0.49 | **6059** | 57,2 MiB (59.972.959 B) | `FD:7D:AB:E3:AF:6C:9E:30:A3:66:51:3C:9D:BF:9D:CB:F5:45:50:EB:30:B8:E3:88:D8:74:53:1D:0E:36:3B:C4` |
 | Pasajero | `dist_play/RapiTaxi_Pasajero/RapiTaxi_Pasajero_1.0.42_vc6046.aab` | 1.0.42 | **6046** | 57,2 MiB (60.009.422 B) | `E2:B9:CC:51:D6:A8:4F:AB:69:74:6A:47:8F:68:4E:B2:E2:FD:AD:41:78:36:39:5D:E8:19:8B:48:1D:D3:63:BF` |
 
 Hashes de los archivos (para verificar la subida):
 
-- Chofer: `38ED0EA3BEF0B10DC88E6C8256A87C682BA4064964ED87B763FDECBED475267D`
+- Chofer: `763E57B490282FECF059280855A7F8CEED307BCA79C614A311318BC5C4DBB529`
 - Pasajero: `4B2D2091C40DCCDFA6B828BDC06E366DC0CA33E44F1DBFF6A4C2635F3D74060A`
 
-Nota sobre el nombre: la marca es **RapiTaxi**, pero el `applicationId` histórico
-es `com.taxirapid.taxi_driver` y `com.taxirapid.taxi_client`. No se renombran:
-cambiarlos crearía una app distinta en Play y dejaría de actualizar las
-instalaciones existentes. En Play Console se pone ese id, no el nombre comercial.
+Nota sobre el nombre: la marca es **RapiTaxi**. El pasajero conserva su
+`applicationId` histórico `com.taxirapid.taxi_client`. El chofer tuvo que
+cambiar a `com.taxirapid.driver`: el nombre anterior `com.taxirapid.taxi_driver`
+quedó registrado en Android con la clave `92:FA:…`, cuya contraseña se perdió,
+y una cuenta de distribución limitada no puede reclamar un nombre ya usado.
+Esto crea una app nueva en Play: quien tenga la versión OTA anterior debe
+desinstalarla e instalar la nueva. En Play Console se pone el `applicationId`,
+no el nombre comercial.
 
 Los dos AAB quedan muy por debajo del límite de 150 MB. Se comprobó que la
 clave de MapTiler está embebida en `libapp.so` de ambos paquetes, que el
@@ -384,7 +388,7 @@ Declarar para **ambas apps**:
 - [ ] Activar **Play App Signing** (recomendado): Google guarda la clave de
       firma de la app y tú conservas la clave de carga.
 
-### 8.2 Chofer (`com.taxirapid.taxi_driver`)
+### 8.2 Chofer (`com.taxirapid.driver`)
 
 - [ ] Declarar el uso de **ubicación en segundo plano** para el servicio en
       primer plano. Play puede pedir un vídeo demostrativo del flujo «En línea»

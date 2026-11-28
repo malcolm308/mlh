@@ -260,6 +260,28 @@ String _normalizarMetodoPago(dynamic valor) {
   return 'Efectivo';
 }
 
+/// Fecha ISO del backend interpretada como UTC.
+///
+/// PostgreSQL guarda estas columnas como TIMESTAMP sin zona y las serializa sin
+/// sufijo. Si se parsean a secas, Dart las toma como hora local y el reloj se
+/// descuadra por el desfase del pais.
+DateTime? _utcDeTexto(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final parsed = DateTime.tryParse(raw.trim());
+  if (parsed == null) return null;
+  if (parsed.isUtc) return parsed;
+  return DateTime.utc(
+    parsed.year,
+    parsed.month,
+    parsed.day,
+    parsed.hour,
+    parsed.minute,
+    parsed.second,
+    parsed.millisecond,
+    parsed.microsecond,
+  );
+}
+
 /// Viaje sin asignar (oferta) o viaje activo.
 class TripOffer {
   final String tripId;
@@ -285,6 +307,13 @@ final String status;
   /// chófer como si fuera tiempo de trayecto.
   final String? horaLlegada;
 
+  /// Momento en que el chofer pulso "Iniciar viaje" (`started_at`).
+  ///
+  /// Es el origen del reloj de tiempo real del trayecto. El backend lo publica
+  /// como `hora_inicio_viaje` en `GET /trips/{id}` y la app lo interpreta como
+  /// UTC, igual que `horaLlegada`.
+  final String? horaInicio;
+
   /// Segundos que el pasajero estuvo esperando, si el viaje ya empezo.
   ///
   /// Lo calcula el backend. Aqui no se cuenta con el reloj del telefono porque
@@ -301,6 +330,20 @@ final String status;
   final String? requestAddress;
   final String? dropoffAddress;
   final double? totalFare;
+
+  /// Precio que se cobraria si el viaje se cerrara ahora, calculado por el
+  /// backend con el tiempo real transcurrido. Solo informativo: el definitivo
+  /// lo decide `complete_trip` al cerrar.
+  final double? precioProvisional;
+
+  /// Segundos de trayecto y segundos facturables (trayecto + excedente de
+  /// espera) que el backend calculo en el ultimo sondeo.
+  final int? tiempoTranscurridoSecs;
+  final int? tiempoFacturableSecs;
+
+  /// Duracion facturable guardada cuando el viaje ya esta cerrado.
+  final int? durationSecs;
+
   final double? distanceKm;
   final String currency;
   final int? offerExpiresInSecs;
@@ -361,12 +404,17 @@ final String status;
     this.status = 'requested',
     this.requestedAt,
     this.horaLlegada,
+    this.horaInicio,
     this.esperaSegs,
     this.excedenteEsperaSegs,
     this.cortesiaMin,
     this.requestAddress,
     this.dropoffAddress,
     this.totalFare,
+    this.precioProvisional,
+    this.tiempoTranscurridoSecs,
+    this.tiempoFacturableSecs,
+    this.durationSecs,
     this.distanceKm,
 this.currency = 'CUP',
     this.offerExpiresInSecs,
@@ -423,26 +471,22 @@ this.currency = 'CUP',
   int get cortesiaTotalSegs => (cortesiaMin ?? 4) * 60;
 
   /// `hora_llegada` interpretada como UTC.
+  DateTime? get horaLlegadaUtc => _utcDeTexto(horaLlegada);
+
+  /// `hora_inicio_viaje` interpretada como UTC.
+  DateTime? get horaInicioUtc => _utcDeTexto(horaInicio);
+
+  /// Tiempo real transcurrido desde que empezó el trayecto.
   ///
-  /// El backend la guarda en una columna TIMESTAMP sin zona y la serializa con
-  /// `isoformat()` sin sufijo `Z`. Si se parsea a secas, Dart la toma como hora
-  /// local y el contador se descuadra por el desfase del país.
-  DateTime? get horaLlegadaUtc {
-    final raw = horaLlegada;
-    if (raw == null || raw.trim().isEmpty) return null;
-    final parsed = DateTime.tryParse(raw.trim());
-    if (parsed == null) return null;
-    if (parsed.isUtc) return parsed;
-    return DateTime.utc(
-      parsed.year,
-      parsed.month,
-      parsed.day,
-      parsed.hour,
-      parsed.minute,
-      parsed.second,
-      parsed.millisecond,
-      parsed.microsecond,
-    );
+  /// Se pinta con el reloj del servidor (`api.ahoraUtc`), no con el del
+  /// teléfono. Entre sondeos se interpola con esa misma hora; si el backend
+  /// todavía no mandó el dato, se usa el último valor que mandó.
+  int tiempoEnViajeSegs(DateTime ahoraUtc) {
+    final inicio = horaInicioUtc;
+    if (inicio == null) return tiempoTranscurridoSecs ?? 0;
+    final segundos = ahoraUtc.difference(inicio).inSeconds;
+    if (segundos > 0) return segundos;
+    return tiempoTranscurridoSecs ?? 0;
   }
 
   /// Espera en vivo: usa el dato del backend cuando el viaje ya empezó y, si
@@ -504,13 +548,18 @@ this.currency = 'CUP',
         status: (j['status'] ?? 'requested').toString(),
         requestedAt: j['requested_at']?.toString(),
         horaLlegada: j['hora_llegada']?.toString(),
+        horaInicio: j['hora_inicio_viaje']?.toString(),
         esperaSegs: (j['espera_segundos'])?.toInt(),
         excedenteEsperaSegs: (j['excedente_espera_segundos'])?.toInt(),
         cortesiaMin: (j['tiempo_espera_cortesia_minutos'])?.toInt(),
         requestAddress: j['request_address']?.toString(),
         dropoffAddress: j['dropoff_address']?.toString(),
-        totalFare: (j['total_fare'] ?? j['total_fare'])?.toDouble(),
-        distanceKm: (j['distance_km'] ?? j['distance_km'])?.toDouble(),
+        totalFare: (j['total_fare'])?.toDouble(),
+        precioProvisional: (j['precio_provisional'])?.toDouble(),
+        tiempoTranscurridoSecs: (j['tiempo_transcurrido_secs'])?.toInt(),
+        tiempoFacturableSecs: (j['tiempo_facturable_secs'])?.toInt(),
+        durationSecs: (j['duration_secs'])?.toInt(),
+        distanceKm: (j['distance_km'])?.toDouble(),
 currency: (j['currency'] ?? 'CUP').toString(),
         offerExpiresInSecs: (j['offer_expires_in_secs'])?.toInt(),
         paymentMethod: _normalizarMetodoPago(j['payment_method']),

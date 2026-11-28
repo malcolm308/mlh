@@ -83,6 +83,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} · ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
   }
 
+  /// Duración facturable del recibo, en "min s".
+  String _fmtDuracion(int segundos) {
+    final m = segundos ~/ 60;
+    final s = segundos % 60;
+    return '${m}m ${s.toString().padLeft(2, '0')}s';
+  }
+
   void _showDetail(TripOffer t) {
     showModalBottomSheet<void>(
       context: context,
@@ -121,6 +128,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     '${t.dropoff!.latitude.toStringAsFixed(5)}, ${t.dropoff!.longitude.toStringAsFixed(5)}'),
               if (t.distanceKm != null)
                 _row('Distancia', '${t.distanceKm!.toStringAsFixed(2)} km'),
+              if (t.durationSecs != null && t.durationSecs! > 0)
+                _row('Duración', _fmtDuracion(t.durationSecs!)),
               const SizedBox(height: 10),
               Container(
                 width: double.infinity,
@@ -152,6 +161,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ),
                     ),
                   ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'El total incluye distancia, tiempo de trayecto y espera '
+                'facturable.',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.secundario,
                 ),
               ),
               const SizedBox(height: 2),

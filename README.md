@@ -181,8 +181,15 @@ Cada app tiene su keystore, generado en local y **fuera** del repositorio
 
 | App | Keystore | Alias | `applicationId` |
 |---|---|---|---|
-| Pasajero | `frontend/taxi_client/android/app/rapitaxi-cliente.jks` | `rapitaxi-cliente` | `com.taxirapid.taxi_client` |
-| Chofer | `frontend/taxi_driver/android/app/rapitaxi-chofer.jks` | `rapitaxi-chofer` | `com.taxirapid.taxi_driver` |
+| Pasajero | `frontend/taxi_client/android/app/upload-keystore.jks` | `rapitaxi-client-upload` | `com.taxirapid.taxi_client` |
+| Chofer | `frontend/taxi_driver/android/app/upload-keystore.jks` | `rapitaxi-driver-upload` | `com.taxirapid.driver` |
+
+Las keystores `rapitaxi-cliente.jks` y `rapitaxi-chofer.jks` son las originales
+(`B2:2B:…` y `92:FA:…`); sus contraseñas se perdieron y ya no se usan para
+firmar, porque Google guarda las claves de firma de app. El chofer se publica
+con el paquete nuevo `com.taxirapid.driver`: el antiguo `com.taxirapid.taxi_driver`
+quedó atado en el registro de Android a la clave `92:FA:…`, que no se puede
+demostrar. Ver `dist_play/RapiTaxi_Chofer/ADI_verificacion/LEEME_ADI.md`.
 
 Las credenciales estan en `android/app/keystore.properties` de cada app. Para
 firmar, ese fichero tiene que existir con `storeFile` como **nombre de archivo

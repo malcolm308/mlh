@@ -40,7 +40,13 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.taxirapid.taxi_driver"
+        // El paquete antiguo (com.taxirapid.taxi_driver) quedo atado en el
+        // registro de Android a una clave cuya contrasena se perdio, y una
+        // cuenta de distribucion limitada no puede reclamar nombres usados.
+        // Se publica como app nueva en Play con este identificador.
+        // El `namespace` sigue igual: solo cambia el id de la app, no el
+        // codigo Kotlin ni los recursos.
+        applicationId = "com.taxirapid.driver"
         // maplibre_gl exige API 21 como minimo. `flutter.minSdkVersion` baja de
         // ahi en versiones antiguas, asi que se fija a mano.
         minSdk = flutter.minSdkVersion

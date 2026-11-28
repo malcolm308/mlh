@@ -651,5 +651,82 @@ class TestCalculoEnSQL(unittest.TestCase):
         self.assertNotIn("promo[", bloque)
 
 
+class TestHoraLlegadaSeGuarda(unittest.TestCase):
+    """El chofer marca la llegada desde su app, no desde el panel admin."""
+
+    def test_el_update_persiste_la_hora_de_llegada(self):
+        import inspect
+        from routers.Solicitud_de_viajes_v4 import update_trip_status
+        fuente = inspect.getsource(update_trip_status)
+        self.assertIn('extra["hora_llegada"]', fuente)
+        self.assertIn('if "hora_llegada" in extra:', fuente)
+        self.assertIn("hora_llegada = %s", fuente)
+
+
+class TestPrecioProvisional(unittest.TestCase):
+    """El precio que ve el chofer en curso usa el tiempo real, no el de 30 km/h."""
+
+    def _viaje(self, inicio, llegada):
+        return {
+            "trip_id": "t1",
+            "status": "in_progress",
+            "started_at": inicio,
+            "requested_at": inicio,
+            "hora_llegada": llegada,
+            "distance_km": 5.0,
+            "vehicle_type": "basico",
+            "precio_estimado": 100.0,
+            "payment_method": "Efectivo",
+            "pickup_location": "POINT(-82.0 23.0)",
+            "dropoff_location": "POINT(-82.1 23.1)",
+            "is_retry": False,
+            "client_id": None,
+        }
+
+    def _calcular(self, viaje, ahora):
+        import routers.Solicitud_de_viajes_v4 as modulo
+        from unittest.mock import patch
+
+        desglose = {
+            "precio_estimado": 100.0,
+            "time_fare": 10.0,
+            "price_per_minute": 2.0,
+            "distance_km": 5.0,
+        }
+        with patch.object(modulo, "_price_breakdown", return_value=desglose), \
+                patch.object(modulo, "_cortesia_minutos_actual", return_value=4.0), \
+                patch.object(modulo, "leer_promocion", return_value={}), \
+                patch.object(modulo, "_datos_cliente_descuento", return_value=None), \
+                patch.object(
+                    modulo, "calcular_descuentos_cotizacion",
+                    side_effect=lambda precio, cliente, promo: {
+                        "precio_final": float(precio)}):
+            return modulo._precio_en_curso(viaje, ahora)
+
+    def test_el_tiempo_de_trayecto_sustituye_al_estimado(self):
+        ahora = datetime(2026, 1, 1, 12, 10, tzinfo=timezone.utc)
+        inicio = datetime(2026, 1, 1, 12, 0)
+        llegada = datetime(2026, 1, 1, 11, 58)  # 2 min: dentro de cortesía
+        resultado = self._calcular(self._viaje(inicio, llegada), ahora)
+
+        self.assertEqual(resultado["tiempo_transcurrido_secs"], 600)
+        self.assertEqual(resultado["espera_secs"], 120)
+        self.assertEqual(resultado["excedente_espera_secs"], 0)
+        self.assertEqual(resultado["tiempo_facturable_secs"], 600)
+        # 100 - 10 (tiempo estimado) + 20 (10 min reales x 2 CUP/min)
+        self.assertEqual(resultado["precio_provisional"], 110.0)
+
+    def test_la_espera_por_encima_de_la_cortesia_tambien_cuenta(self):
+        ahora = datetime(2026, 1, 1, 12, 5, tzinfo=timezone.utc)
+        inicio = datetime(2026, 1, 1, 12, 0)
+        llegada = datetime(2026, 1, 1, 11, 50)  # 10 min: 6 facturables
+        resultado = self._calcular(self._viaje(inicio, llegada), ahora)
+
+        self.assertEqual(resultado["espera_secs"], 600)
+        self.assertEqual(resultado["excedente_espera_secs"], 360)
+        self.assertEqual(resultado["tiempo_facturable_secs"], 660)
+        self.assertEqual(resultado["precio_provisional"], 112.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
