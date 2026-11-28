@@ -768,10 +768,22 @@ class TestDuracionDelVale(unittest.TestCase):
         from routers.Solicitud_de_viajes_v4 import complete_trip
 
         fuente = inspect.getsource(complete_trip)
-        self.assertIn("_segundos_de_trayecto(started)", fuente)
+        self.assertIn("_segundos_de_trayecto(started, now)", fuente)
         # La hora local de Cuba sigue usandose para la regla horaria, pero no
         # para medir el trayecto.
         self.assertNotIn("now_cmp - started", fuente)
+
+    def test_complete_trip_guarda_completed_at_en_utc(self):
+        """La hora de cierre se guardaba en hora local y salia 5 h atras."""
+        import inspect
+        from routers.Solicitud_de_viajes_v4 import complete_trip
+
+        fuente = inspect.getsource(complete_trip)
+        self.assertIn("ahora_cuba_local = _hora_cuba()", fuente)
+        self.assertIn(
+            "get_applicable_time_rule(vehicle_type, ahora_cuba_local)", fuente)
+        self.assertIn("now = datetime.now(timezone.utc)", fuente)
+        self.assertIn("dropoff_lng, dropoff_lat, now.replace(tzinfo=None)", fuente)
 
 
 if __name__ == "__main__":

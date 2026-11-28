@@ -2066,8 +2066,15 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             #    ventanas (20:00-06:00 nocturno, 06:00-20:00 diurno) son horas
             #    locales del pais: evaluarlas contra el reloj UTC corria el
             #    nocturno cuatro horas antes.
-            now = _hora_cuba()
-            time_rule = get_applicable_time_rule(vehicle_type, now)
+            ahora_cuba_local = _hora_cuba()
+            time_rule = get_applicable_time_rule(vehicle_type, ahora_cuba_local)
+
+            # La hora que SE GUARDA en `completed_at` es UTC, igual que la de
+            # `started_at`. Antes se guardaba la hora local de Cuba y el
+            # serializador le anadia la zona para mostrarla en Cuba: salia 5 h
+            # atras en el historial. Se toma un solo instante para la duracion
+            # y el cierre.
+            now = datetime.now(timezone.utc)
 
             # 5. Calcular tarifas base con multiplicadores horarios
             base_fare = float(tariff["base_fare"])
@@ -2123,7 +2130,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             #    el reloj UTC real (no la hora local de Cuba, que daba -5 h y
             #    dejaba el vale en "0m 0s").
             started = trip["started_at"] or trip["requested_at"]
-            duration_secs = _segundos_de_trayecto(started)
+            duration_secs = _segundos_de_trayecto(started, now)
 
 # --- 7b. Tiempo de espera de cortesía ---
             #
@@ -2364,7 +2371,7 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
                 WHERE trip_id = %s
                 RETURNING *;
             """, (
-                dropoff_lng, dropoff_lat, now,
+                dropoff_lng, dropoff_lat, now.replace(tzinfo=None),
                 distance_km, duracion_facturable,
                 base_fare, distance_fare, tip, total_fare,
                 float(descuento_cliente), float(descuento_referido),
