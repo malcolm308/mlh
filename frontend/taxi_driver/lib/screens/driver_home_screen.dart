@@ -132,27 +132,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   /// la del trayecto en curso durante el viaje, y la de ir a recoger el
   /// pasajero mientras se va a por el.
   ///
-  /// Si no hay trazado de OSRM se cae a una recta entre los extremos, que es lo
-  /// que hacia el `Polyline` de reserva. Se descarta si coincide con la
-  /// posicion actual, que daria una linea de longitud cero.
+  /// Solo se dibuja geometria calculada por calles. Si OSRM falla se deja el
+  /// mapa sin linea: una recta entre extremos puede cruzar edificios y mostrar
+  /// un recorrido que no existe.
   List<LatLng> get _rutaVisible {
-    if (_tripPhase && _route.length >= 2) return _route;
-    if (_pickupPhase && _routeToPickup.length >= 2) return _routeToPickup;
-
-    final destino = _tripPhase ? _activeTrip?.dropoff : _activeTrip?.pickup;
-    if (destino == null) return const [];
-    if (destino.latitude == _driverPos.latitude &&
-        destino.longitude == _driverPos.longitude) {
-      return const [];
-    }
-    return [_driverPos, destino];
+    if (_tripPhase) return _route;
+    // La ruta a recogida tambien se pinta mientras la solicitud sigue abierta,
+    // no solo cuando ya hay viaje aceptado. Si no, el mapa se queda sin la linea
+    // azul justo cuando el chofer esta decidiendo si aceptar.
+    final mostrandoRecogida =
+        _pickupPhase || (_activeTrip == null && _selectedOffer != null);
+    if (mostrandoRecogida) return _routeToPickup;
+    return const [];
   }
 
   /// Ruta usada SOLO para el map-matching de la posición.
   ///
-  /// `_rutaVisible` se cae a una recta de dos puntos cuando OSRM falla. Encajar
-  /// contra esa recta sacaría el marcador de la calle de verdad, así que aqui
-  /// solo se entrega una polilínea calculada por calles.
+  /// Aqui solo se entrega una polilínea calculada por calles; nunca la recta de
+  /// reserva, porque sacaría el marcador de la calle de verdad.
   List<LatLng> get _rutaParaMatching {
     if (_activeTrip == null) return const [];
     if (_tripPhase) return _route.length >= 2 ? _route : const [];
@@ -1911,13 +1908,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _toPickupMin = toPickup?.durationMinutes;
       }
     });
-    // Si OSRM fallo, `_rutaVisible` se cae a la linea recta entre extremos:
-    // se deja constancia para no confundir un fallo de calculo con una ruta
-    // rara dibujada. El detalle del error ya lo logueo `OsrmService.route`.
+    // Sin geometria de calles no se dibuja nada: una recta entre extremos
+    // puede atravesar edificios y confundir al chofer. El detalle del fallo ya
+    // lo loguea `OsrmService.route`.
     if (inTripPhase && toDropoff == null && dropoff != null) {
-      debugPrint('[OSRM] FALLA - usando fallback en linea recta al destino');
+      debugPrint('[OSRM] FALLA - sin linea al destino');
     } else if (!inTripPhase && toPickup == null) {
-      debugPrint('[OSRM] FALLA - usando fallback en linea recta a la recogida');
+      debugPrint('[OSRM] FALLA - sin linea a la recogida');
     }
     _encuadrarTrayecto(pickup: pickup, dropoff: inTripPhase ? dropoff : null);
 
@@ -2359,7 +2356,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     // debe interpretar la desaparicion del viaje como "otro chofer".
     _aceptandoTripId = offer.tripId;
     try {
-      await widget.api.acceptTrip(offer.tripId, widget.driverId);
+      try {
+        await widget.api.acceptTrip(offer.tripId, widget.driverId);
+      } on ApiException catch (e) {
+        // La UI puede decir "activo" y el servidor tener un estado viejo
+        // 'offline' (por ejemplo, al alternar entre la app de Play y la de
+        // prueba con la misma cuenta). Solo se reafirma 'available' cuando la
+        // app local esta activa y no tiene viaje; si el servidor dice
+        // 'busy'/'on_trip' no se toca ese estado.
+        final servidorOffline =
+            e.statusCode == 400 && e.message.toLowerCase().contains('offline');
+        if (!servidorOffline || !_online || _activeTrip != null) rethrow;
+        debugPrint('[ACEPTAR] servidor offline; reafirmando available');
+        await widget.api.setDriverStatus(widget.driverId, 'available');
+        await widget.api.acceptTrip(offer.tripId, widget.driverId);
+      }
       await widget.api.setDriverStatus(widget.driverId, 'busy');
       final trip = await widget.api.getTrip(offer.tripId);
       if (!mounted) return;
@@ -3290,12 +3301,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 posicionVehiculo: _nav.tieneFix
                     ? _nav.posicionVisual
                     : _driverPos,
-                // En el estado activo sin viaje dibuja el radar de la nueva UI;
-                // el chevron nativo seguiria compitiendo en el mismo punto.
-                mostrarVehiculo: !(libre &&
-                    _lostOffer == null &&
-                    _selectedOffer == null &&
-                    _online),
                 rumboVehiculo: libreActiva
                     ? (_bearingLibre ?? _rumboParaFlecha())
                     : _rumboParaFlecha(),
@@ -3304,10 +3309,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 onControlador: (c) => _controlador = c,
               ),
             ),
-            // Tinte crema de los nuevos layouts. Es una capa hermana del mapa,
-            // no un filtro sobre la camara: no altera coordenadas ni el estilo
-            // de MapLibre y por eso la navegacion sigue calcada en la calle.
-            if (_activeTrip == null) const Positioned.fill(child: CreamMapTint()),
             // El asistente de ruta paso a paso (Fase 3): arriba y centrado,
             // con SafeArea. Aparece solo con viaje activo y pasos vigentes.
             if (_asistente.activo)

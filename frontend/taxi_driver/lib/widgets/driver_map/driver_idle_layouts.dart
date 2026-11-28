@@ -2,28 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'driver_map_theme.dart';
 
-class CreamMapTint extends StatelessWidget {
-  const CreamMapTint({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const IgnorePointer(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[
-              Color(0x73FFFBEA),
-              Color(0x8CFFF7D6),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class TopBar extends StatelessWidget {
   const TopBar({
     super.key,
@@ -412,28 +390,37 @@ class ActiveOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return DefaultTextStyle(
       style: DriverMapTypography.style(),
-      child: Stack(
-        children: <Widget>[
-          const Center(child: RadarMarker(animated: true)),
-          Positioned(
-            left: 16,
-            bottom: 170,
-            child: _MiniStat(gananciasHoy: gananciasHoy),
-          ),
-          Positioned(
-            right: 16,
-            bottom: 170,
-            child: LocationFab(onTap: onUbicacion),
-          ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 28,
-            child: Center(
-              child: StopFab(onTap: onDesactivar, cargando: cargando),
+      // Esta capa entra en un `Positioned(bottom: 0)` sin altura propia, que le
+      // da maxHeight=Infinity. Con todos los hijos `Positioned`, el Stack no
+      // podia calcular su tamano y en release dejaba de pintarse entero. La
+      // altura explicita cubre el mini stat (170+44) y el StopFab (28+~125).
+      child: SizedBox(
+        height: 240,
+        child: Stack(
+          children: <Widget>[
+            // El chevron lo dibuja NavigationMapView directamente en el estilo.
+            // Un marcador propio aqui solo lo taparia al activarse, asi que no
+            // se pinta nada en el centro del mapa.
+            Positioned(
+              left: 16,
+              bottom: 170,
+              child: _MiniStat(gananciasHoy: gananciasHoy),
             ),
-          ),
-        ],
+            Positioned(
+              right: 16,
+              bottom: 170,
+              child: LocationFab(onTap: onUbicacion),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 28,
+              child: Center(
+                child: StopFab(onTap: onDesactivar, cargando: cargando),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -621,24 +608,7 @@ class StopFab extends StatefulWidget {
   State<StopFab> createState() => _StopFabState();
 }
 
-class _StopFabState extends State<StopFab> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2200),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
+class _StopFabState extends State<StopFab> {
   @override
   Widget build(BuildContext context) {
     return Semantics(
@@ -656,65 +626,58 @@ class _StopFabState extends State<StopFab> with SingleTickerProviderStateMixin {
             children: <Widget>[
               SizedBox(
                 width: 104,
-              height: 104,
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (context, _) {
-                  final pulse = (1 - _controller.value);
-                  final haloOpacity = 0.08 + pulse * 0.20;
-                  return Stack(
-                    alignment: Alignment.center,
-                    children: <Widget>[
-                      Container(
-                        width: 88 + pulse * 12,
-                        height: 88 + pulse * 12,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: DriverMapColors.amarillo.withValues(
-                            alpha: haloOpacity,
-                          ),
+                height: 104,
+                // Halo fijo: ningun AnimatedBuilder reconstruye el boton.
+                // El círculo negro con el rayo queda siempre pintado encima.
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: <Widget>[
+                    Container(
+                      width: 96,
+                      height: 96,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: DriverMapColors.amarillo.withValues(alpha: 0.16),
+                      ),
+                    ),
+                    Material(
+                      color: DriverMapColors.negro,
+                      shape: const CircleBorder(
+                        side: BorderSide(
+                          color: DriverMapColors.blanco,
+                          width: 4,
                         ),
                       ),
-                      Material(
-                        color: DriverMapColors.negro,
-                        shape: const CircleBorder(
-                          side: BorderSide(
-                            color: DriverMapColors.blanco,
-                            width: 4,
-                          ),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: InkWell(
-                          onTap: widget.cargando ? null : widget.onTap,
-                          customBorder: const CircleBorder(),
-                          child: SizedBox(
-                            width: 74,
-                            height: 74,
-                            child: widget.cargando
-                                ? const Center(
-                                    child: SizedBox(
-                                      width: 24,
-                                      height: 24,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: DriverMapColors.amarillo,
-                                      ),
-                                    ),
-                                  )
-                                : const Center(
-                                    child: LightningBolt(
-                                      size: 32,
-                                      inverted: true,
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: widget.cargando ? null : widget.onTap,
+                        customBorder: const CircleBorder(),
+                        child: SizedBox(
+                          width: 74,
+                          height: 74,
+                          child: widget.cargando
+                              ? const Center(
+                                  child: SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: DriverMapColors.amarillo,
                                     ),
                                   ),
-                          ),
+                                )
+                              : const Center(
+                                  child: LightningBolt(
+                                    size: 32,
+                                    inverted: true,
+                                  ),
+                                ),
                         ),
                       ),
-                    ],
-                  );
-                },
+                    ),
+                  ],
+                ),
               ),
-            ),
             Transform.translate(
               offset: const Offset(0, -8),
               child: Container(

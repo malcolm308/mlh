@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:taxi_driver/widgets/driver_map/driver_idle_layouts.dart';
+import 'package:taxi_driver/widgets/driver_map/driver_map_theme.dart';
 import 'package:taxi_driver/widgets/driver_map/trip_request_layout.dart';
 
 /// Los tres estados del mapa se montan solos, sin API ni MapLibre, para fijar
@@ -30,6 +31,37 @@ Future<void> _pantalla(
 }
 
 void main() {
+  testWidgets('ActiveOverlay anclado al fondo pinta el boton desactivar',
+      (tester) async {
+    var desactivaciones = 0;
+    await _pantalla(
+      tester,
+      Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: ActiveOverlay(
+          gananciasHoy: 1822,
+          onDesactivar: () => desactivaciones++,
+          onUbicacion: () {},
+        ),
+      ),
+      360,
+    );
+
+    final circulo = find.byWidgetPredicate(
+      (w) => w is Material && w.color == DriverMapColors.negro,
+    );
+    expect(circulo, findsOneWidget);
+    final rect = tester.getRect(circulo);
+    expect(rect.bottom, lessThanOrEqualTo(820));
+    expect(rect.bottom, greaterThan(700));
+
+    await tester.tap(circulo);
+    await tester.pump();
+    expect(desactivaciones, 1);
+  });
+
   for (final ancho in anchos) {
     testWidgets('Pausado cabe y activa viajes a ${ancho.toStringAsFixed(0)} px',
         (tester) async {
@@ -66,8 +98,22 @@ void main() {
         ancho,
       );
 
-      expect(find.byType(RadarMarker), findsOneWidget);
+      // El centro del mapa lo ocupa el chevron nativo de NavigationMapView:
+      // ActiveOverlay no debe dibujar un marcador propio que lo tape.
+      expect(find.byType(RadarMarker), findsNothing);
       expect(find.byType(StopFab), findsOneWidget);
+
+      // El circulo negro con el rayo tiene que existir y tener tamano real:
+      // sin el Material el boton quedaria reducido a la etiqueta de texto.
+      final circulo = find.byWidgetPredicate(
+        (w) => w is Material && w.color == DriverMapColors.negro,
+      );
+      expect(circulo, findsOneWidget);
+      expect(find.byType(LightningBolt), findsOneWidget);
+      final rect = tester.getRect(circulo);
+      expect(rect.width, greaterThan(60));
+      expect(rect.height, greaterThan(60));
+
       await tester.tap(find.text('Desactivar'));
       await tester.pump();
       expect(desactivaciones, 1);

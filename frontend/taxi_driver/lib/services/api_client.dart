@@ -207,7 +207,7 @@ class ApiClient {
   ///
   /// [timeout] sobreescribe el de 15 s por peticion. Lo usa OSRM, que desde
   /// una red movil normal puede tardar mas que el backend propio en devolver
-  /// la ruta: con 15 s por intento el trayecto caia al fallback en linea recta.
+  /// la ruta: con 15 s por intento el trayecto se quedaba sin geometria.
   static Future<http.Response> _ejecutar(
     Future<http.Response> Function() accion, {
     Duration? timeout,

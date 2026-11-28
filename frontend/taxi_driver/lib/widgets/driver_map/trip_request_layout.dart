@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import 'driver_map_theme.dart';
@@ -55,15 +53,6 @@ class TripRequestOverlay extends StatelessWidget {
         children: <Widget>[
           const Positioned.fill(
             child: ColoredBox(color: Color(0x59000000)),
-          ),
-          Positioned(
-            top: media.padding.top + 68,
-            left: 28,
-            right: 28,
-            height: math.min(230.0, media.size.height * 0.25),
-            child: const IgnorePointer(
-              child: RoutePreview(),
-            ),
           ),
           Positioned(
             top: media.padding.top + 12,
@@ -261,73 +250,6 @@ class CountdownBar extends StatelessWidget {
       ),
     );
   }
-}
-
-class RoutePreview extends StatelessWidget {
-  const RoutePreview({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const CustomPaint(painter: _RoutePreviewPainter());
-  }
-}
-
-class _RoutePreviewPainter extends CustomPainter {
-  const _RoutePreviewPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final start = Offset(size.width * 0.24, size.height * 0.14);
-    final end = Offset(size.width * 0.70, size.height * 0.82);
-    final path = Path()
-      ..moveTo(start.dx, start.dy)
-      ..cubicTo(
-        size.width * 0.12,
-        size.height * 0.42,
-        size.width * 0.92,
-        size.height * 0.34,
-        end.dx,
-        end.dy,
-      );
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = DriverMapColors.amarillo
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 4
-        ..strokeCap = StrokeCap.round,
-    );
-
-    canvas.drawCircle(
-      start,
-      11,
-      Paint()..color = DriverMapColors.amarillo,
-    );
-    canvas.drawCircle(
-      start,
-      4,
-      Paint()..color = DriverMapColors.negro,
-    );
-
-    canvas.drawCircle(
-      end,
-      13,
-      Paint()..color = DriverMapColors.amarillo,
-    );
-    canvas.drawCircle(
-      end,
-      10,
-      Paint()..color = DriverMapColors.negro,
-    );
-    canvas.drawCircle(
-      end,
-      4,
-      Paint()..color = DriverMapColors.amarillo,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _RoutePreviewPainter oldDelegate) => false;
 }
 
 class TripRequestModal extends StatelessWidget {

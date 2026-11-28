@@ -51,10 +51,9 @@ class OsrmService {
   /// Calcula la ruta por carretera entre [from] y [to].
   ///
   /// Devuelve `null` si el proxy no encuentra ruta o si el backend/OSRM no
-  /// responde a tiempo. Cuando eso pasa, la pantalla se queda con el fallback
-  /// en linea recta, asi que se deja constancia en el log para poder distinguir
-  /// si el fallo fue de red (timeout) o de ruta inexistente. Lleva su propio
-  /// timeout ([ApiConfig.osrmTimeout]) y no el generico de 15 s del [ApiClient].
+  /// responde a tiempo. En ese caso la pantalla no dibuja una recta: una linea
+  /// sin calles puede cruzar edificios. Lleva su propio timeout
+  /// ([ApiConfig.osrmTimeout]) y no el generico de 15 s del [ApiClient].
   ///
   /// Antes de rendirse, se intenta la cache: ver [_cacheada].
   static Future<OsrmRoute?> route(LatLng from, LatLng to) async {
@@ -111,11 +110,14 @@ class OsrmService {
           '${ruta.points.length} puntos '
           '(${ruta.distanceKm.toStringAsFixed(1)} km, '
           '${ruta.durationMinutes.toStringAsFixed(0)} min)');
+      // Se conserva la geometria tal como la devuelve OSRM: sus extremos ya
+      // estan sobre la calle y no deben sustituirse por coordenadas que puedan
+      // caer dentro de un edificio.
       return ruta;
     } catch (e) {
       final guardada = _cacheada(from, to, exacta: false);
       debugPrint('[OSRM] FALLA en ${cronometro.elapsedMilliseconds} ms - '
-          'fallback en linea recta: $e'
+          'sin geometria de calles: $e'
           '${guardada == null ? '' : ' (se reutiliza la ultima ruta buena)'}');
       return guardada;
     }

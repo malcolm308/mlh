@@ -484,6 +484,9 @@ void iniciar({required List<LatLng> ruta, required LatLng destino}) {
         return;
       }
 
+      // Se conserva la geometria de calles tal como la devuelve el backend.
+      // Sus extremos ya estan sobre la calle; sustituirlos por coordenadas
+      // exactas puede meter el ultimo tramo dentro de un edificio.
       _ruta = ruta.points;
       _intentos = 0;
       _setEstado(RouteRecalcState.success);
