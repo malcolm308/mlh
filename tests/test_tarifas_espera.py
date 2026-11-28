@@ -728,5 +728,51 @@ class TestPrecioProvisional(unittest.TestCase):
         self.assertEqual(resultado["precio_provisional"], 112.0)
 
 
+class TestDuracionDelVale(unittest.TestCase):
+    """El vale no puede volver a mostrar "0m 0s".
+
+    `complete_trip` restaba la hora local de Cuba (naive, UTC-5) marcada como
+    UTC contra `started_at` (UTC real). Salia -5 h y `max(0, ...)` lo dejaba en
+    cero: el reloj en curso avanzaba pero el recibo decia "Duracion 0m 0s".
+    """
+
+    def test_un_viaje_de_45_segundos_no_se_queda_en_cero(self):
+        from routers.Solicitud_de_viajes_v4 import _segundos_de_trayecto
+
+        ahora = datetime(2026, 1, 1, 12, 0, 45, tzinfo=timezone.utc)
+        inicio = datetime(2026, 1, 1, 12, 0)  # naive, como lo da psycopg2
+        self.assertEqual(_segundos_de_trayecto(inicio, ahora), 45)
+
+    def test_la_hora_local_de_cuba_no_pisa_la_duracion(self):
+        from routers.Solicitud_de_viajes_v4 import _segundos_de_trayecto
+
+        # Misma hora real: 17:00 UTC = 12:00 en Cuba (UTC-5).
+        inicio = datetime(2026, 1, 1, 17, 0)
+        ahora_cuba_naive = datetime(2026, 1, 1, 12, 0)
+        # Ese era el bug: la hora local marcada como UTC daba -5 h -> 0.
+        self.assertEqual(_segundos_de_trayecto(inicio, ahora_cuba_naive), 0)
+        # Con el reloj UTC real la duracion es la correcta.
+        ahora_utc = datetime(2026, 1, 1, 17, 0, 45, tzinfo=timezone.utc)
+        self.assertEqual(_segundos_de_trayecto(inicio, ahora_utc), 45)
+
+    def test_un_inicio_nulo_o_futuro_no_revienta(self):
+        from routers.Solicitud_de_viajes_v4 import _segundos_de_trayecto
+
+        ahora = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(_segundos_de_trayecto(None, ahora), 0)
+        futuro = datetime(2026, 1, 1, 12, 5)
+        self.assertEqual(_segundos_de_trayecto(futuro, ahora), 0)
+
+    def test_complete_trip_mide_con_utc_y_no_con_la_hora_local(self):
+        import inspect
+        from routers.Solicitud_de_viajes_v4 import complete_trip
+
+        fuente = inspect.getsource(complete_trip)
+        self.assertIn("_segundos_de_trayecto(started)", fuente)
+        # La hora local de Cuba sigue usandose para la regla horaria, pero no
+        # para medir el trayecto.
+        self.assertNotIn("now_cmp - started", fuente)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1151,6 +1151,29 @@ def _wkt_point_lat_lng(valor) -> tuple:
     return float(hallado.group(2)), float(hallado.group(1))
 
 
+def _segundos_de_trayecto(inicio: Optional[datetime],
+                          ahora: Optional[datetime] = None) -> int:
+    """Segundos transcurridos desde que arranco el viaje, nunca negativos.
+
+    `inicio` sale de `started_at`, una columna TIMESTAMP **sin zona** que
+    guarda UTC, asi que psycopg2 la devuelve *naive*: hay que volver a
+    marcarla como UTC antes de restar.
+
+    El "ahora" por defecto es el reloj **UTC real**. Antes `complete_trip`
+    restaba `_hora_cuba()` (hora local de Cuba, naive) marcada como UTC, lo
+    que daba -5 h y `max(0, ...)` lo dejaba en 0: el vale mostraba
+    "Duracion 0m 0s" aunque el reloj en curso avanzara.
+    """
+    if inicio is None:
+        return 0
+    if getattr(inicio, "tzinfo", None) is None:
+        inicio = inicio.replace(tzinfo=timezone.utc)
+    ahora = ahora or datetime.now(timezone.utc)
+    if getattr(ahora, "tzinfo", None) is None:
+        ahora = ahora.replace(tzinfo=timezone.utc)
+    return max(0, int((ahora - inicio).total_seconds()))
+
+
 def _precio_en_curso(trip: dict, ahora: Optional[datetime] = None) -> dict:
     """Precio que se cobraria si el viaje se cerrara ahora (solo lectura).
 
@@ -1180,12 +1203,11 @@ def _precio_en_curso(trip: dict, ahora: Optional[datetime] = None) -> dict:
             inicio = trip.get("requested_at")
         if inicio is None:
             return resultado
+        # Se normaliza aqui tambien porque la espera de mas abajo resta
+        # `inicio - llegada` en Python y necesita la zona puesta.
         if getattr(inicio, "tzinfo", None) is None:
             inicio = inicio.replace(tzinfo=timezone.utc)
-        ahora_cmp = ahora or datetime.now(timezone.utc)
-        if getattr(ahora_cmp, "tzinfo", None) is None:
-            ahora_cmp = ahora_cmp.replace(tzinfo=timezone.utc)
-        transcurrido = max(0, int((ahora_cmp - inicio).total_seconds()))
+        transcurrido = _segundos_de_trayecto(inicio, ahora)
 
         # Espera = inicio del viaje - llegada del chofer. Las dos columnas son
         # TIMESTAMP sin zona que guardan UTC, igual que en `complete_trip`.
@@ -2096,20 +2118,12 @@ def complete_trip(trip_id: str, dropoff_lat: float, dropoff_lng: float, tip: flo
             #    app). Sin cubrirlo, la resta reventaba.
             #  * Las columnas `started_at`/`requested_at` son TIMESTAMP **sin
             #    zona horaria**, asi que psycopg2 devuelve datetimes *naive*,
-            #    mientras que `now` es *aware* (UTC). Restar uno de otro es un
-            #    TypeError directo. Como lo que se guarda en esas columnas es
-            #    `datetime.now(timezone.utc)`, el valor ES UTC: solo hay que
-            #    volver a pegarle la zona.
+            #    pero lo que guardan es `datetime.now(timezone.utc)`.
+            #    `_segundos_de_trayecto` vuelve a marcar la zona y resta contra
+            #    el reloj UTC real (no la hora local de Cuba, que daba -5 h y
+            #    dejaba el vale en "0m 0s").
             started = trip["started_at"] or trip["requested_at"]
-            if started is None:
-                duration_secs = 0
-            else:
-                if getattr(started, "tzinfo", None) is None:
-                    started = started.replace(tzinfo=timezone.utc)
-                now_cmp = now
-                if getattr(now_cmp, "tzinfo", None) is None:
-                    now_cmp = now_cmp.replace(tzinfo=timezone.utc)
-                duration_secs = max(0, int((now_cmp - started).total_seconds()))
+            duration_secs = _segundos_de_trayecto(started)
 
 # --- 7b. Tiempo de espera de cortesía ---
             #
